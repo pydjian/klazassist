@@ -1398,6 +1398,365 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   padding: 9px 12px;
   border-radius: 8px;
 }
+/* ---------- MS-Word-style seat table editor ---------- */
+.seat-editor-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+.seat-editor-toolbar .stb-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+}
+.seat-editor-toolbar .stb-group:last-child { border-right: none; padding-right: 0; }
+.seat-editor-toolbar .stb-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.seat-editor-wrap {
+  overflow: auto;
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  position: relative;
+}
+.seat-editor {
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: var(--card);
+  user-select: none;
+}
+.seat-editor th,
+.seat-editor td {
+  border: 1px solid var(--border);
+  padding: 0;
+  position: relative;
+  vertical-align: middle;
+}
+.seat-editor .seat-corner-cell {
+  width: 36px;
+  min-width: 36px;
+  background: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  height: 26px;
+  position: sticky;
+  left: 0;
+  z-index: 4;
+}
+.seat-editor .seat-col-head {
+  background: var(--bg);
+  height: 26px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s, color 0.12s;
+}
+.seat-editor .seat-col-head:hover { background: var(--light-blue); color: var(--deped-blue); }
+.seat-editor .seat-row-head {
+  width: 36px;
+  min-width: 36px;
+  background: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  cursor: pointer;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  transition: background 0.12s, color 0.12s;
+}
+.seat-editor .seat-row-head:hover { background: var(--light-blue); color: var(--deped-blue); }
+
+/* Resize handles */
+.seat-editor .seat-col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 5;
+  touch-action: none;
+}
+.seat-editor .seat-col-resize:hover,
+.seat-editor .seat-col-resize.active {
+  background: var(--deped-blue);
+  opacity: 0.7;
+}
+.seat-editor .seat-row-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  z-index: 5;
+  touch-action: none;
+}
+.seat-editor .seat-row-resize:hover,
+.seat-editor .seat-row-resize.active {
+  background: var(--deped-blue);
+  opacity: 0.7;
+}
+
+/* Blocked seat styling */
+.seat-editor td.seat-editor-cell.blocked {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--bg),
+    var(--bg) 6px,
+    rgba(220,53,69,0.08) 6px,
+    rgba(220,53,69,0.08) 12px
+  );
+  cursor: not-allowed;
+}
+.seat-editor td.seat-editor-cell .seat-editor-block-btn {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  z-index: 3;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.seat-editor td.seat-editor-cell .seat-editor-block-btn svg {
+  width: 10px;
+  height: 10px;
+}
+.seat-editor td.seat-editor-cell.empty:hover .seat-editor-block-btn { display: flex; }
+.seat-editor td.seat-editor-cell.blocked .seat-editor-block-btn {
+  display: flex;
+  background: rgba(220,53,69,0.15);
+  color: var(--danger);
+  border-color: rgba(220,53,69,0.35);
+}
+.seat-editor td.seat-editor-cell .seat-editor-block-btn:hover {
+  background: var(--deped-blue);
+  color: #fff;
+  border-color: var(--deped-blue);
+}
+.seat-editor td.seat-editor-cell.blocked .seat-editor-block-btn:hover {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+/* Seat cells */
+.seat-editor td.seat-editor-cell {
+  padding: 3px;
+  transition: background 0.12s, outline 0.12s;
+}
+.seat-editor td.seat-editor-cell.empty {
+  background: var(--bg);
+}
+.seat-editor td.seat-editor-cell.empty:hover {
+  background: var(--light-blue);
+}
+.seat-editor td.seat-editor-cell.empty::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.seat-editor td.seat-editor-cell.occupied {
+  background: var(--card);
+  cursor: grab;
+}
+.seat-editor td.seat-editor-cell.occupied:active { cursor: grabbing; }
+.seat-editor td.seat-editor-cell.dragging { opacity: 0.35; }
+.seat-editor td.seat-editor-cell.drop-target {
+  outline: 3px solid var(--deped-blue);
+  outline-offset: -3px;
+  background: var(--light-blue);
+}
+.seat-editor .seat-editor-inner {
+  width: 100%;
+  height: 100%;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+.seat-editor .seat-editor-photo {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.seat-editor .seat-editor-initials {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.seat-editor .seat-editor-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  max-width: 100%;
+}
+.seat-editor .seat-editor-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--gradient-danger);
+  color: #fff;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  border: none;
+  cursor: pointer;
+  z-index: 2;
+}
+.seat-editor td.seat-editor-cell:hover .seat-editor-remove { display: flex; }
+
+/* Context menu */
+/* ---------- Seat context menu (compact) ---------- */
+.seat-ctx-menu {
+  position: fixed;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.14);
+  padding: 4px;
+  min-width: 150px;
+  max-width: 200px;
+  z-index: 2100;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.seat-ctx-menu button {
+  background: transparent;
+  border: none;
+  padding: 5px 8px;
+  text-align: left;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.seat-ctx-menu button:hover { background: var(--light-blue); color: var(--deped-blue); }
+.seat-ctx-menu button.danger { color: var(--danger); }
+.seat-ctx-menu button.danger:hover { background: rgba(220,53,69,0.1); color: var(--danger); }
+
+/* Force every icon inside the menu to a fixed, small size.
+   The !important guards against any later or higher-specificity rule. */
+.seat-ctx-menu button > svg,
+.seat-ctx-menu button svg {
+  width: 12px !important;
+  height: 12px !important;
+  min-width: 12px !important;
+  min-height: 12px !important;
+  max-width: 12px !important;
+  max-height: 12px !important;
+  flex: 0 0 12px !important;
+  display: block !important;
+  stroke-width: 2 !important;
+}
+
+.seat-ctx-menu .ctx-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 2px;
+}
+.seat-ctx-menu .ctx-head {
+  padding: 4px 8px 2px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+/* Orientation banner refinements */
+.seat-orientation-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.seat-orientation-bar svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: block;
+}
+.seat-orientation-bar.front { color: var(--deped-blue); background: var(--light-blue); border: 2px solid var(--deped-blue); }
+.seat-orientation-bar.back { color: var(--text-muted); background: var(--bg); border: 2px dashed var(--border); }
 .seat-back-banner {
   color: var(--text-muted);
   background: var(--bg);
@@ -10275,7 +10634,7 @@ const Pages = {
     this._bindDashBirthdays(root);
 
     // 8. Upcoming
-    bodyEl('upcoming').innerHTML = this._renderDashUpcoming(stats);
+    bodyEl('upcoming').innerHTML = await this._renderDashUpcoming(stats);
     this._bindDashUpcoming(root);
 
     // 9. Quick tools
@@ -10587,26 +10946,157 @@ const Pages = {
     });
   },
 
-  _renderDashUpcoming(s) {
-    // Priority: overdue > dueSoon > nothing
-    const items = [...s.overdue, ...s.dueSoon].slice(0, 5);
-    if (!items.length) return '<p class="text-muted text-sm" style="text-align:center;padding:20px;">No upcoming activities.</p>';
-    const today = Utils.todayISO();
-    return `<div style="display:flex;flex-direction:column;gap:6px;">
-      ${items.map(a => {
-        const isOverdue = a.dueDate && a.dueDate < today;
-        return `<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${Utils.esc(a.title)}</div>
-            <div class="text-xs text-muted">${Utils.esc(a.subject || '')}</div>
+/* ============================================================================
+   DASHBOARD — Upcoming Activities widget
+   Merges overdue + due-soon assignments with upcoming Calendar events
+   (DepEd + personal). Sorted chronologically, overdue items pinned first.
+   ============================================================================ */
+async _renderDashUpcoming(s) {
+  const today = Utils.todayISO();
+  const horizon = new Date();
+  horizon.setDate(horizon.getDate() + 30);
+  const horizonISO = horizon.getFullYear() + '-' +
+                     String(horizon.getMonth() + 1).padStart(2, '0') + '-' +
+                     String(horizon.getDate()).padStart(2, '0');
+
+  /* ── Fetch upcoming calendar events (shared + class-scoped) ── */
+  let calEvents = [];
+  try {
+    const all = await DB.getAll('calendarEvents');
+    const cls = State.activeClass;
+    calEvents = (all || []).filter(e => {
+      if (!e.date) return false;
+      if (e.date < today || e.date > horizonISO) return false;
+      // DepEd calendar events are globally shared
+      if (e.source === 'deped') return true;
+      // Events with no class are treated as shared (e.g. admin notes)
+      if (!e.classId) return true;
+      // Otherwise only show events for the active class
+      return cls && e.classId === cls.id;
+    });
+    calEvents.sort((a, b) => a.date.localeCompare(b.date));
+  } catch (err) {
+    console.warn('[Dashboard] Calendar fetch failed:', err);
+  }
+
+  /* ── Build the merged list ── */
+  const merged = [];
+
+  // Overdue assignments — always pinned at top
+  (s.overdue || []).forEach(a => {
+    if (!a.dueDate) return;
+    merged.push({
+      kind: 'assignment',
+      date: a.dueDate,
+      title: a.title || 'Untitled assignment',
+      subtitle: a.subject || '',
+      badge: 'Overdue',
+      badgeClass: 'badge-danger',
+      overdue: true,
+      refId: a.id
+    });
+  });
+
+  // Calendar events
+  const CAT_BADGE = {
+    'Meeting':    'badge-blue',
+    'Exam':       'badge-danger',
+    'Assignment': 'badge-blue',
+    'Activity':   'badge-success',
+    'Holiday':    'badge-warning',
+    'Personal':   'badge-neutral'
+  };
+  calEvents.forEach(e => {
+    const isDeped = e.source === 'deped';
+    merged.push({
+      kind: 'calendar',
+      date: e.date,
+      title: e.title || 'Untitled event',
+      subtitle: isDeped ? 'DepEd Calendar' : (e.category || 'Personal'),
+      badge: isDeped ? 'DepEd' : (e.category || 'Event'),
+      badgeClass: isDeped ? 'badge-gold' : (CAT_BADGE[e.category] || 'badge-neutral'),
+      overdue: false,
+      refId: e.id
+    });
+  });
+
+  // Due-soon assignments
+  (s.dueSoon || []).forEach(a => {
+    if (!a.dueDate) return;
+    merged.push({
+      kind: 'assignment',
+      date: a.dueDate,
+      title: a.title || 'Untitled assignment',
+      subtitle: a.subject || '',
+      badge: 'Assignment',
+      badgeClass: 'badge-blue',
+      overdue: false,
+      refId: a.id
+    });
+  });
+
+  /* ── Sort: overdue first, then chronological ── */
+  merged.sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    return a.date.localeCompare(b.date);
+  });
+
+  const visible = merged.slice(0, 6);
+
+  if (!visible.length) {
+    return `<p class="text-muted text-sm" style="text-align:center;padding:20px;">
+      Nothing scheduled in the next 30 days.
+    </p>`;
+  }
+
+  /* ── Compose rows ── */
+  return `<div style="display:flex;flex-direction:column;gap:2px;">
+    ${visible.map(item => {
+      const d = new Date(item.date + 'T00:00:00');
+      const daysAway = Math.round((d - new Date(today + 'T00:00:00')) / 86400000);
+      const whenLabel = item.overdue
+        ? `${Math.abs(daysAway)}d overdue`
+        : daysAway === 0 ? 'Today'
+        : daysAway === 1 ? 'Tomorrow'
+        : `${daysAway} days`;
+
+      const clickAction = item.kind === 'calendar'
+        ? `Pages.openCalendarEventById('${Utils.attr(item.refId)}')`
+        : `App.navigate('assignments')`;
+
+      return `<div class="dash-upcoming-row"
+                   data-upcoming-click="${Utils.attr(clickAction)}"
+                   style="display:flex;justify-content:space-between;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border);cursor:pointer;border-radius:6px;transition:background 0.12s;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${Utils.esc(item.title)}
           </div>
-          <span class="badge ${isOverdue ? 'badge-danger' : 'badge-blue'}" style="align-self:center;">${a.dueDate ? Utils.formatDate(a.dueDate) : '—'}</span>
-        </div>`;
-      }).join('')}
-    </div>
-    <button class="btn btn-sm btn-ghost" style="margin-top:10px;" onclick="App.navigate('assignments')">${icon('file')} View All Assignments</button>`;
+          <div class="text-xs text-muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${Utils.esc(item.subtitle)}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <span class="badge ${item.badgeClass}" style="font-size:10px;">${Utils.esc(item.badge)}</span>
+          <div class="text-xs text-muted" style="margin-top:2px;">${whenLabel}</div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>
+  <button class="btn btn-sm btn-ghost" style="margin-top:10px;" onclick="App.navigate('calendar')">
+    ${icon('calendar')} Open Calendar
+  </button>`;
+},
+  _bindDashUpcoming(root) {
+    root.querySelectorAll('[data-upcoming-click]').forEach(el => {
+      el.onclick = () => {
+        const fn = el.dataset.upcomingClick;
+        try { (new Function('return ' + fn))(); }
+        catch (e) { console.warn('[Dashboard] Upcoming click failed:', e); }
+      };
+      el.onmouseenter = () => { el.style.background = 'var(--light-blue)'; };
+      el.onmouseleave = () => { el.style.background = ''; };
+    });
   },
-  _bindDashUpcoming(root) {},
 
   async _renderDashQuickTools() {
     const tools = await Dashboard.mostUsedTools(8);
@@ -16458,7 +16948,34 @@ _tosPersist: Utils.debounce(async function() {
       Pages.openCalendarEventModal(el.dataset.dayItem);
     }));
   },
+  /* Open a calendar event by its ID — routes to edit modal, or to the
+   calendar month for read-only events (DepEd-sourced, auto-generated). */
+async openCalendarEventById(id) {
+  const ev = await DB.get('calendarEvents', id);
+  if (!ev) { UI.toast('Event not found.', 'error'); return; }
 
+  // DepEd events and auto-pulled assignment due dates are read-only
+  if (ev.source === 'deped') {
+    // Navigate to the calendar month containing this event
+    if (ev.date) {
+      const evDate = new Date(ev.date + 'T00:00:00');
+      const now = new Date();
+      const monthsApart = (evDate.getFullYear() - now.getFullYear()) * 12 +
+                          (evDate.getMonth() - now.getMonth());
+      State.calendarMonthOffset = monthsApart;
+    }
+    App.navigate('calendar');
+    return;
+  }
+  if (ev.auto) {
+    UI.toast('This entry is pulled automatically from an assignment due date. Edit the assignment to change it.', 'info', 4500);
+    App.navigate('assignments');
+    return;
+  }
+
+  // Regular personal/admin event → open the edit modal
+  Pages.openCalendarEventModal(id);
+},
   async openCalendarEventModal(id, presetDate) {
     const cls = State.activeClass;
     const existing = id ? await DB.get('calendarEvents', id) : null;
@@ -18745,6 +19262,7 @@ async printLesson(id) {
       await DB.put('seatingPlans', plan);
     }
     if (!Array.isArray(plan.tables)) plan.tables = [];
+    plan = Pages._seatMigratePlanDimensions(plan);
     State._seatPlan = plan;
 
     const hasChairGrid = plan.rows > 0 && plan.cols > 0;
@@ -18761,76 +19279,96 @@ async printLesson(id) {
         </div>
       </div>
 
-      <div class="card mb-16">
-        <div class="flex gap-12" style="flex-wrap:wrap;align-items:flex-end;">
-          <div>
-            <label class="text-xs text-muted">Armchair Columns</label>
-            <input type="number" class="form-control" value="${plan.cols}" min="0" max="12" style="width:80px;" id="seat-cols" title="Set to 0 for a tables-only room">
-          </div>
-          <div>
-            <label class="text-xs text-muted">Armchair Rows</label>
-            <input type="number" class="form-control" value="${plan.rows}" min="0" max="12" style="width:80px;" id="seat-rows" title="Set to 0 for a tables-only room">
-          </div>
-          <div>
-            <label class="text-xs text-muted">Layout</label>
-            <select class="form-control" style="width:170px;" id="seat-layout">
-              ${['Traditional','Pairs','U-Shape','Group Tables','Mixed (Rows + Tables)']
-                .map(l => `<option ${plan.layout === l ? 'selected' : ''}>${l}</option>`).join('')}
-            </select>
-          </div>
-          <div style="flex:1;"></div>
-          <div style="text-align:right;">
-            <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Unplaced</label>
-            <div id="unseated-list" style="font-size:12px;"></div>
-          </div>
-        </div>
-        <p class="text-xs text-muted" style="margin-top:10px;">
-          Set Rows or Columns to <strong>0</strong> for classrooms without armchairs — the grid is hidden and only group tables are shown.
-        </p>
+<div class="card mb-16">
+  <div class="flex-between mb-12" style="flex-wrap:wrap;gap:8px;">
+    <div>
+      <strong style="font-size:14px;">Armchair Layout</strong>
+      <p class="text-xs text-muted" style="margin-top:2px;">
+        Drag the column and row borders to resize. Right-click a header to insert or delete. Blank rows/columns are allowed to match real chair placement.
+      </p>
+    </div>
+    <div class="text-right">
+      <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Unplaced</label>
+      <div id="unseated-list" style="font-size:12px;"></div>
+    </div>
+  </div>
+</div>
+
+${hasChairGrid ? `<div class="seat-editor-toolbar">
+  <div class="stb-group">
+    <span class="stb-label">Grid</span>
+    <button class="btn btn-sm btn-outline" id="seat-add-row-bottom">${icon('edit')} + Row</button>
+    <button class="btn btn-sm btn-outline" id="seat-add-col-right">${icon('edit')} + Column</button>
+  </div>
+  <div class="stb-group">
+    <span class="stb-label">Preset</span>
+    <button class="btn btn-sm btn-outline" id="seat-grid-uniform">Uniform Sizes</button>
+    <button class="btn btn-sm btn-outline" id="seat-grid-auto-fit">Auto-Fit</button>
+  </div>
+  <div class="stb-group">
+    <span class="stb-label">View</span>
+    <button class="btn btn-sm btn-outline" id="seat-orientation-toggle" title="Flip between teacher's POV and whiteboard POV">
+      ${plan.orientation === 'whiteboard' ? 'Front at Top' : 'Front at Bottom'}
+    </button>
+  </div>
+  <div style="flex:1;"></div>
+  <div class="stb-group">
+    <button class="btn btn-sm btn-outline" onclick="Pages.seatRandomize()">${icon('shuffle')} Randomize</button>
+    <button class="btn btn-sm btn-outline" onclick="Pages.seatClear()">${icon('file')} Clear Seats</button>
+  </div>
+</div>
+
+${plan.orientation === 'whiteboard'
+  ? `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Whiteboard Side</div>`
+  : `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`}
+
+<div class="seat-editor-wrap mb-16">
+  <table class="seat-editor" id="seat-grid-table"></table>
+</div>
+
+${plan.orientation === 'whiteboard'
+  ? `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`
+  : `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Teacher's Position</div>`}
+
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:6px;">
+        <h3 style="font-size:14px;">Group Tables</h3>
+        <span class="text-xs text-muted">For learners sharing a table instead of an individual armchair</span>
       </div>
+      <div id="seat-tables-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:10px;"></div>
+    </div>
 
-      ${hasChairGrid ? `
-        <div class="card mb-16">
-          <div class="card-head" style="margin-bottom:14px;">
-            <h3>Armchair Rows</h3>
-            <span class="text-xs text-muted">Front row is at the bottom — matches your view from the front of the room</span>
-          </div>
-
-          <div class="seat-back-banner">
-            ${icon('building')}<span>Back of Classroom</span>
-          </div>
-
-          <div id="seat-container" class="seat-grid" style="grid-template-columns: repeat(${plan.cols}, 1fr);"></div>
-
-          <div class="seat-front-banner">
-            ${icon('user')}<span>Front of Classroom · Teacher's Position</span>
-          </div>
-        </div>
-      ` : `<div id="seat-container" style="display:none;"></div>`}
-
-      <div class="card mb-16">
-        <div class="card-head" style="margin-bottom:6px;">
-          <h3>Group Tables</h3>
-          <span class="text-xs text-muted">For learners sharing a table instead of an individual armchair</span>
-        </div>
-        <div id="seat-tables-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:10px;"></div>
+    <div class="card">
+      <div class="card-head" style="margin-bottom:10px;">
+        <h3 style="font-size:14px;">Unplaced Learners</h3>
+        <span class="text-xs text-muted">Drag a learner to any chair or table to place them</span>
       </div>
-
-      <div class="card">
-        <div class="card-head" style="margin-bottom:10px;">
-          <h3>Unplaced Learners</h3>
-          <span class="text-xs text-muted">Drag a learner to any chair or table to place them</span>
-        </div>
-        <div id="unseated-chips" class="seat-unseated-pool"></div>
-      </div>
+      <div id="unseated-chips" class="seat-unseated-pool"></div>
+    </div>` : `
+    <div id="seat-container" style="display:none;"></div>
+    <div id="seat-tables-container" style="display:none;"></div>
+    <div id="unseated-chips" style="display:none;"></div>
+    <div class="card">
+      <div class="card-head"><h3>No Armchair Grid</h3></div>
+      <p class="text-sm text-muted mb-12">This classroom has no armchair grid. Add one to start placing learners in rows and columns.</p>
+      <button class="btn btn-primary" onclick="Pages.seatInitializeGrid()">${icon('grid')} Create Armchair Grid</button>
+    </div>
+    `}
     `;
 
-    root.querySelector('#seat-cols').addEventListener('change', (e) => Pages.seatResize(e.target.value, null));
-    root.querySelector('#seat-rows').addEventListener('change', (e) => Pages.seatResize(null, e.target.value));
-    root.querySelector('#seat-layout').addEventListener('change', (e) => Pages.seatSetLayout(e.target.value));
+    const addRowBtn = root.querySelector('#seat-add-row-bottom');
+    if (addRowBtn) addRowBtn.onclick = () => Pages.seatAddRowAtEnd();
+    const addColBtn = root.querySelector('#seat-add-col-right');
+    if (addColBtn) addColBtn.onclick = () => Pages.seatAddColumnAtEnd();
+    const uniformBtn = root.querySelector('#seat-grid-uniform');
+    if (uniformBtn) uniformBtn.onclick = () => Pages.seatGridUniform();
+    const autoFitBtn = root.querySelector('#seat-grid-auto-fit');
+    if (autoFitBtn) autoFitBtn.onclick = () => Pages.seatGridAutoFit();
+    const orientBtn = root.querySelector('#seat-orientation-toggle');
+    if (orientBtn) orientBtn.onclick = () => Pages.seatToggleOrientation();
 
     this.renderSeating(plan);
-  },
+    },
   async renderSeating(plan) {
     State._seatPlan = plan;
     if (!Array.isArray(plan.tables)) plan.tables = [];
@@ -18861,38 +19399,260 @@ async printLesson(id) {
       !assignedToChair.has(l.id) && !assignedToTable.has(l.id)
     );
 
-    // ---------------- Chair grid (flipped for teacher POV) ----------------
-    if (container) {
-      const hasGrid = plan.rows > 0 && plan.cols > 0;
-      if (!hasGrid) {
-        container.style.display = 'none';
-        container.innerHTML = '';
+// ---------------- Chair grid (MS-Word-style table) ----------------
+const table = document.getElementById('seat-grid-table');
+if (table) {
+  Pages._seatMigratePlanDimensions(plan);
+  const rowCount = plan.rowHeights.length;
+  const colCount = plan.colWidths.length;
+
+  /* --- Row order depends on orientation --- */
+  const rowOrder = plan.orientation === 'whiteboard'
+    ? Array.from({ length: rowCount }, (_, i) => i)
+    : Array.from({ length: rowCount }, (_, i) => rowCount - 1 - i);
+
+  /* --- Rebuild colgroup --- */
+  let colgroupHTML = `<col class="seat-corner-col" style="width:36px">`;
+  for (let c = 0; c < colCount; c++) {
+    colgroupHTML += `<col data-col-width="${c}" style="width:${plan.colWidths[c]}px">`;
+  }
+
+  /* --- Rebuild thead --- */
+  let theadHTML = `<tr><th class="seat-corner-cell">#</th>`;
+  for (let c = 0; c < colCount; c++) {
+    theadHTML += `<th class="seat-col-head" data-col="${c}" title="Right-click for column options">
+      <span>${String.fromCharCode(65 + (c % 26))}</span>
+      <div class="seat-col-resize" data-col-resize="${c}"></div>
+    </th>`;
+  }
+  theadHTML += `</tr>`;
+
+  /* --- Rebuild tbody --- */
+  let rowsHTML = '';
+  for (const r of rowOrder) {
+    const rowHeight = plan.rowHeights[r];
+    rowsHTML += `<tr style="height:${rowHeight}px" data-row-tr="${r}">`;
+    rowsHTML += `<th class="seat-row-head" data-row="${r}" style="height:${rowHeight}px" title="Right-click for row options">
+      <span>${r + 1}</span>
+      <div class="seat-row-resize" data-row-resize="${r}"></div>
+    </th>`;
+    for (let c = 0; c < colCount; c++) {
+      const key = r + '-' + c;
+      const lid = plan.seats[key];
+      const l = lid ? learnerById[lid] : null;
+      const isBlocked = !!(plan.blockedSeats && plan.blockedSeats[key]);
+
+      if (l) {
+        const photoHTML = l.photo
+          ? `<img class="seat-editor-photo" src="${Utils.attr(l.photo)}" alt="">`
+          : `<div class="seat-editor-initials" style="background:${Utils.colorFor(Utils.fullName(l))};">${Utils.esc(Utils.initials(Utils.fullName(l)))}</div>`;
+        rowsHTML += `<td class="seat-editor-cell occupied"
+                        data-key="${Utils.attr(key)}"
+                        data-learner="${Utils.attr(l.id)}"
+                        draggable="true"
+                        title="${Utils.attr(Utils.fullName(l))}">
+          <div class="seat-editor-inner">
+            ${photoHTML}
+            <div class="seat-editor-name">${Utils.esc(Utils.lastNameFirst(l))}</div>
+            <button class="seat-editor-remove" data-seat-remove="${Utils.attr(key)}" title="Remove from seat" aria-label="Remove ${Utils.attr(Utils.fullName(l))} from seat">×</button>
+          </div>
+        </td>`;
+      } else if (isBlocked) {
+        rowsHTML += `<td class="seat-editor-cell blocked"
+                        data-key="${Utils.attr(key)}"
+                        title="This seat is blocked — click the lock to unblock">
+          <button class="seat-editor-block-btn" data-seat-block="${Utils.attr(key)}"
+                  title="Unblock this seat" aria-label="Unblock this seat">
+            ${icon('lock')}
+          </button>
+        </td>`;
       } else {
-        container.style.display = '';
-        container.style.gridTemplateColumns = `repeat(${plan.cols}, 1fr)`;
-        let grid = '';
-        // Iterate rows bottom-up: the last row (back of room) renders first,
-        // so the front row appears at the bottom of the diagram.
-        for (let r = plan.rows - 1; r >= 0; r--) {
-          for (let c = 0; c < plan.cols; c++) {
-            const key = r + '-' + c;
-            const lid = plan.seats[key];
-            const l = lid ? learnerById[lid] : null;
-            if (l) {
-              const initialsHTML = `<div class="seat-initials" style="background:${Utils.colorFor(Utils.fullName(l))};">${Utils.esc(Utils.initials(Utils.fullName(l)))}</div>`;
-              grid += `<div class="seat" draggable="true" data-key="${Utils.attr(key)}" data-learner="${Utils.attr(l.id)}" title="${Utils.attr(Utils.fullName(l))}">
-                ${l.photo ? `<img class="seat-photo" src="${Utils.attr(l.photo)}" alt="">` : initialsHTML}
-                <div class="seat-name">${Utils.esc(l.lastName || '')}</div>
-                <div class="seat-remove" data-seat-remove="${Utils.attr(key)}">×</div>
-              </div>`;
-            } else {
-              grid += `<div class="seat empty" data-key="${Utils.attr(key)}">${r+1}-${c+1}</div>`;
-            }
-          }
-        }
-        container.innerHTML = grid;
+        rowsHTML += `<td class="seat-editor-cell empty" data-key="${Utils.attr(key)}">
+          <button class="seat-editor-block-btn" data-seat-block="${Utils.attr(key)}"
+                  title="Block this seat" aria-label="Block this seat">
+            ${icon('lock')}
+          </button>
+        </td>`;
       }
     }
+    rowsHTML += `</tr>`;
+  }
+
+  /* --- Commit to DOM in one shot --- */
+  table.innerHTML = `<colgroup>${colgroupHTML}</colgroup><thead>${theadHTML}</thead><tbody>${rowsHTML}</tbody>`;
+
+  /* --- Rebind column-header handlers --- */
+  table.querySelectorAll('.seat-col-head').forEach(th => {
+    th.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      Pages._seatOpenContextMenu('column', Number(th.dataset.col), e.clientX, e.clientY);
+    });
+    th.addEventListener('dblclick', () => {
+      Pages._seatInsertColumn(Number(th.dataset.col), 'right');
+    });
+  });
+
+  /* --- Rebind row-header handlers --- */
+  table.querySelectorAll('.seat-row-head').forEach(th => {
+    th.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      Pages._seatOpenContextMenu('row', Number(th.dataset.row), e.clientX, e.clientY);
+    });
+    th.addEventListener('dblclick', () => {
+      Pages._seatInsertRow(Number(th.dataset.row), 'below');
+    });
+  });
+
+  /* --- Rebind column-resize handles (Pointer Events) --- */
+  table.querySelectorAll('.seat-col-resize').forEach(handle => {
+    const colIdx = Number(handle.dataset.colResize);
+    let startX = 0, startW = 0, active = false;
+
+    const onDown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      active = true;
+      startX = e.clientX;
+      startW = plan.colWidths[colIdx];
+      handle.classList.add('active');
+      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    };
+
+    const onMove = (e) => {
+      if (!active) return;
+      const dx = e.clientX - startX;
+      const newW = Utils.clamp(Math.round(startW + dx), 40, 400);
+      plan.colWidths[colIdx] = newW;
+      const colEl = table.querySelector(`colgroup col[data-col-width="${colIdx}"]`);
+      if (colEl) colEl.style.width = newW + 'px';
+    };
+
+    const onUp = async (e) => {
+      if (!active) return;
+      active = false;
+      handle.classList.remove('active');
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try { await DB.put('seatingPlans', plan); } catch (err) { console.warn(err); }
+      App.showAutosave('saved');
+    };
+
+    handle.addEventListener('pointerdown', onDown);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+    handle.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+
+  /* --- Rebind row-resize handles --- */
+  table.querySelectorAll('.seat-row-resize').forEach(handle => {
+    const rowIdx = Number(handle.dataset.rowResize);
+    let startY = 0, startH = 0, active = false;
+
+    const onDown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      active = true;
+      startY = e.clientY;
+      startH = plan.rowHeights[rowIdx];
+      handle.classList.add('active');
+      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+    };
+
+    const onMove = (e) => {
+      if (!active) return;
+      const dy = e.clientY - startY;
+      const newH = Utils.clamp(Math.round(startH + dy), 40, 300);
+      plan.rowHeights[rowIdx] = newH;
+      const tr = table.querySelector(`tr[data-row-tr="${rowIdx}"]`);
+      if (tr) {
+        tr.style.height = newH + 'px';
+        const th = tr.querySelector('.seat-row-head');
+        if (th) th.style.height = newH + 'px';
+      }
+    };
+
+    const onUp = async (e) => {
+      if (!active) return;
+      active = false;
+      handle.classList.remove('active');
+      try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try { await DB.put('seatingPlans', plan); } catch (err) { console.warn(err); }
+      App.showAutosave('saved');
+    };
+
+    handle.addEventListener('pointerdown', onDown);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+    handle.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+
+  /* --- Rebind drag-and-drop on seat cells --- */
+  table.querySelectorAll('td.seat-editor-cell').forEach(td => {
+    if (td.classList.contains('occupied')) {
+      td.addEventListener('dragstart', (e) => {
+        Pages._seatDrag = { type: 'chair', key: td.dataset.key };
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', td.dataset.key); } catch (err) {}
+        td.classList.add('dragging');
+      });
+      td.addEventListener('dragend', () => {
+        td.classList.remove('dragging');
+        table.querySelectorAll('td.seat-editor-cell').forEach(x => x.classList.remove('drop-target'));
+        Pages._seatDrag = null;
+      });
+    }
+
+    // Blocked cells cannot accept drops
+    if (td.classList.contains('blocked')) {
+      td.addEventListener('dragover', (e) => {
+        if (!Pages._seatDrag) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'none';
+      });
+      return;   // skip further bindings for this cell
+    }
+
+    td.addEventListener('dragover', (e) => {
+      if (!Pages._seatDrag) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      td.classList.add('drop-target');
+    });
+    td.addEventListener('dragleave', () => {
+      td.classList.remove('drop-target');
+    });
+    td.addEventListener('drop', (e) => {
+      e.preventDefault();
+      td.classList.remove('drop-target');
+      Pages._seatDropOnTarget({ type: 'chair', key: td.dataset.key });
+    });
+
+    // Seat removal
+    const rm = td.querySelector('[data-seat-remove]');
+    if (rm) {
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        Pages.seatRemove(rm.dataset.seatRemove);
+      });
+    }
+
+    // Block toggle
+    const blk = td.querySelector('[data-seat-block]');
+    if (blk) {
+      blk.addEventListener('click', (e) => {
+        e.stopPropagation();
+        Pages._seatToggleBlocked(blk.dataset.seatBlock);
+      });
+    }
+  });
+}
 
     // ---------------- Group tables ----------------
     if (tablesEl) {
@@ -19317,19 +20077,41 @@ async printLesson(id) {
     this.renderSeating(plan);
   },
   async seatResize(cols, rows) {
-    const plan = State._seatPlan;
-    if (!plan) return;
-    if (cols !== null && cols !== undefined && cols !== '') {
-      const n = Number(cols);
-      plan.cols = isNaN(n) ? plan.cols : Utils.clamp(n, 0, 12);
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+
+  if (cols !== null && cols !== undefined && cols !== '') {
+    const n = Utils.clamp(Number(cols) || 0, 0, 30);
+    const cur = plan.colWidths.length;
+    if (n < cur) {
+      for (let c = n; c < cur; c++) {
+        for (let r = 0; r < plan.rowHeights.length; r++) delete plan.seats[r + '-' + c];
+      }
+      plan.colWidths = plan.colWidths.slice(0, n);
+    } else if (n > cur) {
+      for (let c = cur; c < n; c++) plan.colWidths.push(88);
     }
-    if (rows !== null && rows !== undefined && rows !== '') {
-      const n = Number(rows);
-      plan.rows = isNaN(n) ? plan.rows : Utils.clamp(n, 0, 12);
+  }
+
+  if (rows !== null && rows !== undefined && rows !== '') {
+    const n = Utils.clamp(Number(rows) || 0, 0, 30);
+    const cur = plan.rowHeights.length;
+    if (n < cur) {
+      for (let r = n; r < cur; r++) {
+        for (let c = 0; c < plan.colWidths.length; c++) delete plan.seats[r + '-' + c];
+      }
+      plan.rowHeights = plan.rowHeights.slice(0, n);
+    } else if (n > cur) {
+      for (let r = cur; r < n; r++) plan.rowHeights.push(64);
     }
-    await DB.put('seatingPlans', plan);
-    App.navigate('seating');
-  },
+  }
+
+  plan.cols = plan.colWidths.length;
+  plan.rows = plan.rowHeights.length;
+  await DB.put('seatingPlans', plan);
+  App.navigate('seating');
+},
   async seatSetLayout(layout) {
     const plan = State._seatPlan;
     if (!plan) return;
@@ -19337,46 +20119,54 @@ async printLesson(id) {
     await DB.put('seatingPlans', plan);
     App.navigate('seating');
   },
-  async seatRandomize() {
-    const plan = State._seatPlan;
-    if (!plan) return;
-    if (!Array.isArray(plan.tables)) plan.tables = [];
+async seatRandomize() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  if (!Array.isArray(plan.tables)) plan.tables = [];
+  this._seatMigratePlanDimensions(plan);
 
-    // Shuffle everyone in the class
-    const learners = [...State.learners];
-    for (let i = learners.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const t = learners[i]; learners[i] = learners[j]; learners[j] = t;
+  // Shuffle everyone in the class
+  const learners = [...State.learners];
+  for (let i = learners.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = learners[i]; learners[i] = learners[j]; learners[j] = t;
+  }
+
+  // Reset all placements
+  plan.seats = {};
+  plan.tables.forEach(t => { t.memberIds = []; });
+
+  // Build a list of assignable chair keys (skipping blocked ones)
+  const assignable = [];
+  for (let r = 0; r < plan.rowHeights.length; r++) {
+    for (let c = 0; c < plan.colWidths.length; c++) {
+      const key = r + '-' + c;
+      if (plan.blockedSeats[key]) continue;
+      assignable.push(key);
     }
+  }
 
-    // Reset all placements
-    plan.seats = {};
-    plan.tables.forEach(t => { t.memberIds = []; });
+  // 1) Fill the armchair grid first
+  let idx = 0;
+  for (const key of assignable) {
+    if (idx >= learners.length) break;
+    plan.seats[key] = learners[idx].id;
+    idx++;
+  }
 
-    // 1) Fill the armchair grid first
-    let idx = 0;
-    outer: for (let r = 0; r < plan.rows; r++) {
-      for (let c = 0; c < plan.cols; c++) {
-        if (idx >= learners.length) break outer;
-        plan.seats[r + '-' + c] = learners[idx].id;
-        idx++;
-      }
+  // 2) Then fill each table up to its capacity, in order
+  for (const t of plan.tables) {
+    const cap = Number(t.capacity) || 6;
+    while (t.memberIds.length < cap && idx < learners.length) {
+      t.memberIds.push(learners[idx].id);
+      idx++;
     }
+  }
 
-    // 2) Then fill each table up to its capacity, in order
-    for (const t of plan.tables) {
-      const cap = Number(t.capacity) || 6;
-      while (t.memberIds.length < cap && idx < learners.length) {
-        t.memberIds.push(learners[idx].id);
-        idx++;
-      }
-    }
-    // Any remaining learners stay unplaced — the pool will show them.
-
-    await DB.put('seatingPlans', plan);
-    this.renderSeating(plan);
-    UI.toast('Seats randomized', 'success');
-  },
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+  UI.toast('Seats randomized (blocked seats skipped)', 'success');
+},
   async seatClear() {
     const plan = State._seatPlan;
     if (!plan) return;
@@ -19385,6 +20175,320 @@ async printLesson(id) {
     await DB.put('seatingPlans', plan);
     this.renderSeating(plan);
   },
+
+  /** Toggle the blocked state of a seat. */
+async _seatToggleBlocked(key) {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  plan.blockedSeats = plan.blockedSeats || {};
+  if (plan.blockedSeats[key]) {
+    delete plan.blockedSeats[key];
+    UI.toast('Seat unblocked', 'info', 1500);
+  } else {
+    // Refuse to block a seat currently holding a learner
+    if (plan.seats[key]) {
+      UI.toast('Remove the learner first, then block this seat.', 'warning', 2500);
+      return;
+    }
+    plan.blockedSeats[key] = true;
+    UI.toast('Seat blocked — will be skipped during randomization', 'info', 1800);
+  }
+  await DB.put('seatingPlans', plan);
+  App.showAutosave('saved');
+  this.renderSeating(plan);
+},
+  /* ============================================================================
+   SEAT EDITOR — MS-Word-style table with independent row/column dimensions
+   ============================================================================ */
+
+/** Migrate a legacy plan (cols/rows as numbers) to the new model. */
+_seatMigratePlanDimensions(plan) {
+  if (!plan) return plan;
+  if (!Array.isArray(plan.colWidths)) {
+    const n = Number(plan.cols) || 0;
+    plan.colWidths = Array.from({ length: n }, () => 88);
+  }
+  if (!Array.isArray(plan.rowHeights)) {
+    const n = Number(plan.rows) || 0;
+    plan.rowHeights = Array.from({ length: n }, () => 64);
+  }
+  if (!plan.orientation) plan.orientation = 'teacher';
+  if (!plan.blockedSeats || typeof plan.blockedSeats !== 'object') {
+    plan.blockedSeats = {};                        // ← ADD THIS LINE
+  }
+  plan.cols = plan.colWidths.length;
+  plan.rows = plan.rowHeights.length;
+  return plan;
+},
+
+/** Create an initial grid if the plan has none. */
+async seatInitializeGrid() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  plan.colWidths = [88, 88, 88, 88, 88];
+  plan.rowHeights = [64, 64, 64, 64, 64, 64];
+  plan.cols = 5;
+  plan.rows = 6;
+  plan.orientation = 'teacher';
+  await DB.put('seatingPlans', plan);
+  App.logActivity('Initialized seat grid', 'Seating');
+  App.navigate('seating');
+},
+
+/** Add a row at the bottom of the grid. */
+async seatAddRowAtEnd() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  plan.rowHeights.push(64);
+  plan.rows = plan.rowHeights.length;
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+},
+
+/** Add a column at the right of the grid. */
+async seatAddColumnAtEnd() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  plan.colWidths.push(88);
+  plan.cols = plan.colWidths.length;
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+},
+
+/** Set every column and row to the default size. */
+async seatGridUniform() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  plan.colWidths = plan.colWidths.map(() => 88);
+  plan.rowHeights = plan.rowHeights.map(() => 64);
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+  UI.toast('Grid reset to uniform size', 'success', 2000);
+},
+
+/** Auto-fit: pick column widths and row heights that suit the current content. */
+async seatGridAutoFit() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  // Column widths: keep current widths but expand narrow columns that contain a photo
+  plan.colWidths = plan.colWidths.map(w => Math.max(w, 84));
+  plan.rowHeights = plan.rowHeights.map(h => Math.max(h, 70));
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+  UI.toast('Auto-fit applied', 'success', 2000);
+},
+
+/** Toggle between teacher POV and whiteboard POV. */
+async seatToggleOrientation() {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  plan.orientation = plan.orientation === 'whiteboard' ? 'teacher' : 'whiteboard';
+  await DB.put('seatingPlans', plan);
+  this.renderSeating(plan);
+},
+
+/** Insert a column adjacent to the given index. */
+async _seatInsertColumn(atIdx, side) {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  const insertAt = side === 'left' ? atIdx : atIdx + 1;
+  plan.colWidths.splice(insertAt, 0, 88);
+  const newSeats = {};
+  for (const key in plan.seats) {
+    const parts = key.split('-');
+    const r = Number(parts[0]);
+    const c = Number(parts[1]);
+    if (isNaN(r) || isNaN(c)) continue;
+    const newC = c >= insertAt ? c + 1 : c;
+    newSeats[r + '-' + newC] = plan.seats[key];
+  }
+  plan.seats = newSeats;
+  plan.cols = plan.colWidths.length;
+  await DB.put('seatingPlans', plan);
+  App.logActivity(`Inserted column at position ${insertAt + 1}`, 'Seating');
+  this.renderSeating(plan);
+},
+
+/** Insert a row adjacent to the given index. */
+async _seatInsertRow(atIdx, side) {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  const insertAt = side === 'above' ? atIdx : atIdx + 1;
+  plan.rowHeights.splice(insertAt, 0, 64);
+  const newSeats = {};
+  for (const key in plan.seats) {
+    const parts = key.split('-');
+    const r = Number(parts[0]);
+    const c = Number(parts[1]);
+    if (isNaN(r) || isNaN(c)) continue;
+    const newR = r >= insertAt ? r + 1 : r;
+    newSeats[newR + '-' + c] = plan.seats[key];
+  }
+  plan.seats = newSeats;
+  plan.rows = plan.rowHeights.length;
+  await DB.put('seatingPlans', plan);
+  App.logActivity(`Inserted row at position ${insertAt + 1}`, 'Seating');
+  this.renderSeating(plan);
+},
+
+/** Delete a column. */
+async _seatDeleteColumn(idx) {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  if (plan.colWidths.length <= 1) {
+    UI.toast('A grid needs at least one column.', 'warning');
+    return;
+  }
+  // Count occupied seats in this column so we can warn
+  let occupied = 0;
+  for (const key in plan.seats) {
+    const parts = key.split('-');
+    if (Number(parts[1]) === idx) occupied++;
+  }
+  const doDelete = async () => {
+    plan.colWidths.splice(idx, 1);
+    const newSeats = {};
+    for (const key in plan.seats) {
+      const parts = key.split('-');
+      const r = Number(parts[0]);
+      const c = Number(parts[1]);
+      if (isNaN(r) || isNaN(c) || c === idx) continue;
+      const newC = c > idx ? c - 1 : c;
+      newSeats[r + '-' + newC] = plan.seats[key];
+    }
+    plan.seats = newSeats;
+    plan.cols = plan.colWidths.length;
+    await DB.put('seatingPlans', plan);
+    App.logActivity(`Deleted column ${idx + 1}`, 'Seating');
+    this.renderSeating(plan);
+  };
+  if (occupied > 0) {
+    UI.confirm({
+      title: 'Delete Column',
+      message: `Column ${idx + 1} contains ${occupied} placed learner${occupied === 1 ? '' : 's'}. They will become unplaced. Continue?`,
+      confirmText: 'Delete',
+      confirmClass: 'btn-danger',
+      onConfirm: doDelete
+    });
+  } else {
+    doDelete();
+  }
+},
+
+/** Delete a row. */
+async _seatDeleteRow(idx) {
+  const plan = State._seatPlan;
+  if (!plan) return;
+  this._seatMigratePlanDimensions(plan);
+  if (plan.rowHeights.length <= 1) {
+    UI.toast('A grid needs at least one row.', 'warning');
+    return;
+  }
+  let occupied = 0;
+  for (const key in plan.seats) {
+    const parts = key.split('-');
+    if (Number(parts[0]) === idx) occupied++;
+  }
+  const doDelete = async () => {
+    plan.rowHeights.splice(idx, 1);
+    const newSeats = {};
+    for (const key in plan.seats) {
+      const parts = key.split('-');
+      const r = Number(parts[0]);
+      const c = Number(parts[1]);
+      if (isNaN(r) || isNaN(c) || r === idx) continue;
+      const newR = r > idx ? r - 1 : r;
+      newSeats[newR + '-' + c] = plan.seats[key];
+    }
+    plan.seats = newSeats;
+    plan.rows = plan.rowHeights.length;
+    await DB.put('seatingPlans', plan);
+    App.logActivity(`Deleted row ${idx + 1}`, 'Seating');
+    this.renderSeating(plan);
+  };
+  if (occupied > 0) {
+    UI.confirm({
+      title: 'Delete Row',
+      message: `Row ${idx + 1} contains ${occupied} placed learner${occupied === 1 ? '' : 's'}. They will become unplaced. Continue?`,
+      confirmText: 'Delete',
+      confirmClass: 'btn-danger',
+      onConfirm: doDelete
+    });
+  } else {
+    doDelete();
+  }
+},
+
+/** Open a small context menu anchored at the pointer. */
+_seatOpenContextMenu(kind, index, clientX, clientY) {
+  const existing = document.getElementById('seat-ctx-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'seat-ctx-menu';
+  menu.className = 'seat-ctx-menu';
+
+  if (kind === 'column') {
+    menu.innerHTML = `
+      <div class="ctx-head">Column ${String.fromCharCode(65 + (index % 26))}</div>
+      <button data-act="col-insert-left">${icon('edit')} Insert column left</button>
+      <button data-act="col-insert-right">${icon('edit')} Insert column right</button>
+      <div class="ctx-divider"></div>
+      <button data-act="col-delete" class="danger">${icon('trash')} Delete column</button>
+    `;
+  } else {
+    menu.innerHTML = `
+      <div class="ctx-head">Row ${index + 1}</div>
+      <button data-act="row-insert-above">${icon('edit')} Insert row above</button>
+      <button data-act="row-insert-below">${icon('edit')} Insert row below</button>
+      <div class="ctx-divider"></div>
+      <button data-act="row-delete" class="danger">${icon('trash')} Delete row</button>
+    `;
+  }
+
+  document.body.appendChild(menu);
+
+  // Position on-screen
+  const rect = menu.getBoundingClientRect();
+  const left = Math.min(clientX, window.innerWidth - rect.width - 8);
+  const top  = Math.min(clientY, window.innerHeight - rect.height - 8);
+  menu.style.left = Math.max(8, left) + 'px';
+  menu.style.top  = Math.max(8, top)  + 'px';
+
+  // Bind actions
+  menu.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.onclick = () => {
+      const act = btn.dataset.act;
+      menu.remove();
+      if (act === 'col-insert-left')   Pages._seatInsertColumn(index, 'left');
+      if (act === 'col-insert-right')  Pages._seatInsertColumn(index, 'right');
+      if (act === 'col-delete')        Pages._seatDeleteColumn(index);
+      if (act === 'row-insert-above')  Pages._seatInsertRow(index, 'above');
+      if (act === 'row-insert-below')  Pages._seatInsertRow(index, 'below');
+      if (act === 'row-delete')        Pages._seatDeleteRow(index);
+    };
+  });
+
+  // Dismiss on outside click
+  const close = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('touchstart', close);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', close);
+    document.addEventListener('touchstart', close);
+  }, 0);
+},
 
 /* =====================================================================
    GROUPINGS — Save & manage multiple learner grouping sets
@@ -25251,10 +26355,30 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
       </div>`;
   },
   async backupAll() {
-    const data = { application: CONFIG.APP_NAME, version: CONFIG.VERSION, exportDate: new Date().toISOString(), data: {} };
+    const data = {
+      application: CONFIG.APP_NAME,
+      version: CONFIG.VERSION,
+      exportDate: new Date().toISOString(),
+      preferences: {
+        theme: (() => { try { return localStorage.getItem('klazassist.theme') || 'light'; } catch (e) { return 'light'; } })(),
+        schoolYear: (() => { try { return localStorage.getItem('klazassist.schoolYear') || CONFIG.DEFAULT_SCHOOL_YEAR; } catch (e) { return CONFIG.DEFAULT_SCHOOL_YEAR; } })()
+      },
+      data: {}
+    };
+
     for (const store of CONFIG.STORES) {
-      try { data.data[store] = await DB.getAll(store); } catch (e) { data.data[store] = []; }
+      try {
+        let rows = await DB.getAll(store);
+        // Skip image cache — regeneratable, and bloats backup by tens of MB
+        if (store === 'settings') {
+          rows = rows.filter(r => !r.id.startsWith('imgCache.'));
+        }
+        data.data[store] = rows;
+      } catch (e) {
+        data.data[store] = [];
+      }
     }
+
     Utils.download('klazassist-backup-' + Utils.todayISO() + '.json', JSON.stringify(data, null, 2));
     App.logActivity('Backup exported', 'Security');
     UI.toast('Backup downloaded', 'success');
@@ -25323,6 +26447,19 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
           if (!item.id) item.id = Utils.uid('r-');
           try { await DB.put(store, item); imported++; } catch (e) {}
         }
+      }
+      // Restore preferences
+      if (parsed.preferences) {
+        try {
+          if (parsed.preferences.theme) {
+            localStorage.setItem('klazassist.theme', parsed.preferences.theme);
+            State.theme = parsed.preferences.theme;
+          }
+          if (parsed.preferences.schoolYear) {
+            localStorage.setItem('klazassist.schoolYear', parsed.preferences.schoolYear);
+            State.schoolYear = parsed.preferences.schoolYear;
+          }
+        } catch (e) { console.warn('Could not restore preferences:', e); }
       }
       m.close();
       App.logActivity('Backup restored (' + imported + ' records)', 'Security');
@@ -30516,7 +31653,11 @@ for (const k in aliases) {
  '_tsReflowStats','_tsOpenCopyFromTerm','_tsSubjectKey','_tsShortLabel',
  'viewPolicyDetails','_pdOpenPasteModal',
  'openDepEdCalendarImport','_parseDepEdCalendar','_expandDepEdDateField',
- '_categorizeDepEdEvent','_importDepEdCalendar'
+ '_categorizeDepEdEvent','_importDepEdCalendar',
+ '_seatMigratePlanDimensions','seatInitializeGrid','seatAddRowAtEnd','seatAddColumnAtEnd',
+ 'seatGridUniform','seatGridAutoFit','seatToggleOrientation','_seatInsertColumn','_seatInsertRow',
+ '_seatDeleteColumn','_seatDeleteRow','_seatOpenContextMenu', '_seatToggleBlocked',
+ 'openCalendarEventById'
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
 /* ============================================================================
    EXPORTS + BOOT
