@@ -1880,6 +1880,9 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   .auth-screen,
   .lock-screen { display: none !important; }
 
+    /* Let the browser use our SF9 @page rules */
+  #print-area { display: block !important; }
+
   /* Make the print target the first (and only) element in the flow. */
   #print-area {
     display: block !important;
@@ -1888,6 +1891,10 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     height: auto !important;
     overflow: visible !important;
   }
+
+    /* Remove default body margin so A5 back-to-back aligns cleanly */
+  html, body { margin: 0 !important; padding: 0 !important; }
+
   html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
   body { background: #fff; color: #000; font-size: 11pt; }
   .print-header { text-align: center; margin-bottom: 18px; }
@@ -2023,6 +2030,503 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   }
   .print-logo-header .print-logo-header-text { flex: 1; text-align: center; }
   .print-logo-header .print-logo-spacer { width: 68px; flex-shrink: 0; }  
+
+    /* ==========================================================================
+     SF9 — LEARNER'S PERFORMANCE REPORT CARD (SY 2026-2027)
+     Pixel-perfect match to the official DepEd SF9 template.
+     Font: Bookman Old Style (per DepEd Manual of Style, DO 30 s. 2019)
+     Paper: A5 portrait, back-to-back  ·  or A4 landscape (both pages side-by-side)
+     ========================================================================== */
+
+
+  .print-sf9 {
+    font-family: "Bookman Old Style", "Bookman", "Georgia", "Times New Roman", serif;
+    color: #000;
+    font-size: 7pt;
+    line-height: 1.25;
+  }
+ 
+  /* ---- Shared container behaviour ---- */
+  .print-sf9 .sf9-container {
+    box-sizing: border-box;
+  }
+
+  /* ---- A4 landscape: both pages side by side, centered ---- */
+  .print-sf9.a4-mode .sf9-container {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: flex-start;
+    width: 297mm;
+    height: 210mm;
+    margin: 0 auto;
+  }
+  .print-sf9.a4-mode .sf9-page {
+    width: 148.5mm;
+    height: 210mm;
+    padding: 5mm 6mm;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+
+  /* ---- A5 portrait: pages stack vertically, each centered ---- */
+  .print-sf9:not(.a4-mode) .sf9-container {
+    display: block;
+    width: 148mm;
+    margin: 0 auto;
+  }
+  .print-sf9:not(.a4-mode) .sf9-page {
+    width: 148mm;
+    height: 210mm;
+    padding: 5mm 6mm;
+    margin: 0 auto;
+    box-sizing: border-box;
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-sf9:not(.a4-mode) .sf9-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* ---- Print reset so browser margins don't offset the layout ---- */
+  @media print {
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #fff !important;
+    }
+    #print-area {
+      margin: 0 auto !important;
+      padding: 0 !important;
+    }
+  }
+  /* ==========================================================================
+     SHARED ELEMENTS
+     ========================================================================== */
+
+  /* ---- Header with logos ---- */
+  .print-sf9 .sf9-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4mm;
+    margin-bottom: 2mm;
+  }
+  .print-sf9 .sf9-logo {
+    width: 16mm;
+    height: 16mm;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+  .print-sf9 .sf9-logo-placeholder {
+    width: 16mm;
+    height: 16mm;
+    flex-shrink: 0;
+  }
+  .print-sf9 .sf9-header-text {
+    flex: 1;
+    text-align: center;
+    font-size: 7pt;
+    line-height: 1.15;
+  }
+  .print-sf9 .sf9-header-text .sf9-republic {
+    font-weight: 700;
+    font-size: 8pt;
+  }
+  .print-sf9 .sf9-header-text .sf9-deped {
+    font-weight: 700;
+    font-size: 8pt;
+  }
+  .print-sf9 .sf9-header-text .sf9-region {
+    font-weight: 700;
+    font-size: 7pt;
+    margin-top: 1mm;
+  }
+  .print-sf9 .sf9-header-text .sf9-division {
+    font-weight: 700;
+    font-size: 8pt;
+    text-transform: uppercase;
+  }
+  .print-sf9 .sf9-header-text .sf9-district {
+    font-weight: 600;
+    font-size: 7pt;
+  }
+  .print-sf9 .sf9-header-text .sf9-municipality {
+    font-weight: 600;
+    font-size: 7pt;
+  }
+  .print-sf9 .sf9-header-text .sf9-school-name {
+    font-weight: 700;
+    font-size: 8pt;
+    text-transform: uppercase;
+    margin-top: 1mm;
+  }
+
+  /* ---- Title block ---- */
+  .print-sf9 .sf9-title-block {
+    text-align: center;
+    margin: 2mm 0 2mm;
+  }
+  .print-sf9 .sf9-main-title {
+    font-weight: 700;
+    font-size: 11pt;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .print-sf9 .sf9-sy {
+    font-weight: 700;
+    font-size: 8pt;
+    margin-top: 0.5mm;
+  }
+
+  /* ---- Learner info ---- */
+  .print-sf9 .sf9-learner-info {
+    margin: 2mm 0;
+    font-size: 7.5pt;
+  }
+  .print-sf9 .sf9-info-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1.5mm;
+    margin-bottom: 1.5mm;
+  }
+  .print-sf9 .sf9-info-label {
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .print-sf9 .sf9-info-value {
+    flex: 1;
+    border-bottom: 0.5px solid #000;
+    min-width: 15mm;
+    padding: 0 1mm;
+  }
+  .print-sf9 .sf9-info-value.sf9-name-value {
+    min-width: 50mm;
+  }
+
+  /* ---- Letter ---- */
+  .print-sf9 .sf9-letter {
+    margin: 2mm 0;
+    font-size: 7pt;
+    text-align: justify;
+    line-height: 1.35;
+  }
+  .print-sf9 .sf9-letter-greeting {
+    font-style: italic;
+    margin-bottom: 1mm;
+  }
+  .print-sf9 .sf9-letter p {
+    margin: 0 0 1mm;
+    text-indent: 5mm;
+  }
+
+  /* ==========================================================================
+     SF9 — Signature rows (side-by-side layout)
+     Every signature row uses this pattern:
+       [  Name         ]     [  Name         ]
+       [_______________]     [_______________]
+       [ School Head   ]     [ Adviser       ]
+     ========================================================================== */
+
+  .print-sf9 .sf9-signatures-top,
+  .print-sf9 .sf9-transfer-signatures {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 8mm;
+    width: 100%;
+    margin: 4mm 0 2mm;
+    padding: 0 2mm;
+    box-sizing: border-box;
+  }
+
+  .print-sf9 .sf9-signature-block {
+    flex: 0 0 45% !important;
+    max-width: 45% !important;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-sizing: border-box;
+  }
+
+  .print-sf9 .sf9-signature-name {
+    font-size: 7.5pt;
+    font-weight: 700;
+    text-align: center;
+    min-height: 3.5mm;
+    line-height: 1.2;
+    padding: 0 1mm;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .print-sf9 .sf9-signature-line {
+    border-bottom: 0.5px solid #000;
+    height: 0;
+    width: 100%;
+    margin: 0.5mm 0;
+  }
+
+  .print-sf9 .sf9-signature-label {
+    font-size: 7pt;
+    font-weight: 600;
+    text-align: center;
+    width: 100%;
+    margin-top: 0.5mm;
+  }
+
+  /* ---- Section titles ---- */
+  .print-sf9 .sf9-section-title {
+    font-weight: 700;
+    font-size: 8pt;
+    text-transform: uppercase;
+    text-align: center;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    margin: 2.5mm 0 1mm;
+    letter-spacing: 0.2px;
+  }
+
+  /* ==========================================================================
+     TABLES
+     ========================================================================== */
+  .print-sf9 table.sf9-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 6.8pt;
+  }
+  .print-sf9 table.sf9-table th,
+  .print-sf9 table.sf9-table td {
+    border: 0.5px solid #000;
+    padding: 0.8mm 1mm;
+    vertical-align: middle;
+  }
+  .print-sf9 table.sf9-table th {
+    font-weight: 700;
+    text-align: center;
+    background: #f0f0f0;
+  }
+
+  /* ---- Grades table ---- */
+  .print-sf9 .sf9-grades-table .sf9-th-learning { width: 42%; }
+  .print-sf9 .sf9-grades-table .sf9-th-term    { width: 22%; }
+  .print-sf9 .sf9-grades-table .sf9-th-term-num { width: 7.33%; }
+  .print-sf9 .sf9-grades-table .sf9-th-final    { width: 9%; }
+  .print-sf9 .sf9-grades-table .sf9-th-remarks  { width: 9%; }
+  .print-sf9 .sf9-grades-table td { text-align: center; height: 4mm; }
+  .print-sf9 .sf9-grades-table td.sf9-subject {
+    text-align: left;
+    padding-left: 2mm;
+    font-size: 7pt;
+  }
+  .print-sf9 .sf9-grades-table td.sf9-subject-parent {
+    font-weight: 600;
+    text-align: left;
+    padding-left: 2mm;
+  }
+  .print-sf9 .sf9-grades-table td.sf9-subject-child {
+    text-align: left;
+    padding-left: 6mm;
+    font-size: 6.5pt;
+  }
+  .print-sf9 .sf9-grades-table tr.sf9-general-average td {
+    font-weight: 700;
+    background: #f8f8f8;
+  }
+  .print-sf9 .sf9-grades-table tr.sf9-general-average td.sf9-ga-label {
+    text-align: right;
+    padding-right: 2mm;
+  }
+
+  /* ---- Performance descriptors table ---- */
+  .print-sf9 .sf9-descriptors-table {
+    width: 70%;
+    margin: 0 auto;
+    font-size: 6.5pt;
+  }
+  .print-sf9 .sf9-descriptors-table th { font-size: 6.5pt; }
+  .print-sf9 .sf9-descriptors-table td { text-align: center; height: 3.5mm; }
+  .print-sf9 .sf9-descriptors-table td:first-child { width: 28%; }
+  .print-sf9 .sf9-descriptors-table td:nth-child(2) { width: 36%; }
+  .print-sf9 .sf9-descriptors-table td:last-child { width: 36%; }
+
+  /* ---- Attendance table ----
+     Fixed 11-month layout (Jun–Apr) with TOTAL inside the table border.
+     `table-layout: fixed` + explicit column widths prevent the browser
+     from pushing the TOTAL column outside the border when the header
+     and body cell counts match. */
+  .print-sf9 .sf9-attendance-table {
+    font-size: 6pt;
+    table-layout: fixed;
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .print-sf9 .sf9-attendance-table thead th {
+    font-weight: 700;
+    font-size: 6pt;
+    text-align: center;
+    padding: 0.6mm 0.3mm;
+    height: 3.8mm;
+    background: #f0f0f0;
+    border: 0.5px solid #000;
+    vertical-align: middle;
+  }
+  /* Corner header cell (label column) */
+  .print-sf9 .sf9-attendance-table th.sf9-att-corner {
+    width: 16%;
+    text-align: left;
+    padding-left: 1.5mm;
+    font-weight: 700;
+  }
+  /* Each monthly column — 11 months (Jun…Apr) fills the remaining width */
+  .print-sf9 .sf9-attendance-table th.sf9-att-month {
+    width: 6.9%;
+  }
+  /* TOTAL column — always the last header and always inside the border */
+  .print-sf9 .sf9-attendance-table th.sf9-att-total {
+    width: 8%;
+    font-weight: 700;
+    background: #e8e8e8;
+  }
+  /* Body cells */
+  .print-sf9 .sf9-attendance-table tbody td {
+    font-size: 6pt;
+    text-align: center;
+    padding: 0.6mm 0.3mm;
+    height: 3.8mm;
+    border: 0.5px solid #000;
+    vertical-align: middle;
+  }
+  /* Row label (first column of each row) */
+  .print-sf9 .sf9-attendance-table tbody td.sf9-att-label {
+    text-align: left;
+    padding-left: 1.5mm;
+    font-weight: 600;
+    font-size: 6pt;
+  }
+  /* TOTAL body cell — bold and shaded so it reads as a summary column */
+  .print-sf9 .sf9-attendance-table tbody td.sf9-att-total {
+    font-weight: 700;
+    background: #f8f8f8;
+    text-align: center;
+  }
+  /* ---- Teacher's comments ---- */
+  .print-sf9 .sf9-comments-container {
+    margin: 1mm 0;
+  }
+  .print-sf9 .sf9-comment-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 2mm;
+    margin-bottom: 1mm;
+  }
+  .print-sf9 .sf9-comment-label {
+    font-weight: 700;
+    font-size: 7pt;
+    white-space: nowrap;
+    min-width: 12mm;
+  }
+  .print-sf9 .sf9-comment-box {
+    flex: 1;
+    border: 0.5px solid #000;
+    min-height: 12mm;
+    padding: 1mm;
+  }
+
+  /* ---- Signature lines (parents/guardian) ---- */
+  .print-sf9 .sf9-signature-lines {
+    margin: 2mm 0;
+  }
+  .print-sf9 .sf9-signature-row {
+    display: flex;
+    align-items: baseline;
+    gap: 2mm;
+    margin-bottom: 3mm;
+  }
+  .print-sf9 .sf9-signature-term {
+    font-weight: 700;
+    font-size: 7pt;
+    min-width: 14mm;
+    text-align: center;
+  }
+  .print-sf9 .sf9-signature-line-long {
+    flex: 1;
+    border-bottom: 0.5px solid #000;
+    height: 0;
+  }
+
+  /* ---- Certificate of Transfer ---- */
+  .print-sf9 .sf9-transfer-text {
+    font-size: 6.5pt;
+    text-align: justify;
+    margin: 1mm 0 2mm;
+    line-height: 1.35;
+  }
+  .print-sf9 .sf9-transfer-fields {
+    margin: 1mm 0;
+  }
+  .print-sf9 .sf9-transfer-field {
+    display: flex;
+    align-items: baseline;
+    gap: 2mm;
+    margin-bottom: 1.5mm;
+    font-size: 7pt;
+  }
+  .print-sf9 .sf9-transfer-field > span:first-child {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .print-sf9 .sf9-transfer-line {
+    flex: 1;
+    border-bottom: 0.5px solid #000;
+    height: 0;
+    min-width: 30mm;
+  }
+  .print-sf9 .sf9-transfer-signatures {
+    display: flex;
+    justify-content: space-between;
+    margin: 4mm 0 2mm;
+    padding: 0 8mm;
+  }
+
+  /* ---- Cancellation ---- */
+  .print-sf9 .sf9-cancellation {
+    margin: 2mm 0;
+  }
+  .print-sf9 .sf9-cancellation-row {
+    display: flex;
+    align-items: baseline;
+    gap: 2mm;
+    margin-bottom: 3mm;
+    font-size: 7pt;
+  }
+  .print-sf9 .sf9-cancellation-row > span:first-child {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .print-sf9 .sf9-cancellation-line {
+    flex: 1;
+    border-bottom: 0.5px solid #000;
+    height: 0;
+  }
+  .print-sf9 .sf9-cancellation-signature {
+    margin-top: 8mm;
+    text-align: center;
+  }
+  .print-sf9 .sf9-cancellation-signature .sf9-signature-line {
+    width: 60mm;
+    margin: 0 auto 0.5mm;
+  }
 }
 
 @media (max-width: 1024px) {
@@ -3460,7 +3964,7 @@ const CONFIG = {
   APP_NAME: 'KlazAssist',
   VERSION: '2.0.0',
   DB_NAME: 'DepEdTeacherToolkitDB',
-  DB_VERSION: 4,   // bumped for 'presentations'
+  DB_VERSION: 5,   // bumped for 'sf9Records'
   STORES: [
     'teachers','schools','classes','learners','attendance',
     'subjects','assessments','questions','assessmentResults',
@@ -3469,7 +3973,8 @@ const CONFIG = {
     'behaviorLogs','parentLogs','settings','activityLogs','groups',
     'termGrades','reportSnapshots',
     'calendarEvents',
-    'presentations'   // NEW
+    'presentations',  
+    'sf9Records'   // ← NEW
   ],
   PAGE_SIZE: 20,
   PASSING_GRADE: 75,
@@ -3511,6 +4016,53 @@ const GROUPING_COLORS = [
   '#0038A8', '#F7C948', '#198754', '#DC3545',
   '#7C3AED', '#0891B2', '#F59E0B', '#BE185D'
 ];
+
+/* ============================================================================
+   DEPED SEAL — path to the official DepEd logo shipped in the app folder.
+   Place `deped.png` inside an `icons/` folder next to `index.html`.
+   The SF9 print uses this whenever the user has not uploaded a custom seal
+   via Settings → School Profile.
+   ============================================================================ */
+const DEPED_SEAL_PATH = './icon/deped.webp';
+
+/* ============================================================================
+   SF9 LEARNING AREAS — the official subject list per grade band.
+   Used by the SF9 tab to render the correct rows for the active class.
+   ============================================================================ */
+const SF9_LEARNING_AREAS = {
+  'Grades 1-3': [
+    'Filipino', 'English', 'Mathematics', 'Araling Panlipunan',
+    'Edukasyon sa Pagpapakatao', 'MAPEH'
+  ],
+  'Grades 4-6': [
+    'Filipino', 'English', 'Mathematics', 'Science',
+    'Araling Panlipunan', 'Edukasyon sa Pagpapakatao', 'EPP/TLE',
+    'MAPEH', 'Music and Arts', 'Physical Education and Health'
+  ],
+  'Grades 7-10': [
+    'Filipino', 'English', 'Mathematics', 'Science',
+    'Araling Panlipunan', 'Values Education', 'TLE',
+    'MAPEH', 'Music and Arts', 'Physical Education and Health'
+  ],
+  'SHS': [
+    // Core subjects — always present for SHS
+    'Oral Communication', 'Reading and Writing', 'Komunikasyon at Pananaliksik',
+    'Pagbasa at Pagsusuri', 'General Mathematics', 'Statistics and Probability',
+    'Earth and Life Science', 'Physical Science', 'Personal Development',
+    'Understanding Culture, Society and Politics', 'Contemporary Philippine Arts',
+    'Physical Education and Health'
+  ]
+};
+
+/** Which band does a grade-level string belong to? */
+function resolveSf9Band(gradeLevel) {
+  const g = String(gradeLevel || '').toLowerCase();
+  if (/grade 1\b|grade 2\b|grade 3\b/.test(g)) return 'Grades 1-3';
+  if (/grade 4\b|grade 5\b|grade 6\b/.test(g)) return 'Grades 4-6';
+  if (/grade 7\b|grade 8\b|grade 9\b|grade 10\b/.test(g)) return 'Grades 7-10';
+  if (/grade 11\b|grade 12\b/.test(g)) return 'SHS';
+  return 'Grades 7-10';   // safest default
+}
 
 /* ============================================================================
    GRADING POLICY REGISTRY — versioned, so historical records always
@@ -3797,7 +4349,31 @@ const GradingEngine = {
     const nums = (finalGrades || []).map(Number).filter(n => !isNaN(n) && n > 0);
     if (!nums.length) return null;
     return Utils.round(Utils.avg(nums), 2);
-  }
+  },
+  /** SF9 — Final Grade per learning area = average of the three term grades.
+   *  Returns null until all terms have a grade, so partial data never
+   *  produces a misleading final. */
+  calculateSubjectFinal(term1, term2, term3) {
+    const nums = [term1, term2, term3].map(Number).filter(n => !isNaN(n) && n > 0);
+    if (nums.length < 3) return null;
+    return Math.round(nums.reduce((a, b) => a + b, 0) / 3);
+  },
+
+  /** SF9 — General Weighted Average = mean of all subject Final Grades. */
+  calculateGeneralAverageFromFinals(subjectFinals) {
+    const finals = (subjectFinals || [])
+      .map(Number)
+      .filter(n => !isNaN(n) && n > 0);
+    if (!finals.length) return null;
+    return Math.round(finals.reduce((a, b) => a + b, 0) / finals.length);
+  },
+
+  /** SF9 — Passed if Final Grade >= passing threshold, else Failed. */
+  getSubjectRemarks(finalGrade, passingGrade = 75) {
+    if (finalGrade === null || finalGrade === undefined || isNaN(finalGrade)) return '';
+    return Number(finalGrade) >= Number(passingGrade) ? 'Passed' : 'Failed';
+  },
+
 };
 
 /* Thin wrapper matching the brief's requested API shape. */
@@ -4314,6 +4890,11 @@ const DB = {
                   store.createIndex('classId', 'classId', { unique: false });
                   store.createIndex('learnerId', 'learnerId', { unique: false });
                   store.createIndex('reportType', 'reportType', { unique: false });
+                }
+                if (name === 'sf9Records') {
+                  store.createIndex('classId', 'classId', { unique: false });
+                  store.createIndex('learnerId', 'learnerId', { unique: false });
+                  store.createIndex('classLearnerYear', ['classId','learnerId','schoolYear'], { unique: false });
                 }
               } catch (idxErr) { console.warn('Index creation skipped:', idxErr); }
             }
@@ -4984,15 +5565,36 @@ const Share = {
     return `mailto:${recipients}${qs ? '?' + qs : ''}`;
   },
 
-  /** Open the user's default mail client with the message pre-filled. */
+  /** Open the user's default mail client with the message pre-filled.
+      The mailto: is dispatched via a hidden anchor with target="_blank",
+      so the browser hands off to the OS protocol handler (Gmail, Outlook,
+      Mail.app, etc.) WITHOUT navigating the current KlazAssist tab. */
   openMail({ to, cc, bcc, subject, body }) {
     const url = this.buildMailto({ to, cc, bcc, subject, body });
+
     // Very long mailto URLs can be rejected by some clients — cap the body
     // at a sane length and warn the user if we trim.
     if (url.length > 1900) {
       UI.toast('Message is very long — some mail apps may truncate it.', 'warning', 5000);
     }
-    window.location.href = url;
+
+    // Create a hidden anchor and click it. The combination of target="_blank"
+    // plus rel="noopener noreferrer" tells the browser:
+    //   • open in a NEW context, not this tab
+    //   • don't hand the new context a reference to window.opener
+    //   • don't leak the referrer
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    try {
+      a.click();
+    } finally {
+      // Clean up the anchor on the next frame so the click has definitely fired.
+      setTimeout(() => { try { a.remove(); } catch (e) {} }, 0);
+    }
   },
 
   /** Native share sheet (mobile). Returns true if the share succeeded. */
@@ -5215,22 +5817,40 @@ ${this._signature()}`;
     return m;
   },
 
-  /** Native path: OS share sheet first, then mailto:. Never throws. */
+  /** Native path: mobile share sheet, then mailto:.
+      The Web Share API is only used on real mobile platforms — on desktop
+      Windows/macOS/Linux it routes to the "Share" system panel (Copilot,
+      Microsoft 365, etc.) which has no email client, so we skip it there
+      and go straight to mailto:. */
   async _sendNative({ to = '', subject = '', body = '' } = {}) {
-    // Web Share API — mobile share sheet. Recipient is not pre-fillable,
-    // so we prepend the intended address to the text so the user sees it.
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+    const isMobile = this._isMobilePlatform();
+
+    if (isMobile && typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       const shareText = to ? `To: ${to}\n\n${body}` : body;
       const shared = await this.nativeShare({ title: subject, text: shareText });
       if (shared) {
         App.logActivity('Email shared via share sheet' + (to ? ' — ' + to : ''), 'Email');
         return { ok: true, method: 'share' };
       }
-      // nativeShare() returned false → API not usable, fall through to mailto.
+      // User cancelled or the sheet failed — fall through to mailto.
     }
+
     this.openMail({ to, subject, body });
     App.logActivity('Email opened in mail app' + (to ? ' — ' + to : ''), 'Email');
     return { ok: true, method: 'mailto' };
+  },
+
+  /** True only on genuine touch-first mobile OSes. Windows tablets, macOS
+      with touch bars, and Chromebooks are intentionally treated as desktop
+      so they get the mailto: path. */
+  _isMobilePlatform() {
+    if (typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent || '';
+    // Android and iOS family. iPad on iOS 13+ reports as Mac, so we also
+    // check for touch points.
+    if (/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(ua)) return true;
+    if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return true;
+    return false;
   },
 
   /** Unified send used by every high-level sender.
@@ -5421,11 +6041,21 @@ const State = {
   attendanceDate: null,
   attendanceDraft: {},
   notesQuery: '',
+  gradeSummaryView: 'bySubject',       // 'bySubject' | 'allSubjects'
+  gradeSummarySubjectId: null,         // currently-selected subject's classId
+  gradeSummaryFilter: { query: '', statusFilter: '' },
+  gradeSummaryMode: 'detail',            // 'detail' | 'sheet'
+  termSummaryTerm: null,                 // e.g. 'Term 1'; null = use policy.terms[0]
+  termSummarySubjectFilter: 'all',       // 'all' | normalized subject key
+  termSummaryRecords: null,              // in-memory cache of sf9Records for this class
   itemAnalysisAssessment: null,
   signalMode: 'normal',
   _seatPlan: null,
   _pendingPhoto: null,
-  _pendingPhotoRemoved: false
+  _pendingPhotoRemoved: false,
+  _sf9LearnerId: null,
+  _sf9LastRender: null,
+  _sf9PrintMode: 'a5'
     ,
   healthWeights: { attendance: 50, grade: 50 },
   divisionBenchmarks: { attendance: 90, passing: 80 }
@@ -13528,71 +14158,153 @@ async autoNudgeLowAttendance(cls) {
       root.querySelectorAll('.gb-ex-sub').forEach(th => th.classList.toggle('hidden'));
       exToggle.textContent = root.querySelector('.gb-ex-sub').classList.contains('hidden') ? 'EX ▾' : 'EX ▴';
     });
-    if (State.learners.length) this.renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te);
+if (State.learners.length) {
+      await this.renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te);
+    }
   },
-  async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te) {
-    const body = document.getElementById('gradebook-body');
-    if (!body) return;
-    body.innerHTML = UI.loadingSkeleton(3);
+
+async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te) {
+  const body = document.getElementById('gradebook-body');
+  if (!body) return;
+
+  const colSpan = ww.length + pt.length + st1.length + st2.length + te.length + 6;
+
+  try {
+    // ── Loading state (valid tbody markup — a <tr><td> not a <div>) ──
+    body.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">
+      Loading grades…
+    </td></tr>`;
+
     const results = await DB.getAll('assessmentResults');
     const myResults = results.filter(r => r.classId === cls.id);
-    const byLearner = {};
-    myResults.forEach(r => { if (!byLearner[r.learnerId]) byLearner[r.learnerId] = {}; byLearner[r.learnerId][r.assessmentId] = r; });
 
-    const avgPct = (list, lr) => list.length ? Utils.avg(list.map(a => lr[a.id] ? (lr[a.id].percentage||0) : 0)) : 0;
+    const byLearner = {};
+    myResults.forEach(r => {
+      if (!byLearner[r.learnerId]) byLearner[r.learnerId] = {};
+      byLearner[r.learnerId][r.assessmentId] = r;
+    });
+
+    const avgPct = (list, lr) =>
+      list.length
+        ? Utils.avg(list.map(a => lr[a.id] ? (lr[a.id].percentage || 0) : 0))
+        : 0;
+
     let html = '';
     const computations = {};
+
     State.learners.forEach((l, i) => {
       const lr = byLearner[l.id] || {};
-      const wwPct = ww.length ? Utils.round(avgPct(ww, lr), 2) : 0;
-      const ptPct = pt.length ? Utils.round(avgPct(pt, lr), 2) : 0;
+      const wwPct  = ww.length  ? Utils.round(avgPct(ww, lr), 2)  : 0;
+      const ptPct  = pt.length  ? Utils.round(avgPct(pt, lr), 2)  : 0;
       const st1Pct = st1.length ? Utils.round(avgPct(st1, lr), 2) : 0;
       const st2Pct = st2.length ? Utils.round(avgPct(st2, lr), 2) : 0;
-      const tePct = te.length ? Utils.round(avgPct(te, lr), 2) : 0;
-      const exPct = GradingEngine.calculateExaminationComponent(st1Pct, st2Pct, tePct, policy.examinationSubstructure);
+      const tePct  = te.length  ? Utils.round(avgPct(te, lr), 2)  : 0;
+
+      const exPct = GradingEngine.calculateExaminationComponent(
+        st1Pct, st2Pct, tePct, policy.examinationSubstructure
+      );
+
       const hasAny = ww.length || pt.length || st1.length || st2.length || te.length;
-      const ig = hasAny ? GradingEngine.calculateInitialGrade({ wwPct, ptPct, exPct }, weights) : 0;
-      const { reportedGrade } = hasAny ? GradingEngine.applyTransmutation(ig, policy) : { reportedGrade: '' };
-      const descriptor = hasAny ? GradingEngine.getDescriptor(reportedGrade, policy) : { label: '—' };
-      computations[l.id] = { wwPct, ptPct, st1Pct, st2Pct, tePct, exPct, ig, reportedGrade, descriptor };
+      const ig = hasAny
+        ? GradingEngine.calculateInitialGrade({ wwPct, ptPct, exPct }, weights)
+        : 0;
+
+      const { reportedGrade } = hasAny
+        ? GradingEngine.applyTransmutation(ig, policy)
+        : { reportedGrade: '' };
+
+      const descriptor = hasAny
+        ? GradingEngine.getDescriptor(reportedGrade, policy)
+        : { label: '—' };
+
+      computations[l.id] = {
+        wwPct, ptPct, st1Pct, st2Pct, tePct, exPct, ig, reportedGrade, descriptor
+      };
+
+      const cellFor = (a) => `<td contenteditable="true"
+        data-learner="${Utils.attr(l.id)}"
+        data-assessment="${Utils.attr(a.id)}"
+        data-max="${a.maxScore || 100}"
+        style="text-align:center;">${lr[a.id] ? (lr[a.id].score || '') : ''}</td>`;
+
       html += `<tr>
-        <td>${i+1}</td>
+        <td>${i + 1}</td>
         <td><div style="display:flex;align-items:center;gap:8px;">${Utils.avatarHTML(l, 28, 11)}<strong>${Utils.esc(Utils.displayName(l))}</strong></div></td>
-        ${ww.map(a => `<td contenteditable="true" data-learner="${Utils.attr(l.id)}" data-assessment="${Utils.attr(a.id)}" data-max="${a.maxScore||100}" style="text-align:center;">${lr[a.id] ? (lr[a.id].score||'') : ''}</td>`).join('')}
-        ${pt.map(a => `<td contenteditable="true" data-learner="${Utils.attr(l.id)}" data-assessment="${Utils.attr(a.id)}" data-max="${a.maxScore||100}" style="text-align:center;">${lr[a.id] ? (lr[a.id].score||'') : ''}</td>`).join('')}
+        ${ww.map(cellFor).join('')}
+        ${pt.map(cellFor).join('')}
         <td class="text-xs"><strong>${hasAny ? exPct : '—'}</strong></td>
-        ${st1.map(a => `<td class="gb-ex-sub hidden" contenteditable="true" data-learner="${Utils.attr(l.id)}" data-assessment="${Utils.attr(a.id)}" data-max="${a.maxScore||100}" style="text-align:center;">${lr[a.id] ? (lr[a.id].score||'') : ''}</td>`).join('')}
-        ${st2.map(a => `<td class="gb-ex-sub hidden" contenteditable="true" data-learner="${Utils.attr(l.id)}" data-assessment="${Utils.attr(a.id)}" data-max="${a.maxScore||100}" style="text-align:center;">${lr[a.id] ? (lr[a.id].score||'') : ''}</td>`).join('')}
-        ${te.map(a => `<td class="gb-ex-sub hidden" contenteditable="true" data-learner="${Utils.attr(l.id)}" data-assessment="${Utils.attr(a.id)}" data-max="${a.maxScore||100}" style="text-align:center;">${lr[a.id] ? (lr[a.id].score||'') : ''}</td>`).join('')}
+        ${st1.map(a => cellFor(a).replace('contenteditable="true"', 'class="gb-ex-sub hidden" contenteditable="true"')).join('')}
+        ${st2.map(a => cellFor(a).replace('contenteditable="true"', 'class="gb-ex-sub hidden" contenteditable="true"')).join('')}
+        ${te.map(a  => cellFor(a).replace('contenteditable="true"', 'class="gb-ex-sub hidden" contenteditable="true"')).join('')}
         <td><strong>${hasAny ? ig : '—'}</strong></td>
         <td><span class="grade-badge ${hasAny ? (reportedGrade >= policy.passingGrade ? 'grade-satisfactory' : 'grade-didnot') : ''}">${hasAny ? reportedGrade : '—'}</span></td>
-        <td class="text-xs">${descriptor.label}</td>
+        <td class="text-xs">${Utils.esc(descriptor.label)}</td>
         <td><button class="icon-btn" title="View Computation" data-view-comp="${Utils.attr(l.id)}">${icon('analysis')}</button></td>
       </tr>`;
     });
+
+    // ── If there are no learners, show a graceful empty row ──
+    if (!html) {
+      body.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center;padding:24px;color:var(--text-muted);">
+        No learners in this class yet. Add learners first.
+      </td></tr>`;
+      this._gbComputations = {};
+      return;
+    }
+
     body.innerHTML = html;
     this._gbComputations = computations;
+
+    // ── Bind score-cell editing ──
     body.querySelectorAll('td[contenteditable]').forEach(td => {
       td.addEventListener('blur', async () => {
-        const learnerId = td.dataset.learner, assessmentId = td.dataset.assessment, max = Number(td.dataset.max) || 100;
+        const learnerId = td.dataset.learner;
+        const assessmentId = td.dataset.assessment;
+        const max = Number(td.dataset.max) || 100;
         const val = td.textContent.trim();
         const num = val === '' ? null : Number(val);
-        if (num !== null && (isNaN(num) || num < 0 || num > max)) { UI.toast(`Score must be between 0 and ${max}`, 'warning'); App.navigate('gradebook'); return; }
+        if (num !== null && (isNaN(num) || num < 0 || num > max)) {
+          UI.toast(`Score must be between 0 and ${max}`, 'warning');
+          App.navigate('gradebook');
+          return;
+        }
         const existingAll = await DB.getAll('assessmentResults');
         let rec = existingAll.find(r => r.learnerId === learnerId && r.assessmentId === assessmentId);
-        if (!rec) rec = { id: Utils.uid('r-'), learnerId, assessmentId, classId: cls.id, score: 0, maxScore: max, percentage: 0 };
-        rec.score = num || 0; rec.maxScore = max;
+        if (!rec) {
+          rec = {
+            id: Utils.uid('r-'), learnerId, assessmentId,
+            classId: cls.id, score: 0, maxScore: max, percentage: 0
+          };
+        }
+        rec.score = num || 0;
+        rec.maxScore = max;
         rec.percentage = GradingEngine.calculatePercentageScore(rec.score, rec.maxScore);
         rec.updatedAt = new Date().toISOString();
         await DB.put('assessmentResults', rec);
-        App.logActivity('Grade entered for ' + Utils.fullName(State.learners.find(l=>l.id===learnerId)||{}), 'Grading');
+        App.logActivity('Grade entered for ' + Utils.fullName(State.learners.find(l => l.id === learnerId) || {}), 'Grading');
         App.showAutosave('saved');
         App.navigate('gradebook');
       });
-      td.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); td.blur(); } });
+      td.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); td.blur(); }
+      });
     });
-    body.querySelectorAll('[data-view-comp]').forEach(b => b.addEventListener('click', () => this.viewComputation(b.dataset.viewComp, cls, policy, weights, computations[b.dataset.viewComp])));
-  },
+
+    // ── Bind computation-viewer button ──
+    body.querySelectorAll('[data-view-comp]').forEach(b => {
+      b.addEventListener('click', () =>
+        this.viewComputation(b.dataset.viewComp, cls, policy, weights, computations[b.dataset.viewComp])
+      );
+    });
+  } catch (err) {
+    console.error('Gradebook render failed:', err);
+    body.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center;padding:24px;color:var(--danger);">
+      <strong>Could not load the gradebook.</strong><br>
+      <small>${Utils.esc(err && err.message ? err.message : 'Unknown error')}</small><br>
+      <button class="btn btn-sm btn-outline" style="margin-top:8px;" onclick="App.navigate('gradebook')">Retry</button>
+    </td></tr>`;
+  }
+},
   viewComputation(learnerId, cls, policy, weights, c) {
     const l = State.learners.find(x => x.id === learnerId);
     if (!l || !c) return;
@@ -21082,27 +21794,1582 @@ async noiseMeter(root) {
     });
     Utils.download('masterlist-' + Utils.todayISO() + '.csv', Utils.toCSV(rows), 'text/csv');
   },
-  async gradeSummary(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'chart', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
-    const results = await DB.getAll('assessmentResults');
-    const my = results.filter(r => r.classId === State.activeClass.id);
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Grade Summary</h2><p>${Utils.esc(State.activeClass.gradeLevel)} - ${Utils.esc(State.activeClass.section)}</p></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.printGradeSummary()">${icon('printer')} Print</button></div></div>
-      <div class="card">
-        <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>Learner</th><th>Average</th><th>Remarks</th></tr></thead>
-          <tbody>${State.learners.map(l => {
-            const rs = my.filter(r => r.learnerId === l.id);
-            const avg = rs.length ? Utils.round(Utils.avg(rs.map(r=>r.percentage||0)),1) : 0;
-            const rem = Utils.gradeRemarks(Utils.transmute(avg));
-            return `<tr><td><div style="display:flex;align-items:center;gap:8px;">${Utils.avatarHTML(l,28,11)}<strong>${Utils.esc(Utils.displayName(l))}</strong></div></td>
-              <td><span class="grade-badge ${rem.cls}">${avg || '—'}</span></td>
-              <td class="text-xs">${rem.label}</td></tr>`;
-          }).join('')}</tbody>
-        </table></div>
-      </div>`;
-  },
+/* ---------- GRADE SUMMARY (Enhanced · 3-Term · All Subjects) ---------- */
+async gradeSummary(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon:'chart', title:'No class selected',
+      message:'Create or select a class.'
+    })}</div>`;
+    return;
+  }
+
+  const policy  = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+  const terms   = policy.terms || ['Term 1', 'Term 2', 'Term 3'];
+  const passing = policy.passingGrade || 75;
+  
+
+  // ── Gather every subject-class in the same cohort (grade + section) ──
+  const allClasses = await DB.getAll('classes');
+  const subjects = [cls];
+  allClasses.forEach(c => {
+    if (c.id !== cls.id && !c.archived &&
+        c.gradeLevel === cls.gradeLevel &&
+        c.section === cls.section &&
+        !subjects.find(x => x.id === c.id)) {
+      subjects.push(c);
+    }
+  });
+  // Current class first, then alphabetical by subject
+  subjects.sort((a, b) => {
+    if (a.id === cls.id) return -1;
+    if (b.id === cls.id) return 1;
+    return (a.subject || '').localeCompare(b.subject || '');
+  });
+
+  // ── Term Summary Sheet mode (subjects is now in scope) ──
+if (State.gradeSummaryMode === 'sheet') {
+  return Pages._renderTermSummarySheet(root, subjects, terms, policy);
+}
+
+  // ── Load finalized term grades for every subject ──
+  const gradesByClass = {};
+  for (const s of subjects) {
+    const rows = await DB.getAllByIndex('termGrades', 'classId', s.id);
+    gradesByClass[s.id] = rows || [];
+  }
+
+  // ── UI state (persisted on State) ──
+  if (!State.gradeSummaryFilter) {
+    State.gradeSummaryFilter = { query: '', statusFilter: '' };
+  }
+  if (!State.gradeSummaryView || !['bySubject', 'allSubjects'].includes(State.gradeSummaryView)) {
+    State.gradeSummaryView = subjects.length > 1 ? 'allSubjects' : 'bySubject';
+  }
+  if (!State.gradeSummarySubjectId || !subjects.find(s => s.id === State.gradeSummarySubjectId)) {
+    State.gradeSummarySubjectId = cls.id;
+  }
+
+  const F = State.gradeSummaryFilter;
+
+  // ── Build a grade matrix (learner → terms / final / descriptor) ──
+  const buildMatrix = (classId) => {
+    const rows = gradesByClass[classId] || [];
+    const byLearner = {};
+    rows.forEach(r => {
+      if (r.status !== 'finalized') return;
+      if (!byLearner[r.learnerId]) byLearner[r.learnerId] = {};
+      byLearner[r.learnerId][r.term] = Number(r.reportedGrade);
+    });
+
+    const matrix = {};
+    State.learners.forEach(l => {
+      const lm = byLearner[l.id] || {};
+      const row = { terms: {}, final: null, descriptor: { label: '—', description: '' }, remarks: '', presentTerms: 0 };
+      terms.forEach(t => {
+        const v = lm[t];
+        row.terms[t] = (v !== undefined && !isNaN(v) && v > 0) ? v : null;
+        if (row.terms[t] !== null) row.presentTerms++;
+      });
+      const vals = terms.map(t => row.terms[t]).filter(v => v !== null);
+      if (vals.length) {
+        row.final = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+        row.descriptor = GradingEngine.getDescriptor(row.final, policy);
+        row.remarks = row.final >= passing ? 'Passed' : 'Failed';
+      }
+      row.complete = row.presentTerms === terms.length;
+      matrix[l.id] = row;
+    });
+    return matrix;
+  };
+
+  const matrixBySubject = {};
+  subjects.forEach(s => { matrixBySubject[s.id] = buildMatrix(s.id); });
+
+  const selectedSubject = subjects.find(s => s.id === State.gradeSummarySubjectId) || cls;
+  const mainMatrix = matrixBySubject[selectedSubject.id];
+
+  // ── General Weighted Average across all subjects (per learner) ──
+  const gwaByLearner = {};
+  State.learners.forEach(l => {
+    const finals = subjects
+      .map(s => matrixBySubject[s.id][l.id]?.final)
+      .filter(v => v !== null && v !== undefined && !isNaN(v));
+    gwaByLearner[l.id] = finals.length
+      ? Math.round(finals.reduce((a, b) => a + b, 0) / finals.length)
+      : null;
+  });
+
+  // ── Statistics for the selected subject ──
+  const allFinals = Object.values(mainMatrix).map(r => r.final).filter(v => v !== null);
+  const classAvg  = allFinals.length ? Utils.round(Utils.avg(allFinals), 1) : null;
+  const passed    = allFinals.filter(v => v >= passing).length;
+  const passRate  = allFinals.length ? Utils.round((passed / allFinals.length) * 100, 1) : null;
+  const highest   = allFinals.length ? Math.max(...allFinals) : null;
+  const lowest    = allFinals.length ? Math.min(...allFinals) : null;
+  const completeCount = Object.values(mainMatrix).filter(r => r.complete).length;
+
+  const termAvgs = {};
+  terms.forEach(t => {
+    const vals = Object.values(mainMatrix).map(r => r.terms[t]).filter(v => v !== null);
+    termAvgs[t] = vals.length ? Utils.round(Utils.avg(vals), 1) : null;
+  });
+
+  // ── Apply filters to the roster ──
+  let filteredLearners = State.learners.slice();
+  if (F.query) {
+    const q = F.query.toLowerCase();
+    filteredLearners = filteredLearners.filter(l =>
+      Utils.fullName(l).toLowerCase().includes(q) || (l.lrn || '').includes(q)
+    );
+  }
+  if (F.statusFilter === 'passed')     filteredLearners = filteredLearners.filter(l => mainMatrix[l.id]?.remarks === 'Passed');
+  if (F.statusFilter === 'failed')     filteredLearners = filteredLearners.filter(l => mainMatrix[l.id]?.remarks === 'Failed');
+  if (F.statusFilter === 'incomplete') filteredLearners = filteredLearners.filter(l => !mainMatrix[l.id]?.complete);
+
+  const learnerCount = State.learners.length;
+  const hasAnyGrades = allFinals.length > 0 || Object.values(gwaByLearner).some(v => v !== null);
+
+  // ── Subject chips ──
+  const subjectChips = subjects.map(s => {
+    const active = s.id === State.gradeSummarySubjectId && State.gradeSummaryView === 'bySubject';
+    const avg = (() => {
+      const vals = Object.values(matrixBySubject[s.id]).map(r => r.final).filter(v => v !== null);
+      return vals.length ? Utils.round(Utils.avg(vals), 1) : null;
+    })();
+    return `<button class="chip ${active ? 'active' : ''}" data-gs-subject="${Utils.attr(s.id)}"
+              style="cursor:pointer;${active ? 'background:var(--gradient-primary);color:#fff;' : ''}">
+      ${icon('book')} ${Utils.esc(s.subject || 'Untitled')}${avg !== null ? ` <span style="opacity:.75;font-weight:500;">· ${avg}</span>` : ''}
+    </button>`;
+  }).join('');
+
+  // ── Main table row builder (per-subject view) ──
+  const buildRowBySubject = (l, idx) => {
+    const row = mainMatrix[l.id] || { terms: {}, final: null, descriptor: { label: '—' }, remarks: '', complete: false };
+    const termCells = terms.map(t => {
+      const v = row.terms[t];
+      if (v === null) return `<td style="text-align:center;color:var(--text-muted);">—</td>`;
+      const color = v >= passing ? 'var(--text)' : 'var(--danger)';
+      return `<td style="text-align:center;font-weight:600;color:${color};">${v}</td>`;
+    }).join('');
+    const finalCell = row.final !== null
+      ? `<span class="grade-badge ${row.descriptor.cls || (row.final >= 90 ? 'grade-outstanding' : row.final >= 85 ? 'grade-verysatisfactory' : row.final >= 80 ? 'grade-satisfactory' : row.final >= 75 ? 'grade-fairly' : 'grade-didnot')}" style="font-size:13px;">${row.final}</span>`
+      : `<span class="text-muted">—</span>`;
+    const remarksBadge = row.remarks === 'Passed'
+      ? '<span class="badge badge-success">Passed</span>'
+      : row.remarks === 'Failed'
+        ? '<span class="badge badge-danger">Failed</span>'
+        : '<span class="badge badge-neutral">Incomplete</span>';
+    return `<tr>
+      <td>${idx + 1}</td>
+      <td>
+        <div class="flex gap-8" style="align-items:center;cursor:pointer;" data-gs-learner="${Utils.attr(l.id)}">
+          ${Utils.avatarHTML(l, 30, 11)}
+          <div style="min-width:0;">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${Utils.esc(Utils.displayName(l))}</div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+          </div>
+        </div>
+      </td>
+      ${termCells}
+      <td style="text-align:center;">${finalCell}</td>
+      <td class="text-xs">${Utils.esc(row.descriptor.label)}</td>
+      <td style="text-align:center;">${remarksBadge}</td>
+      <td style="text-align:center;">
+        <button class="icon-btn" data-gs-detail="${Utils.attr(l.id)}" title="View full report">${icon('user')}</button>
+      </td>
+    </tr>`;
+  };
+
+  // ── All-subjects row builder ──
+  const buildRowAllSubjects = (l, idx) => {
+    let cells = '';
+    let finalsForGWA = [];
+    subjects.forEach(s => {
+      const row = matrixBySubject[s.id][l.id] || {};
+      const final = row.final;
+      if (final !== null && final !== undefined) finalsForGWA.push(final);
+      const finalCell = final !== null && final !== undefined
+        ? `<span style="font-weight:700;color:${final >= passing ? 'var(--text)' : 'var(--danger)'};">${final}</span>`
+        : `<span class="text-muted">—</span>`;
+      cells += `<td style="text-align:center;">${finalCell}</td>`;
+    });
+    const gwa = gwaByLearner[l.id];
+    const gwaBadge = gwa !== null
+      ? `<span class="grade-badge ${gwa >= 90 ? 'grade-outstanding' : gwa >= 85 ? 'grade-verysatisfactory' : gwa >= 80 ? 'grade-satisfactory' : gwa >= 75 ? 'grade-fairly' : 'grade-didnot'}">${gwa}</span>`
+      : `<span class="text-muted">—</span>`;
+    const descriptor = gwa !== null ? GradingEngine.getDescriptor(gwa, policy).label : '—';
+    const remarks = gwa === null ? 'Incomplete' : (gwa >= passing ? 'Passed' : 'Failed');
+    const remarksBadge = remarks === 'Passed'
+      ? '<span class="badge badge-success">Passed</span>'
+      : remarks === 'Failed'
+        ? '<span class="badge badge-danger">Failed</span>'
+        : '<span class="badge badge-neutral">Incomplete</span>';
+    return `<tr>
+      <td>${idx + 1}</td>
+      <td>
+        <div class="flex gap-8" style="align-items:center;cursor:pointer;" data-gs-learner="${Utils.attr(l.id)}">
+          ${Utils.avatarHTML(l, 30, 11)}
+          <div style="min-width:0;">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${Utils.esc(Utils.displayName(l))}</div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+          </div>
+        </div>
+      </td>
+      ${cells}
+      <td style="text-align:center;">${gwaBadge}</td>
+      <td class="text-xs">${Utils.esc(descriptor)}</td>
+      <td style="text-align:center;">${remarksBadge}</td>
+      <td style="text-align:center;">
+        <button class="icon-btn" data-gs-detail="${Utils.attr(l.id)}" title="View full report">${icon('user')}</button>
+      </td>
+    </tr>`;
+  };
+
+  // ── Compose main table (varies by view mode) ──
+  let tableHeader, tableBody, tableFooter;
+
+  if (State.gradeSummaryView === 'bySubject') {
+    tableHeader = `
+      <tr>
+        <th style="width:40px;">#</th>
+        <th>Learner</th>
+        ${terms.map(t => `<th style="width:90px;text-align:center;">${Utils.esc(t)}</th>`).join('')}
+        <th style="width:90px;text-align:center;">Final Grade</th>
+        <th style="width:150px;">Descriptor</th>
+        <th style="width:100px;text-align:center;">Remarks</th>
+        <th style="width:50px;"></th>
+      </tr>`;
+    tableBody = filteredLearners.length
+      ? filteredLearners.map((l, i) => buildRowBySubject(l, i)).join('')
+      : `<tr><td colspan="${terms.length + 6}" style="text-align:center;padding:32px;color:var(--text-muted);">
+           <div style="font-size:14px;font-weight:600;margin-bottom:4px;">No learners match your filters</div>
+           <div class="text-xs">Try clearing the search or status filter.</div>
+         </td></tr>`;
+    tableFooter = `
+      <tr style="background:var(--light-blue);font-weight:700;">
+        <td colspan="2" style="text-align:right;padding-right:12px;">Class Average</td>
+        ${terms.map(t => `<td style="text-align:center;font-weight:700;color:var(--deped-blue);">${termAvgs[t] !== null ? termAvgs[t] : '—'}</td>`).join('')}
+        <td style="text-align:center;">${classAvg !== null ? `<span class="grade-badge grade-verysatisfactory">${classAvg}</span>` : '—'}</td>
+        <td class="text-xs">${classAvg !== null ? GradingEngine.getDescriptor(classAvg, policy).label : '—'}</td>
+        <td style="text-align:center;" class="text-xs">${passed}/${allFinals.length} passed</td>
+        <td></td>
+      </tr>`;
+  } else {
+    // All subjects view
+    tableHeader = `
+      <tr>
+        <th style="width:40px;">#</th>
+        <th style="min-width:180px;">Learner</th>
+        ${subjects.map(s => `<th style="text-align:center;min-width:80px;" title="${Utils.attr(s.subject || '')}">
+          ${Utils.esc((s.subject || 'Untitled').slice(0, 18))}${(s.subject || '').length > 18 ? '…' : ''}
+        </th>`).join('')}
+        <th style="width:90px;text-align:center;">GWA</th>
+        <th style="width:150px;">Descriptor</th>
+        <th style="width:100px;text-align:center;">Remarks</th>
+        <th style="width:50px;"></th>
+      </tr>`;
+    tableBody = filteredLearners.length
+      ? filteredLearners.map((l, i) => buildRowAllSubjects(l, i)).join('')
+      : `<tr><td colspan="${subjects.length + 6}" style="text-align:center;padding:32px;color:var(--text-muted);">
+           <div style="font-size:14px;font-weight:600;margin-bottom:4px;">No learners match your filters</div>
+           <div class="text-xs">Try clearing the search or status filter.</div>
+         </td></tr>`;
+
+    // Column-average footer for all-subjects view
+    const subjectAvgs = subjects.map(s => {
+      const vals = Object.values(matrixBySubject[s.id]).map(r => r.final).filter(v => v !== null);
+      return vals.length ? Utils.round(Utils.avg(vals), 1) : null;
+    });
+    const gwaValues = Object.values(gwaByLearner).filter(v => v !== null);
+    const overallGWA = gwaValues.length ? Utils.round(Utils.avg(gwaValues), 1) : null;
+    tableFooter = `
+      <tr style="background:var(--light-blue);font-weight:700;">
+        <td colspan="2" style="text-align:right;padding-right:12px;">Class Average</td>
+        ${subjectAvgs.map(v => `<td style="text-align:center;font-weight:700;color:var(--deped-blue);">${v !== null ? v : '—'}</td>`).join('')}
+        <td style="text-align:center;">${overallGWA !== null ? `<span class="grade-badge grade-verysatisfactory">${overallGWA}</span>` : '—'}</td>
+        <td class="text-xs">${overallGWA !== null ? GradingEngine.getDescriptor(overallGWA, policy).label : '—'}</td>
+        <td></td>
+        <td></td>
+      </tr>`;
+  }
+
+  // ── Render the full page ──
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Grade Summary</h2>
+        <p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)} · ${subjects.length} subject${subjects.length === 1 ? '' : 's'} · ${terms.length} terms</p>
+      </div>
+      <div class="page-actions">
+          <button class="btn btn-outline" id="gs-mode-toggle">
+            ${icon('list')} Term Summary Sheet
+          </button>
+        <button class="btn btn-outline" id="gs-export-csv">${icon('download')} Export CSV</button>
+        <button class="btn btn-outline" id="gs-refresh">${icon('history')} Refresh</button>
+        <button class="btn btn-primary" id="gs-print">${icon('printer')} Print</button>
+      </div>
+    </div>
+
+    <!-- ─── Overview stats ─── -->
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('users')}</div>
+        <div class="stat-label">Learners</div>
+        <div class="stat-value">${learnerCount}</div>
+        <div class="text-xs text-muted">${completeCount} with complete grades</div>
+      </div>
+      <div class="stat-card accent-${classAvg !== null && classAvg >= 80 ? 'success' : classAvg !== null ? 'warning' : ''}">
+        <div class="stat-icon">${icon('chart')}</div>
+        <div class="stat-label">Class Average</div>
+        <div class="stat-value">${classAvg !== null ? classAvg : '—'}</div>
+        <div class="text-xs text-muted">${terms.map(t => `${t.replace('Term ','T').replace('Quarter ','Q')}: ${termAvgs[t] ?? '—'}`).join(' · ')}</div>
+      </div>
+      <div class="stat-card accent-${passRate !== null && passRate >= 85 ? 'success' : passRate !== null && passRate < 75 ? 'danger' : 'warning'}">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Passing Rate</div>
+        <div class="stat-value">${passRate !== null ? passRate + '%' : '—'}</div>
+        <div class="text-xs text-muted">${passed} of ${allFinals.length} learners passed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">${icon('trending')}</div>
+        <div class="stat-label">Range</div>
+        <div class="stat-value">${highest !== null ? highest : '—'}<span style="font-size:14px;color:var(--text-muted);font-weight:400;"> / ${lowest ?? '—'}</span></div>
+        <div class="text-xs text-muted">Highest / Lowest</div>
+      </div>
+    </div>
+
+    <!-- ─── View toggle & subject selector ─── -->
+    <div class="card mb-16">
+      <div class="flex-between mb-12" style="flex-wrap:wrap;gap:10px;">
+        <div class="flex gap-8" style="align-items:center;">
+          <strong style="font-size:13px;">View:</strong>
+          <button class="btn btn-sm ${State.gradeSummaryView === 'bySubject' ? 'btn-primary' : 'btn-outline'}" data-gs-view="bySubject">
+            ${icon('book')} Per Subject
+          </button>
+          <button class="btn btn-sm ${State.gradeSummaryView === 'allSubjects' ? 'btn-primary' : 'btn-outline'}" data-gs-view="allSubjects">
+            ${icon('list')} All Subjects (GWA)
+          </button>
+        </div>
+        <div class="flex gap-8" style="flex-wrap:wrap;">
+          <div class="search-bar" style="min-width:200px;">
+            ${icon('search')}
+            <input class="form-control" id="gs-search" placeholder="Search learner or LRN…" value="${Utils.attr(F.query)}">
+          </div>
+          <select class="form-control" id="gs-status-filter" style="max-width:170px;">
+            <option value="" ${!F.statusFilter ? 'selected' : ''}>All learners</option>
+            <option value="passed" ${F.statusFilter === 'passed' ? 'selected' : ''}>Passed only</option>
+            <option value="failed" ${F.statusFilter === 'failed' ? 'selected' : ''}>Failed only</option>
+            <option value="incomplete" ${F.statusFilter === 'incomplete' ? 'selected' : ''}>Incomplete only</option>
+          </select>
+        </div>
+      </div>
+
+      ${State.gradeSummaryView === 'bySubject' && subjects.length > 1 ? `
+        <div class="divider"></div>
+        <div style="font-size:12px;color:var(--text-muted);font-weight:600;margin:8px 0 8px;">Subject:</div>
+        <div class="flex gap-8" style="flex-wrap:wrap;">
+          ${subjectChips}
+        </div>` : ''}
+
+      ${State.gradeSummaryView === 'allSubjects' && subjects.length === 1 ? `
+        <div class="alert alert-info" style="margin-top:12px;margin-bottom:0;font-size:12px;">
+          ${icon('info')}<div>
+            Only one subject is set up for <strong>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</strong>.
+            To see grades across multiple subjects here, create additional classes for the same section with different subjects.
+          </div>
+        </div>` : ''}
+    </div>
+ 
+    <!-- ─── Empty state ─── -->
+    ${!hasAnyGrades ? `
+    <div class="card mb-16">${UI.emptyState({
+        icon:'chart',
+        title: 'No finalized grades yet',
+        message: `Once you finalize ${terms.join(', ')} in the Gradebook, learner grades will appear here. You can still preview the table structure below.`,
+        actionLabel: 'Open Gradebook',
+        actionFn: 'App.navigate("gradebook")'
+      })}</div>
+    ` : ''}
+
+    <!-- ─── Main table ─── -->
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:12px;">
+        <div>
+          <h3 style="font-size:15px;">
+            ${State.gradeSummaryView === 'bySubject'
+              ? Utils.esc(selectedSubject.subject || 'Grade Summary')
+              : 'General Weighted Average across all subjects'}
+          </h3>
+          <p class="text-xs text-muted" style="margin-top:2px;">
+            ${State.gradeSummaryView === 'bySubject'
+              ? `${Utils.esc(policy.label)} · ${terms.length} terms · Passing: ${passing}`
+              : `${subjects.length} subject${subjects.length === 1 ? '' : 's'} · Passing: ${passing}`}
+          </p>
+        </div>
+        <span class="text-sm text-muted">${filteredLearners.length} of ${learnerCount} learners</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>${tableHeader}</thead>
+          <tbody>
+            ${tableBody}
+          </tbody>
+          <tfoot>${tableFooter}</tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- ─── Legend / help ─── -->
+    <div class="card">
+      <div class="card-head"><h3 style="font-size:13px;">Legend &amp; Notes</h3></div>
+      <div class="grid grid-2" style="font-size:12px;color:var(--text-muted);line-height:1.7;">
+        <div>
+          <div class="mb-8"><span class="grade-badge grade-outstanding">90-100</span> &nbsp;Advancing / Outstanding</div>
+          <div class="mb-8"><span class="grade-badge grade-verysatisfactory">85-89</span> &nbsp;Benchmarking / Very Satisfactory</div>
+          <div class="mb-8"><span class="grade-badge grade-satisfactory">80-84</span> &nbsp;Connecting / Satisfactory</div>
+        </div>
+        <div>
+          <div class="mb-8"><span class="grade-badge grade-fairly">75-79</span> &nbsp;Developing / Fairly Satisfactory</div>
+          <div class="mb-8"><span class="grade-badge grade-didnot">&lt;75</span> &nbsp;Emerging / Did Not Meet Expectations</div>
+          <div class="mb-8"><strong>—</strong> &nbsp;Term not yet finalized in the Gradebook</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  /* ─────────────────── Bindings ─────────────────── */
+
+  // Mode toggle: switch to Term Summary Sheet
+const modeToggle = root.querySelector('#gs-mode-toggle');
+if (modeToggle) {
+  modeToggle.onclick = () => {
+    State.gradeSummaryMode = 'sheet';
+    Pages.gradeSummary(root);
+  };
+}
+
+  // View toggle
+  root.querySelectorAll('[data-gs-view]').forEach(b => {
+    b.onclick = () => {
+      State.gradeSummaryView = b.dataset.gsView;
+      Pages.gradeSummary(root);
+    };
+  });
+
+  // Subject chips
+  root.querySelectorAll('[data-gs-subject]').forEach(b => {
+    b.onclick = () => {
+      State.gradeSummarySubjectId = b.dataset.gsSubject;
+      State.gradeSummaryView = 'bySubject';
+      Pages.gradeSummary(root);
+    };
+  });
+
+  // Search
+  const searchInput = root.querySelector('#gs-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', Utils.debounce(() => {
+      F.query = searchInput.value;
+      Pages.gradeSummary(root);
+      setTimeout(() => {
+        const s = root.querySelector('#gs-search');
+        if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+      }, 20);
+    }, 220));
+  }
+
+  // Status filter
+  const statusSel = root.querySelector('#gs-status-filter');
+  if (statusSel) statusSel.onchange = (e) => { F.statusFilter = e.target.value; Pages.gradeSummary(root); };
+
+  // Refresh
+  root.querySelector('#gs-refresh').onclick = () => Pages.gradeSummary(root);
+
+  // CSV export
+  root.querySelector('#gs-export-csv').onclick = () => Pages._gsExportCSV(subjects, terms, matrixBySubject, gwaByLearner, policy);
+
+  // Print
+  root.querySelector('#gs-print').onclick = () => Pages.printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, State.gradeSummaryView, selectedSubject);
+
+  // Learner detail modal
+  root.querySelectorAll('[data-gs-detail], [data-gs-learner]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.gsDetail || el.dataset.gsLearner;
+      Pages._gsOpenLearnerDetail(id, subjects, terms, matrixBySubject, policy);
+    };
+  });
+},
+
+/* ─── Grade Summary: CSV export ─── */
+_gsExportCSV(subjects, terms, matrixBySubject, gwaByLearner, policy) {
+  const view = State.gradeSummaryView;
+  let rows = [];
+  let headers = [];
+
+  if (view === 'bySubject') {
+    const selected = subjects.find(s => s.id === State.gradeSummarySubjectId) || subjects[0];
+    const matrix = matrixBySubject[selected.id];
+    headers = ['#', 'LRN', 'Name', ...terms, 'Final Grade', 'Descriptor', 'Remarks'];
+    State.learners.forEach((l, i) => {
+      const r = matrix[l.id] || {};
+      rows.push({
+        '#': i + 1,
+        'LRN': l.lrn || '',
+        'Name': Utils.fullName(l),
+        ...Object.fromEntries(terms.map(t => [t, r.terms?.[t] ?? ''])),
+        'Final Grade': r.final ?? '',
+        'Descriptor': r.descriptor?.label || '',
+        'Remarks': r.remarks || ''
+      });
+    });
+  } else {
+    headers = ['#', 'LRN', 'Name', ...subjects.map(s => s.subject || 'Untitled'), 'GWA', 'Descriptor', 'Remarks'];
+    State.learners.forEach((l, i) => {
+      const gwa = gwaByLearner[l.id];
+      const row = {
+        '#': i + 1,
+        'LRN': l.lrn || '',
+        'Name': Utils.fullName(l),
+        'GWA': gwa ?? '',
+        'Descriptor': gwa !== null ? GradingEngine.getDescriptor(gwa, policy).label : '',
+        'Remarks': gwa === null ? 'Incomplete' : (gwa >= (policy.passingGrade || 75) ? 'Passed' : 'Failed')
+      };
+      subjects.forEach(s => {
+        const f = matrixBySubject[s.id][l.id]?.final;
+        row[s.subject || 'Untitled'] = f ?? '';
+      });
+      rows.push(row);
+    });
+  }
+
+  const cls = State.activeClass;
+  const filename = `grade-summary-${cls.gradeLevel.replace(/\s+/g, '')}-${cls.section.replace(/\s+/g, '')}-${Utils.todayISO()}.csv`;
+  Utils.download(filename, Utils.toCSV(rows, headers), 'text/csv');
+  App.logActivity('Grade summary exported as CSV', 'Reports');
+  UI.toast('CSV exported', 'success');
+},
+
+/* ─── Grade Summary: per-learner detail modal ─── */
+_gsOpenLearnerDetail(learnerId, subjects, terms, matrixBySubject, policy) {
+  const l = State.learners.find(x => x.id === learnerId);
+  if (!l) return;
+  const passing = policy.passingGrade || 75;
+
+  // Collect every subject's grade data for this learner
+  const subjectRows = subjects.map(s => {
+    const r = (matrixBySubject[s.id] && matrixBySubject[s.id][l.id]) || {};
+    return {
+      subject: s.subject || 'Untitled',
+      className: `${s.gradeLevel || ''} ${s.section || ''}`.trim(),
+      terms: r.terms || {},
+      final: r.final ?? null,
+      descriptor: r.descriptor || { label: '—' },
+      remarks: r.remarks || ''
+    };
+  });
+
+  const finals = subjectRows.map(r => r.final).filter(v => v !== null && !isNaN(v));
+  const gwa = finals.length ? Math.round(finals.reduce((a, b) => a + b, 0) / finals.length) : null;
+  const gwaDescriptor = gwa !== null ? GradingEngine.getDescriptor(gwa, policy) : { label: '—' };
+  const gwaRemarks = gwa === null ? 'Incomplete' : (gwa >= passing ? 'Passed' : 'Failed');
+
+  const m = UI.modal({
+    title: 'Grade Report — ' + Utils.fullName(l),
+    size: 'modal-xl',
+    body: `
+      <div class="grid grid-3 mb-16">
+        <div class="stat-card">
+          <div class="stat-label">Learner</div>
+          <div style="font-weight:700;font-size:14px;margin-top:4px;">${Utils.esc(Utils.fullName(l))}</div>
+          <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Subjects</div>
+          <div class="stat-value">${subjectRows.length}</div>
+          <div class="text-xs text-muted">${subjectRows.filter(r => r.final !== null).length} with final grades</div>
+        </div>
+        <div class="stat-card ${gwa !== null && gwa >= passing ? 'accent-success' : gwa !== null ? 'accent-danger' : ''}">
+          <div class="stat-label">General Weighted Average</div>
+          <div class="stat-value">${gwa ?? '—'}</div>
+          <div class="text-xs text-muted">${Utils.esc(gwaDescriptor.label)}</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="min-width:180px;">Subject</th>
+              ${terms.map(t => `<th style="text-align:center;width:80px;">${Utils.esc(t)}</th>`).join('')}
+              <th style="text-align:center;width:100px;">Final Grade</th>
+              <th style="width:150px;">Descriptor</th>
+              <th style="text-align:center;width:100px;">Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${subjectRows.map(r => `
+              <tr>
+                <td><strong>${Utils.esc(r.subject)}</strong></td>
+                ${terms.map(t => {
+                  const v = r.terms[t];
+                  return `<td style="text-align:center;">${v !== null && v !== undefined ? `<span style="font-weight:600;color:${v >= passing ? 'var(--text)' : 'var(--danger)'};">${v}</span>` : '<span class="text-muted">—</span>'}</td>`;
+                }).join('')}
+                <td style="text-align:center;">
+                  ${r.final !== null
+                    ? `<span class="grade-badge ${r.final >= 90 ? 'grade-outstanding' : r.final >= 85 ? 'grade-verysatisfactory' : r.final >= 80 ? 'grade-satisfactory' : r.final >= 75 ? 'grade-fairly' : 'grade-didnot'}" style="font-size:13px;">${r.final}</span>`
+                    : '<span class="text-muted">—</span>'}
+                </td>
+                <td class="text-xs">${Utils.esc(r.descriptor.label)}</td>
+                <td style="text-align:center;">
+                  ${r.remarks === 'Passed' ? '<span class="badge badge-success">Passed</span>'
+                    : r.remarks === 'Failed' ? '<span class="badge badge-danger">Failed</span>'
+                    : '<span class="badge badge-neutral">—</span>'}
+                </td>
+              </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:var(--light-blue);font-weight:700;">
+              <td colspan="${terms.length + 1}" style="text-align:right;padding-right:12px;">General Weighted Average</td>
+              <td style="text-align:center;">${gwa !== null ? `<span class="grade-badge grade-verysatisfactory">${gwa}</span>` : '—'}</td>
+              <td class="text-xs">${Utils.esc(gwaDescriptor.label)}</td>
+              <td style="text-align:center;">
+                ${gwaRemarks === 'Passed' ? '<span class="badge badge-success">Passed</span>'
+                  : gwaRemarks === 'Failed' ? '<span class="badge badge-danger">Failed</span>'
+                  : '<span class="badge badge-neutral">Incomplete</span>'}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div class="alert alert-info mt-16" style="font-size:12px;">
+        ${icon('info')}<div>
+          Term grades come from the Gradebook once a term is <strong>finalized</strong>. A subject shows <strong>—</strong> when that term has not been finalized yet.
+          The General Weighted Average is computed across all subjects that have a Final Grade.
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Close</button>
+      <button class="btn btn-outline" id="gs-detail-email">${icon('message')} Email to Parent</button>
+      <button class="btn btn-primary" id="gs-detail-print">${icon('printer')} Print Report</button>
+    `
+  });
+
+  m.overlay.querySelector('#gs-detail-print').onclick = () => {
+    Pages._gsPrintLearnerReport(l, subjectRows, terms, gwa, gwaDescriptor, gwaRemarks, policy);
+  };
+
+  m.overlay.querySelector('#gs-detail-email').onclick = () => {
+    const summaryLines = subjectRows.map(r =>
+      `• ${r.subject}: ${r.final !== null ? r.final : 'not yet finalized'}${r.descriptor?.label ? ' (' + r.descriptor.label + ')' : ''}`
+    ).join('\n');
+    Share.emailLearnerReport(l, {
+      summary: `Current standing across ${subjectRows.length} subject${subjectRows.length === 1 ? '' : 's'}:\n\n${summaryLines}\n\nGeneral Weighted Average: ${gwa ?? 'not yet available'} (${gwaDescriptor.label})\nRemarks: ${gwaRemarks}`
+    });
+  };
+},
+
+/* ─── Grade Summary: print a single learner's report ─── */
+_gsPrintLearnerReport(learner, subjectRows, terms, gwa, gwaDescriptor, gwaRemarks, policy) {
+  const school = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const cls = State.activeClass;
+
+  const rowsHTML = subjectRows.map(r => `
+    <tr>
+      <td>${Utils.esc(r.subject)}</td>
+      ${terms.map(t => `<td style="text-align:center;">${r.terms[t] !== null && r.terms[t] !== undefined ? r.terms[t] : ''}</td>`).join('')}
+      <td style="text-align:center;font-weight:700;">${r.final !== null ? r.final : ''}</td>
+      <td>${Utils.esc(r.descriptor.label)}</td>
+      <td style="text-align:center;">${Utils.esc(r.remarks)}</td>
+    </tr>`).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-header">
+      <h1>${Utils.esc(school.name || '')}</h1>
+      <p>${Utils.esc(school.address || '')}</p>
+      <div class="print-line"></div>
+      <h2 style="font-size:13pt;">LEARNER GRADE REPORT</h2>
+    </div>
+    <div class="print-meta">
+      <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+      <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+      <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
+    </div>
+    <table style="margin-bottom:10px;">
+      <tr><th style="width:150px;">Learner</th><td>${Utils.esc(Utils.fullName(learner))}</td>
+          <th style="width:100px;">LRN</th><td>${Utils.esc(learner.lrn || '—')}</td></tr>
+      <tr><th>Sex</th><td>${Utils.esc(learner.sex || '—')}</td>
+          <th>Age</th><td>${Utils.calcAge(learner.birthDate) || '—'}</td></tr>
+    </table>
+    <table>
+      <thead>
+        <tr>
+          <th>Subject</th>
+          ${terms.map(t => `<th style="text-align:center;">${Utils.esc(t)}</th>`).join('')}
+          <th style="text-align:center;">Final Grade</th>
+          <th>Descriptor</th>
+          <th style="text-align:center;">Remarks</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHTML}</tbody>
+      <tfoot>
+        <tr style="background:#eef3fa;font-weight:700;">
+          <td colspan="${terms.length + 1}" style="text-align:right;">General Weighted Average</td>
+          <td style="text-align:center;">${gwa ?? ''}</td>
+          <td>${Utils.esc(gwaDescriptor.label)}</td>
+          <td style="text-align:center;">${Utils.esc(gwaRemarks)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    <div class="print-footer">
+      <span>Prepared by: ${Utils.esc(teacher.fullName || cls.adviser || '—')}</span>
+      <span>KlazAssist · ${Utils.formatDate(Utils.todayISO())}</span>
+    </div>`;
+
+  App.logActivity('Printed grade report for ' + Utils.fullName(learner), 'Reports');
+  window.print();
+  setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 800);
+},
+
+/* ============================================================================
+   TERM SUMMARY SHEET — multi-subject grade input grid
+   ──────────────────────────────────────────────────────────────────────────
+   • Reuses `sf9Records` as the storage layer, so grades entered here feed
+     directly into the SF9 form.
+   • Subjects handled by the current teacher are auto-pulled from finalized
+     termGrades and rendered read-only.
+   • Other subjects are editable inline and stored per learner, per term.
+   • Average and rank recalculate live.
+   ============================================================================ */
+
+/* -- Normalize a subject label into a stable key for matching ---------- */
+_tsSubjectKey(label) {
+  const s = String(label || '').toLowerCase().trim();
+  const map = {
+    'fil': 'filipino', 'filipino': 'filipino',
+    'eng': 'english', 'english': 'english',
+    'math': 'mathematics', 'mathematics': 'mathematics',
+    'sci': 'science', 'science': 'science',
+    'ap': 'aralingpanlipunan', 'araling panlipunan': 'aralingpanlipunan',
+    'aralingpanlipunan': 'aralingpanlipunan',
+    'val.ed.': 'valueseducation', 'valed': 'valueseducation',
+    'values education': 'valueseducation', 'valueseducation': 'valueseducation',
+    'esp': 'valueseducation',
+    'tle': 'tle', 'epp': 'tle',
+    'mapeh': 'mapeh',
+    'music & arts': 'musicandarts', 'music and arts': 'musicandarts',
+    'musicandarts': 'musicandarts', 'music': 'musicandarts',
+    'pe & health': 'physicaleducationandhealth',
+    'pe and health': 'physicaleducationandhealth',
+    'physical education and health': 'physicaleducationandhealth',
+    'physicaleducationandhealth': 'physicaleducationandhealth',
+    'pe': 'physicaleducationandhealth'
+  };
+  const clean = s.replace(/\s+/g, ' ').replace(/\.+$/, '');
+  return map[clean] || map[s] || s.replace(/[^a-z]/g, '');
+},
+
+/* -- Short display labels for the sheet header -------------------------- */
+_tsShortLabel(area) {
+  const map = {
+    'Filipino': 'Fil',
+    'English': 'Eng',
+    'Mathematics': 'Math',
+    'Science': 'Sci',
+    'Araling Panlipunan': 'AP',
+    'Values Education': 'Val.Ed.',
+    'TLE': 'TLE',
+    'EPP/TLE': 'TLE',
+    'MAPEH': 'MAPEH',
+    'Music and Arts': 'Music & Arts',
+    'Physical Education and Health': 'PE & Health'
+  };
+  return map[area] || area.slice(0, 12);
+},
+
+/* -- Load all sf9Records for this class, keyed by learnerId ------------- */
+async _tsLoadRecords(classId, learnerIds, schoolYear) {
+  const all = await DB.getAllByIndex('sf9Records', 'classId', classId);
+  const byLearner = {};
+  all.forEach(r => { if (r.schoolYear === schoolYear) byLearner[r.learnerId] = r; });
+
+  // Create blank records for learners that don't have one yet
+  for (const lid of learnerIds) {
+    if (!byLearner[lid]) {
+      const rec = {
+        id: `sf9-${classId}-${lid}-${schoolYear}`,
+        classId, learnerId: lid, schoolYear,
+        subjects: {},
+        coreValues: {
+          'Maka-Diyos':    { term1: '', term2: '', term3: '' },
+          'Makatao':       { term1: '', term2: '', term3: '' },
+          'Makakalikasan': { term1: '', term2: '', term3: '' },
+          'Makabansa':     { term1: '', term2: '', term3: '' }
+        },
+        teacherComments: { term1: '', term2: '', term3: '' },
+        transfer: { admittedToGrade: '', eligibleFor: '', approved: '', cancelledDate: '', cancelledBy: '' },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      try { await DB.put('sf9Records', rec); } catch (e) {}
+      byLearner[lid] = rec;
+    }
+  }
+  return byLearner;
+},
+
+/* -- Index the subject-teacher's own finalized grades for auto-pull ----- */
+async _tsBuildAutoIndex(gradeLevel, section, terms) {
+  const auto = {};   // learnerId → subjectKey → { term1, term2, term3 }
+  const siblingClasses = State.classes.filter(c =>
+    !c.archived &&
+    c.gradeLevel === gradeLevel &&
+    c.section === section &&
+    c.subject
+  );
+  for (const s of siblingClasses) {
+    const key = Pages._tsSubjectKey(s.subject);
+    const tgs = await DB.getAllByIndex('termGrades', 'classId', s.id);
+    tgs.forEach(tg => {
+      if (tg.status !== 'finalized') return;
+      if (tg.reportedGrade === '' || tg.reportedGrade == null) return;
+      if (!auto[tg.learnerId]) auto[tg.learnerId] = {};
+      if (!auto[tg.learnerId][key]) auto[tg.learnerId][key] = {};
+      const tIdx = terms.indexOf(tg.term);
+      if (tIdx >= 0) auto[tg.learnerId][key]['term' + (tIdx + 1)] = Number(tg.reportedGrade);
+    });
+  }
+  return auto;
+},
+
+/* -- Master renderer for the sheet ------------------------------------- */
+async _renderTermSummarySheet(root, subjects, terms, policy) {
+  const cls = State.activeClass;
+  if (!cls) { root.innerHTML = '<div class="card"><p class="text-muted">No class selected.</p></div>'; return; }
+  const passing = policy.passingGrade || 75;
+
+  // Active term
+  if (!State.termSummaryTerm || !terms.includes(State.termSummaryTerm)) {
+    State.termSummaryTerm = terms[0];
+  }
+  const term = State.termSummaryTerm;
+  const termIdx = terms.indexOf(term);
+  const termKey = 'term' + (termIdx + 1);
+
+  // Learning areas for this grade band
+  const band = resolveSf9Band(cls.gradeLevel);
+  const learningAreas = SF9_LEARNING_AREAS[band];
+
+  // Load sf9Records + auto-pull index
+  const learnerIds = State.learners.map(l => l.id);
+  const records = await Pages._tsLoadRecords(cls.id, learnerIds, cls.schoolYear || State.schoolYear);
+  const auto = await Pages._tsBuildAutoIndex(cls.gradeLevel, cls.section, terms);
+
+  State.termSummaryRecords = records;
+
+  // Ensure every learner has every subject row
+  for (const lid of learnerIds) {
+    const rec = records[lid];
+    rec.subjects = rec.subjects || {};
+    learningAreas.forEach(area => {
+      const k = Pages._tsSubjectKey(area);
+      if (!rec.subjects[area]) {
+        rec.subjects[area] = { term1: '', term2: '', term3: '', source: auto[lid] && auto[lid][k] ? 'auto' : 'manual' };
+      }
+    });
+  }
+
+  // Compute per-learner row: grades for this term, average, rank
+  const rowData = State.learners.map(l => {
+    const rec = records[l.id];
+    const grades = {};
+    const autoFlag = {};
+    learningAreas.forEach(area => {
+      const k = Pages._tsSubjectKey(area);
+      const autoVal = auto[l.id] && auto[l.id][k] ? auto[l.id][k][termKey] : null;
+      if (autoVal != null && !isNaN(autoVal)) {
+        grades[area] = Number(autoVal);
+        autoFlag[area] = true;
+      } else {
+        const manualVal = rec.subjects[area] ? rec.subjects[area][termKey] : '';
+        grades[area] = manualVal === '' ? null : Number(manualVal);
+        autoFlag[area] = false;
+      }
+    });
+    const vals = Object.values(grades).filter(v => v !== null && !isNaN(v));
+    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    return { learner: l, rec, grades, autoFlag, avg, comment: (rec.teacherComments && rec.teacherComments[termKey]) || '' };
+  });
+
+  // Rank (dense rank by average, highest = 1)
+  const ranked = rowData.filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
+  const rankMap = {};
+  let lastAvg = null, lastRank = 0;
+  ranked.forEach((r, i) => {
+    if (r.avg !== lastAvg) { lastRank = i + 1; lastAvg = r.avg; }
+    rankMap[r.learner.id] = lastRank;
+  });
+
+  // Highest grade per subject (for star markers)
+  const highest = {};
+  learningAreas.forEach(area => {
+    const vals = rowData.map(r => r.grades[area]).filter(v => v !== null && !isNaN(v));
+    highest[area] = vals.length ? Math.max(...vals) : null;
+  });
+
+  // Split by sex
+  const males   = rowData.filter(r => Utils.normalizeSex(r.learner.sex) === 'Male');
+  const females = rowData.filter(r => Utils.normalizeSex(r.learner.sex) === 'Female');
+  const others  = rowData.filter(r => {
+    const n = Utils.normalizeSex(r.learner.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+
+  // Number of grades that would need input
+  const totalCells  = rowData.length * learningAreas.length;
+  const filledCells = rowData.reduce((s, r) => s + Object.values(r.grades).filter(v => v !== null && !isNaN(v)).length, 0);
+  const completion  = totalCells ? Math.round((filledCells / totalCells) * 100) : 0;
+
+  // Inject sticky-column CSS once
+  if (!document.getElementById('ts-sticky-style')) {
+    const st = document.createElement('style');
+    st.id = 'ts-sticky-style';
+    st.textContent = `
+      .ts-sheet-wrap { overflow-x: auto; overflow-y: auto; max-height: 72vh; border-radius: var(--radius); border: 1px solid var(--border); }
+      .ts-sheet { border-collapse: separate; border-spacing: 0; font-size: 13px; min-width: 100%; }
+      .ts-sheet th, .ts-sheet td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 8px; white-space: nowrap; }
+      .ts-sheet thead th { background: var(--bg); position: sticky; top: 0; z-index: 3; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); text-align: center; }
+      .ts-sheet thead th.ts-sticky-left { z-index: 5; left: 0; }
+      .ts-sheet thead th.ts-sticky-2 { z-index: 5; left: 44px; }
+      .ts-sheet tbody td.ts-sticky-left { position: sticky; left: 0; background: var(--card); z-index: 2; }
+      .ts-sheet tbody td.ts-sticky-2 { position: sticky; left: 44px; background: var(--card); z-index: 2; }
+      .ts-sheet tbody td.ts-sex-header { background: #dbe7fb; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; color: var(--deped-blue); text-align: left; padding: 8px 12px; }
+      .ts-sheet tbody td { text-align: center; }
+      .ts-sheet tbody td.ts-name { text-align: left; font-weight: 600; }
+      .ts-sheet .ts-input { width: 62px; border: 1px solid transparent; background: transparent; padding: 3px 6px; text-align: center; font-family: inherit; font-size: 13px; border-radius: 4px; }
+      .ts-sheet .ts-input:hover { border-color: var(--border); }
+      .ts-sheet .ts-input:focus { outline: none; border-color: var(--deped-blue); background: #fff; box-shadow: 0 0 0 2px rgba(0,56,168,.12); }
+      .ts-sheet .ts-input.auto { background: #f5f9ff; color: var(--deped-blue); font-weight: 700; cursor: not-allowed; }
+      .ts-sheet .ts-input.fail { color: var(--danger); font-weight: 700; }
+      .ts-sheet .ts-input.fail-flag::before { content: '⚑ '; color: #DC3545; font-size: 11px; }
+      .ts-sheet .ts-avg-badge { display: inline-block; min-width: 46px; padding: 3px 8px; border-radius: 5px; font-weight: 800; font-size: 13px; background: var(--gradient-gold); color: #000; }
+      .ts-sheet .ts-rank { font-weight: 700; color: var(--deped-blue); }
+      .ts-sheet tfoot td { background: var(--bg); font-weight: 700; position: sticky; bottom: 0; z-index: 3; }
+      .ts-sheet .ts-comment-input { width: 100%; min-width: 220px; border: 1px solid transparent; background: transparent; padding: 4px 6px; text-align: left; font-family: inherit; font-size: 12px; border-radius: 4px; }
+      .ts-sheet .ts-comment-input:hover { border-color: var(--border); }
+      .ts-sheet .ts-comment-input:focus { outline: none; border-color: var(--deped-blue); background: #fff; box-shadow: 0 0 0 2px rgba(0,56,168,.12); }
+      .ts-star { color: #F59E0B; font-size: 12px; margin-left: 2px; }
+      .ts-sheet tr.ts-total-row td { background: #eef3fa; font-weight: 800; color: var(--deped-blue); }
+    `;
+    document.head.appendChild(st);
+  }
+
+  // Subject filter helper
+  const filteredAreas = State.termSummarySubjectFilter === 'all'
+    ? learningAreas
+    : learningAreas.filter(a => Pages._tsSubjectKey(a) === State.termSummarySubjectFilter);
+
+  // Row builder
+  const rowHTML = (r, displayIdx) => {
+    const rank = rankMap[r.learner.id];
+    const commentEsc = Utils.attr(r.comment);
+    const cells = filteredAreas.map(area => {
+      const g = r.grades[area];
+      const isAuto = r.autoFlag[area];
+      const isFail = g !== null && g < passing;
+      const isTop = g !== null && g === highest[area];
+      const val = g === null ? '' : g;
+      const classes = ['ts-input'];
+      if (isAuto) classes.push('auto');
+      if (isFail) classes.push('fail');
+      const readonly = isAuto ? 'readonly tabindex="-1"' : '';
+      return `<td>
+        <input class="${classes.join(' ')}" type="number" min="0" max="100"
+               value="${val}" ${readonly}
+               data-ts-edit="1"
+               data-ts-learner="${Utils.attr(r.learner.id)}"
+               data-ts-area="${Utils.attr(area)}"
+               title="${isAuto ? 'Auto-pulled from your finalized Gradebook' : 'Enter grade from the subject teacher'}"
+               placeholder="—">
+        ${isTop ? '<span class="ts-star" title="Highest in class for this subject">★</span>' : ''}
+        ${isFail ? '<span style="color:#DC3545;font-size:11px;" title="Below passing">⚑</span>' : ''}
+      </td>`;
+    }).join('');
+    return `<tr>
+      <td class="ts-sticky-left" style="width:44px;text-align:center;color:var(--text-muted);">${displayIdx}</td>
+      <td class="ts-sticky-2 ts-name">
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${Utils.avatarHTML(r.learner, 24, 10)}
+          <span style="overflow:hidden;text-overflow:ellipsis;max-width:180px;">${Utils.esc(Utils.lastNameFirst(r.learner))}</span>
+        </div>
+      </td>
+      ${cells}
+      <td style="text-align:center;">${r.avg !== null ? `<span class="ts-avg-badge">${r.avg}</span>` : '<span class="text-muted">—</span>'}</td>
+      <td style="text-align:center;"><span class="ts-rank">${rank || '—'}</span></td>
+      <td style="min-width:240px;">
+        <input class="ts-comment-input" type="text"
+               value="${commentEsc}"
+               placeholder="Optional remark for SF9…"
+               data-ts-comment="${Utils.attr(r.learner.id)}">
+      </td>
+    </tr>`;
+  };
+
+  const sexHeader = (label, count, bg) => `
+    <tr><td colspan="${filteredAreas.length + 5}" class="ts-sex-header" style="background:${bg};">${Utils.esc(label)} · ${count}</td></tr>`;
+
+  // Column averages footer
+  const colAvgs = filteredAreas.map(area => {
+    const vals = rowData.map(r => r.grades[area]).filter(v => v !== null && !isNaN(v));
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  });
+  const classAvgVals = rowData.map(r => r.avg).filter(v => v !== null);
+  const classAvg = classAvgVals.length ? Math.round(classAvgVals.reduce((a, b) => a + b, 0) / classAvgVals.length) : null;
+
+  // Render
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <button class="btn btn-ghost btn-sm" id="ts-back" style="padding:2px 8px;margin-bottom:6px;">
+          ${icon('home')} Back to Detailed Report
+        </button>
+        <h2>Term Summary Sheet</h2>
+        <p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)} · ${Utils.esc(policy.label)}</p>
+      </div>
+      <div class="page-actions">
+        <select class="form-control" id="ts-subject-filter" style="max-width:180px;">
+          <option value="all" ${State.termSummarySubjectFilter === 'all' ? 'selected' : ''}>All subjects</option>
+          ${learningAreas.map(a => {
+            const k = Pages._tsSubjectKey(a);
+            return `<option value="${k}" ${State.termSummarySubjectFilter === k ? 'selected' : ''}>${Utils.esc(a)}</option>`;
+          }).join('')}
+        </select>
+        <button class="btn btn-outline" id="ts-copy-term" title="Copy grades from another term as a starting point">
+          ${icon('file')} Copy From…
+        </button>
+        <button class="btn btn-outline" id="ts-export">${icon('download')} CSV</button>
+        <button class="btn btn-primary" id="ts-print">${icon('printer')} Print Sheet</button>
+      </div>
+    </div>
+
+    <!-- Term selector + stats -->
+    <div class="card mb-16">
+      <div class="flex-between" style="flex-wrap:wrap;gap:12px;align-items:center;">
+        <div class="flex gap-8" style="align-items:center;">
+          <strong style="font-size:13px;">Term:</strong>
+          ${terms.map(t => {
+            const active = t === term;
+            return `<button class="btn btn-sm ${active ? 'btn-primary' : 'btn-outline'}" data-ts-term="${Utils.attr(t)}" style="min-width:90px;">${Utils.esc(t)}</button>`;
+          }).join('')}
+        </div>
+        <div class="flex gap-16" style="align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-muted);">
+          <span><strong style="color:var(--text);">${completion}%</strong> filled (${filledCells}/${totalCells})</span>
+          <span><strong style="color:var(--text);">${rowData.length}</strong> learners</span>
+          <span><strong style="color:var(--text);">${filteredAreas.length}</strong> subjects</span>
+          ${classAvg !== null ? `<span>Class avg <strong style="color:var(--deped-blue);">${classAvg}</strong></span>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- The sheet -->
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div class="ts-sheet-wrap">
+        <table class="ts-sheet">
+          <thead>
+            <tr>
+              <th class="ts-sticky-left" style="width:44px;">#</th>
+              <th class="ts-sticky-2" style="text-align:left;min-width:200px;">Learner</th>
+              ${filteredAreas.map(a => `<th style="min-width:66px;">${Utils.esc(Pages._tsShortLabel(a))}</th>`).join('')}
+              <th style="min-width:80px;">Average</th>
+              <th style="min-width:60px;">Rank</th>
+              <th style="text-align:left;min-width:240px;">Teacher's Comments / Remarks <span style="text-transform:none;font-weight:400;">(for SF9)</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${males.length ? `
+              ${sexHeader('Male', males.length, '#dbe7fb')}
+              ${males.map((r, i) => rowHTML(r, i + 1)).join('')}
+            ` : ''}
+            ${females.length ? `
+              ${sexHeader('Female', females.length, '#fce7f3')}
+              ${females.map((r, i) => rowHTML(r, i + 1)).join('')}
+            ` : ''}
+            ${others.length ? `
+              ${sexHeader('Unrecorded Sex', others.length, '#fef3c7')}
+              ${others.map((r, i) => rowHTML(r, i + 1)).join('')}
+            ` : ''}
+            ${!rowData.length ? `<tr><td colspan="${filteredAreas.length + 5}" style="text-align:center;padding:40px;color:var(--text-muted);">No learners in this class.</td></tr>` : ''}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td class="ts-sticky-left"></td>
+              <td class="ts-sticky-2" style="text-align:right;padding-right:12px;">Column Average</td>
+              ${colAvgs.map(v => `<td>${v !== null ? v : '—'}</td>`).join('')}
+              <td>${classAvg !== null ? classAvg : '—'}</td>
+              <td></td>
+              <td style="text-align:left;padding-left:12px;color:var(--text-muted);font-size:11px;font-weight:400;">
+                Auto-pulled subjects shown in blue. Failing grades (&lt; ${passing}) flagged red. ★ = highest in class for that subject.
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="card mt-16">
+      <div class="grid grid-3" style="font-size:12px;color:var(--text-muted);line-height:1.8;">
+        <div><input class="ts-input auto" style="width:50px;" value="90" readonly> <strong>Auto-pulled</strong> from your finalized Gradebook (read-only).</div>
+        <div><input class="ts-input" style="width:50px;" value="88"> <strong>Manual entry</strong> for subjects taught by other teachers.</div>
+        <div><span class="ts-star">★</span> Highest grade · <span style="color:#DC3545;">⚑</span> Below passing (${passing})</div>
+      </div>
+    </div>
+  `;
+
+  /* ─────────── Bindings ─────────── */
+
+  root.querySelector('#ts-back').onclick = () => {
+    State.gradeSummaryMode = 'detail';
+    Pages.gradeSummary(root);
+  };
+
+  root.querySelectorAll('[data-ts-term]').forEach(b => {
+    b.onclick = () => {
+      State.termSummaryTerm = b.dataset.tsTerm;
+      Pages.gradeSummary(root);
+    };
+  });
+
+  root.querySelector('#ts-subject-filter').onchange = (e) => {
+    State.termSummarySubjectFilter = e.target.value;
+    Pages.gradeSummary(root);
+  };
+
+  root.querySelector('#ts-export').onclick = () => Pages._tsExportCSV(rowData, filteredAreas, term, cls, policy);
+  root.querySelector('#ts-print').onclick  = () => Pages._tsPrintSheet(rowData, filteredAreas, term, cls, policy);
+  root.querySelector('#ts-copy-term').onclick = () => Pages._tsOpenCopyFromTerm(term, terms, learningAreas);
+
+  /* Grade input — debounced save on change */
+  const saveGrade = Utils.debounce(async (learnerId, area, value) => {
+    const rec = State.termSummaryRecords[learnerId];
+    if (!rec) return;
+    rec.subjects = rec.subjects || {};
+    if (!rec.subjects[area]) rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
+    const k = Pages._tsSubjectKey(area);
+    // Refuse to overwrite an auto-pulled value
+    if (rec.subjects[area].source === 'auto') return;
+    rec.subjects[area][termKey] = value;
+    rec.updatedAt = new Date().toISOString();
+    try {
+      await DB.put('sf9Records', rec);
+      App.showAutosave('saved');
+    } catch (e) { console.warn('sf9 save failed:', e); }
+  }, 500);
+
+  root.querySelectorAll('[data-ts-edit]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const v = inp.value.trim();
+      if (v === '') {
+        saveGrade(inp.dataset.tsLearner, inp.dataset.tsArea, '');
+      } else {
+        const n = Number(v);
+        if (isNaN(n) || n < 0 || n > 100) {
+          UI.toast('Enter a score between 0 and 100.', 'warning', 2500);
+          return;
+        }
+        saveGrade(inp.dataset.tsLearner, inp.dataset.tsArea, n);
+      }
+      // Visual feedback: recompute avg/rank only after debounce window
+      clearTimeout(inp._tsReflow);
+      inp._tsReflow = setTimeout(() => {
+        Pages._tsReflowStats(rows_in_sheet(), filteredAreas, passing);
+      }, 700);
+    });
+
+    // Enter key → blur to trigger change
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    });
+  });
+
+  /* Comment input — debounced save */
+  const saveComment = Utils.debounce(async (learnerId, text) => {
+    const rec = State.termSummaryRecords[learnerId];
+    if (!rec) return;
+    rec.teacherComments = rec.teacherComments || { term1: '', term2: '', term3: '' };
+    rec.teacherComments[termKey] = text;
+    rec.updatedAt = new Date().toISOString();
+    try { await DB.put('sf9Records', rec); App.showAutosave('saved'); }
+    catch (e) { console.warn('comment save failed:', e); }
+  }, 500);
+
+  root.querySelectorAll('[data-ts-comment]').forEach(inp => {
+    inp.addEventListener('input', () => saveComment(inp.dataset.tsComment, inp.value));
+  });
+
+  // Helper the closure above references
+  function rows_in_sheet() {
+    return Array.from(root.querySelectorAll('tbody tr'))
+      .filter(tr => tr.querySelector('.ts-name'))
+      .map(tr => ({
+        learnerId: tr.querySelector('[data-ts-edit]')?.dataset.tsLearner ||
+                  tr.querySelector('[data-ts-comment]')?.dataset.tsComment,
+        avgCell: tr.querySelector('.ts-avg-badge'),
+        rankCell: tr.querySelector('.ts-rank')
+      }));
+  }
+},
+
+/* -- Live reflow of avg + rank without re-rendering the whole page ----- */
+_tsReflowStats(scopeRoot, rows, areas, passing) {
+  // Gather current values from the DOM, scoped to the sheet container
+  const data = rows.map(r => {
+    const inputs = scopeRoot.querySelectorAll(`[data-ts-learner="${CSS.escape(r.learnerId)}"][data-ts-edit]`);
+    const vals = Array.from(inputs)
+      .map(inp => inp.value === '' ? null : Number(inp.value))
+      .filter(v => v !== null && !isNaN(v));
+    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    return { ...r, avg };
+  });
+
+  // Rank
+  const sorted = data.filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
+  const rankMap = {};
+  let lastAvg = null, lastRank = 0;
+  sorted.forEach((r, i) => {
+    if (r.avg !== lastAvg) { lastRank = i + 1; lastAvg = r.avg; }
+    rankMap[r.learnerId] = lastRank;
+  });
+
+  // Apply
+  data.forEach(r => {
+    if (r.avgCell) r.avgCell.textContent = r.avg !== null ? r.avg : '—';
+    if (r.rankCell) r.rankCell.textContent = rankMap[r.learnerId] || '—';
+  });
+},
+
+/* -- Copy From… modal -------------------------------------------------- */
+_tsOpenCopyFromTerm(currentTerm, terms, learningAreas) {
+  const sources = terms.filter(t => t !== currentTerm);
+  if (!sources.length) {
+    UI.toast('No other term to copy from.', 'info');
+    return;
+  }
+  const m = UI.modal({
+    title: 'Copy Grades From Another Term',
+    body: `
+      <p class="text-sm text-muted mb-12">
+        Copy all manually-entered grades from another term into <strong>${Utils.esc(currentTerm)}</strong> as a starting point. Auto-pulled grades are never overwritten, and existing values in <strong>${Utils.esc(currentTerm)}</strong> will not be replaced unless you tick the box below.
+      </p>
+      <div class="form-group">
+        <label>Source Term</label>
+        <select class="form-control" id="ts-copy-src">
+          ${sources.map(t => `<option value="${Utils.attr(t)}">${Utils.esc(t)}</option>`).join('')}
+        </select>
+      </div>
+      <label class="auth-check"><input type="checkbox" id="ts-copy-overwrite"> Overwrite existing values in the target term</label>
+    `,
+    footer: `<button class="btn btn-outline" data-cancel>Cancel</button>
+             <button class="btn btn-primary" id="ts-copy-go">Copy Grades</button>`
+  });
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+  m.overlay.querySelector('#ts-copy-go').onclick = async () => {
+    const src = m.overlay.querySelector('#ts-copy-src').value;
+    const overwrite = m.overlay.querySelector('#ts-copy-overwrite').checked;
+    const srcIdx = terms.indexOf(src);
+    const srcKey = 'term' + (srcIdx + 1);
+    const dstIdx = terms.indexOf(currentTerm);
+    const dstKey = 'term' + (dstIdx + 1);
+
+    let copied = 0;
+    for (const lid in State.termSummaryRecords) {
+      const rec = State.termSummaryRecords[lid];
+      learningAreas.forEach(area => {
+        const row = rec.subjects[area];
+        if (!row) return;
+        if (row.source === 'auto') return;
+        const v = row[srcKey];
+        if (v === '' || v == null) return;
+        if (!overwrite && row[dstKey] !== '' && row[dstKey] != null) return;
+        row[dstKey] = v;
+        copied++;
+      });
+      rec.updatedAt = new Date().toISOString();
+      try { await DB.put('sf9Records', rec); } catch (e) {}
+    }
+
+    m.close();
+    UI.toast(`Copied ${copied} grade${copied === 1 ? '' : 's'} from ${src}.`, 'success');
+    App.logActivity(`Term Summary: copied grades from ${src} to ${currentTerm}`, 'Grading');
+    // Re-render
+    const root = document.getElementById('content').firstElementChild;
+    if (root) Pages.gradeSummary(root);
+  };
+},
+
+/* -- CSV export -------------------------------------------------------- */
+_tsExportCSV(rowData, areas, term, cls, policy) {
+  const passing = policy.passingGrade || 75;
+  const headers = ['#', 'LRN', 'Learner', 'Sex', ...areas, 'Average', 'Rank', 'Comments'];
+  const rows = [];
+  const rankMap = {};
+  const ranked = rowData.filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
+  let lastAvg = null, lastRank = 0;
+  ranked.forEach((r, i) => {
+    if (r.avg !== lastAvg) { lastRank = i + 1; lastAvg = r.avg; }
+    rankMap[r.learner.id] = lastRank;
+  });
+  rowData.forEach((r, i) => {
+    rows.push({
+      '#': i + 1,
+      LRN: r.learner.lrn || '',
+      Learner: Utils.fullName(r.learner),
+      Sex: r.learner.sex || '',
+      ...Object.fromEntries(areas.map(a => [a, r.grades[a] !== null ? r.grades[a] : ''])),
+      Average: r.avg !== null ? r.avg : '',
+      Rank: rankMap[r.learner.id] || '',
+      Comments: r.comment || ''
+    });
+  });
+  const filename = `term-summary-${cls.gradeLevel.replace(/\s+/g,'')}-${cls.section.replace(/\s+/g,'')}-${term.replace(/\s+/g,'')}.csv`;
+  Utils.download(filename, Utils.toCSV(rows, headers), 'text/csv');
+  App.logActivity(`Term summary exported (${term})`, 'Reports');
+  UI.toast('CSV exported', 'success');
+},
+
+/* -- Print the sheet (landscape) --------------------------------------- */
+_tsPrintSheet(rowData, areas, term, cls, policy) {
+  const school = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const passing = policy.passingGrade || 75;
+
+  // Compose rows in male-then-female order
+  const split = (sex) => rowData.filter(r => Utils.normalizeSex(r.learner.sex) === sex);
+  const males = split('Male'), females = split('Female');
+  const others = rowData.filter(r => {
+    const n = Utils.normalizeSex(r.learner.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+
+  const rankMap = {};
+  const ranked = rowData.filter(r => r.avg !== null).sort((a, b) => b.avg - a.avg);
+  let lastAvg = null, lastRank = 0;
+  ranked.forEach((r, i) => {
+    if (r.avg !== lastAvg) { lastRank = i + 1; lastAvg = r.avg; }
+    rankMap[r.learner.id] = lastRank;
+  });
+
+  const rowHTML = (r, i) => `
+    <tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td style="text-align:left;white-space:nowrap;">${Utils.esc(Utils.lastNameFirst(r.learner))}</td>
+      ${areas.map(a => {
+        const g = r.grades[a];
+        const isFail = g !== null && g < passing;
+        return `<td style="text-align:center;${isFail ? 'color:#c00;font-weight:700;' : ''}">${g !== null ? g : ''}</td>`;
+      }).join('')}
+      <td style="text-align:center;font-weight:800;background:#fde68a;">${r.avg !== null ? r.avg : ''}</td>
+      <td style="text-align:center;">${rankMap[r.learner.id] || ''}</td>
+      <td style="text-align:left;font-size:8pt;">${Utils.esc(r.comment || '')}</td>
+    </tr>`;
+
+  const sexHeader = (label, count) => `
+    <tr><td colspan="${areas.length + 5}" style="background:#dbe7fb;font-weight:800;text-align:left;padding:4px 8px;letter-spacing:1px;font-size:8pt;color:#0038A8;">${Utils.esc(label)} · ${count}</td></tr>`;
+
+  // Column averages
+  const colAvgs = areas.map(a => {
+    const vals = rowData.map(r => r.grades[a]).filter(v => v !== null);
+    return vals.length ? Math.round(vals.reduce((x, y) => x + y, 0) / vals.length) : '';
+  });
+  const classAvgVals = rowData.map(r => r.avg).filter(v => v !== null);
+  const classAvg = classAvgVals.length ? Math.round(classAvgVals.reduce((a, b) => a + b, 0) / classAvgVals.length) : '';
+
+  document.getElementById('print-area').innerHTML = `
+    <div style="font-family:Arial,sans-serif;color:#000;">
+      <div class="print-logo-header">
+        <div class="print-logo-spacer"></div>
+        <div class="print-logo-header-text">
+          <div style="font-weight:700;font-size:11pt;">${Utils.esc(school.name || '')}</div>
+          <div style="font-size:9pt;">${Utils.esc(school.address || '')}</div>
+          <div style="font-weight:800;font-size:12pt;margin-top:6px;text-transform:uppercase;">${Utils.esc(term)} Summary Sheet</div>
+          <div style="font-size:9pt;">${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</div>
+        </div>
+        <div class="print-logo-spacer"></div>
+      </div>
+      <table style="font-size:8.5pt;border-collapse:collapse;width:100%;margin-top:8px;">
+        <thead>
+          <tr style="background:#0038A8;color:#fff;">
+            <th style="border:1px solid #000;padding:3px;width:24px;">#</th>
+            <th style="border:1px solid #000;padding:3px;text-align:left;">Learners</th>
+            ${areas.map(a => `<th style="border:1px solid #000;padding:3px;">${Utils.esc(Pages._tsShortLabel(a))}</th>`).join('')}
+            <th style="border:1px solid #000;padding:3px;background:#F7C948;color:#000;">Avg</th>
+            <th style="border:1px solid #000;padding:3px;">Rank</th>
+            <th style="border:1px solid #000;padding:3px;text-align:left;">Teacher's Comments / Remarks (for SF9)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${males.length ? sexHeader('Male', males.length) + males.map(rowHTML).join('') : ''}
+          ${females.length ? sexHeader('Female', females.length) + females.map(rowHTML).join('') : ''}
+          ${others.length ? sexHeader('Unrecorded', others.length) + others.map(rowHTML).join('') : ''}
+        </tbody>
+        <tfoot>
+          <tr style="background:#eef3fa;font-weight:700;">
+            <td colspan="2" style="border:1px solid #000;padding:3px;text-align:right;">Column Average</td>
+            ${colAvgs.map(v => `<td style="border:1px solid #000;padding:3px;text-align:center;">${v}</td>`).join('')}
+            <td style="border:1px solid #000;padding:3px;text-align:center;background:#F7C948;">${classAvg}</td>
+            <td style="border:1px solid #000;padding:3px;"></td>
+            <td style="border:1px solid #000;padding:3px;font-size:7pt;">Passing grade: ${passing}. Red values are below passing.</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="margin-top:14px;font-size:9pt;display:flex;justify-content:space-between;">
+        <div>Prepared by: <strong>${Utils.esc(teacher.fullName || cls.adviser || '')}</strong></div>
+        <div>Generated by KlazAssist · ${Utils.formatDate(Utils.todayISO())}</div>
+      </div>
+    </div>`;
+
+  // Landscape for the wide table
+  const styleId = 'ts-print-page';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = '@page { size: A4 landscape; margin: 0.6cm; }';
+  document.head.appendChild(st);
+
+  App.logActivity(`Term Summary Sheet printed (${term})`, 'Reports');
+  window.print();
+  setTimeout(() => {
+    document.getElementById('print-area').innerHTML = '';
+    const s = document.getElementById(styleId);
+    if (s) s.remove();
+  }, 800);
+},
+
+/* ─── Grade Summary: print the class-wide table ─── */
+printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, selectedSubject) {
+  const cls = State.activeClass;
+  if (!cls) return;
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const passing = policy.passingGrade || 75;
+
+  if (!subjects) {
+    // Called without arguments (fallback path) — re-derive from state
+    subjects = [cls];
+    terms = policy ? (policy.terms || ['Term 1','Term 2','Term 3']) : ['Term 1','Term 2','Term 3'];
+    matrixBySubject = {};
+    gwaByLearner = {};
+    view = 'bySubject';
+    selectedSubject = cls;
+  }
+
+  const isAllSubjects = view === 'allSubjects';
+  const headerHTML = isAllSubjects
+    ? `<tr><th>#</th><th>Learner</th>${subjects.map(s => `<th style="text-align:center;">${Utils.esc((s.subject || 'Untitled').slice(0, 20))}</th>`).join('')}<th style="text-align:center;">GWA</th><th>Descriptor</th><th style="text-align:center;">Remarks</th></tr>`
+    : `<tr><th>#</th><th>Learner</th>${terms.map(t => `<th style="text-align:center;">${Utils.esc(t)}</th>`).join('')}<th style="text-align:center;">Final Grade</th><th>Descriptor</th><th style="text-align:center;">Remarks</th></tr>`;
+
+  const rowsHTML = State.learners.map((l, i) => {
+    if (isAllSubjects) {
+      const cells = subjects.map(s => {
+        const r = matrixBySubject[s.id][l.id];
+        const f = r ? r.final : null;
+        return `<td style="text-align:center;">${f !== null ? f : ''}</td>`;
+      }).join('');
+      const gwa = gwaByLearner[l.id];
+      const desc = gwa !== null ? GradingEngine.getDescriptor(gwa, policy).label : '';
+      const rem = gwa === null ? '' : (gwa >= passing ? 'Passed' : 'Failed');
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        ${cells}
+        <td style="text-align:center;font-weight:700;">${gwa ?? ''}</td>
+        <td>${Utils.esc(desc)}</td>
+        <td style="text-align:center;">${Utils.esc(rem)}</td>
+      </tr>`;
+    } else {
+      const r = matrixBySubject[selectedSubject.id][l.id] || {};
+      const termCells = terms.map(t => {
+        const v = r.terms ? r.terms[t] : null;
+        return `<td style="text-align:center;">${v !== null && v !== undefined ? v : ''}</td>`;
+      }).join('');
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        ${termCells}
+        <td style="text-align:center;font-weight:700;">${r.final ?? ''}</td>
+        <td>${Utils.esc(r.descriptor?.label || '')}</td>
+        <td style="text-align:center;">${Utils.esc(r.remarks || '')}</td>
+      </tr>`;
+    }
+  }).join('');
+
+  // Column averages footer
+  let footerHTML = '';
+  if (isAllSubjects) {
+    const gwaValues = Object.values(gwaByLearner).filter(v => v !== null);
+    const avgGWA = gwaValues.length ? Utils.round(Utils.avg(gwaValues), 1) : null;
+    footerHTML = `<tr style="background:#eef3fa;font-weight:700;">
+      <td colspan="2" style="text-align:right;">Class Average</td>
+      ${subjects.map(s => {
+        const vals = Object.values(matrixBySubject[s.id]).map(r => r.final).filter(v => v !== null);
+        return `<td style="text-align:center;">${vals.length ? Utils.round(Utils.avg(vals), 1) : ''}</td>`;
+      }).join('')}
+      <td style="text-align:center;">${avgGWA ?? ''}</td>
+      <td></td><td></td>
+    </tr>`;
+  } else {
+    const m = matrixBySubject[selectedSubject.id];
+    const allFinals = Object.values(m).map(r => r.final).filter(v => v !== null);
+    const classAvg = allFinals.length ? Utils.round(Utils.avg(allFinals), 1) : null;
+    footerHTML = `<tr style="background:#eef3fa;font-weight:700;">
+      <td colspan="2" style="text-align:right;">Class Average</td>
+      ${terms.map(t => {
+        const vals = Object.values(m).map(r => r.terms?.[t]).filter(v => v !== null && v !== undefined);
+        return `<td style="text-align:center;">${vals.length ? Utils.round(Utils.avg(vals), 1) : ''}</td>`;
+      }).join('')}
+      <td style="text-align:center;">${classAvg ?? ''}</td>
+      <td></td><td></td>
+    </tr>`;
+  }
+
+  const titleLine = isAllSubjects
+    ? `GRADE SUMMARY · ALL SUBJECTS`
+    : `GRADE SUMMARY · ${(selectedSubject.subject || '').toUpperCase()}`;
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-header">
+      <h1>${Utils.esc(school.name || '')}</h1>
+      <p>${Utils.esc(school.address || '')} · School ID: ${Utils.esc(school.schoolId || '—')}</p>
+      <div class="print-line"></div>
+      <h2 style="font-size:13pt;">${Utils.esc(titleLine)}</h2>
+    </div>
+    <div class="print-meta">
+      <span>Teacher: ${Utils.esc(teacher.fullName || '—')}</span>
+      <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+      <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+      <span>${Utils.formatDate(Utils.todayISO())}</span>
+    </div>
+    <table>
+      <thead>${headerHTML}</thead>
+      <tbody>${rowsHTML}</tbody>
+      <tfoot>${footerHTML}</tfoot>
+    </table>
+    <div class="print-footer">
+      <span>Passing grade: ${passing}</span>
+      <span>Generated by KlazAssist · Not an official DepEd system</span>
+    </div>`;
+
+  App.logActivity('Grade summary printed (' + (isAllSubjects ? 'all subjects' : (selectedSubject.subject || 'subject')) + ')', 'Reports');
+  window.print();
+  setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 800);
+},
   printGradeSummary() {
     if (!State.activeClass) return;
     const school = State.schools[0] || {};
@@ -21404,8 +23671,16 @@ async noiseMeter(root) {
           <tr><td colspan="2"><strong>Late Enrollment</strong></td><td colspan="2">Data required</td><td colspan="2"><strong>Learners Absent 5+ Consecutive Days</strong>: Data required</td></tr>
         </table>
         <div class="sf2-sign">
-          <div><div class="line">${Utils.esc(cls.adviser || teacher.fullName || 'Adviser')}<br><span style="font-size:8pt;">Teacher / Adviser</span></div></div>
-          <div><div class="line">${req(school.schoolHead)}<br><span style="font-size:8pt;">School Head</span></div></div>
+          <div>
+            <div style="font-weight:700;font-size:9pt;min-height:3.5mm;">${Utils.esc(cls.adviser || teacher.fullName || '')}</div>
+            <div class="line"></div>
+            <span style="font-size:8pt;">Teacher / Adviser</span>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:9pt;min-height:3.5mm;">${Utils.esc(school.schoolHead || '')}</div>
+            <div class="line"></div>
+            <span style="font-size:8pt;">School Head</span>
+          </div>
         </div>
         <div class="print-footer" style="margin-top:16px;"><span>Generated by KlazAssist — not an official DepEd system. Verify before submission.</span><span>${Utils.formatDate(Utils.todayISO())}</span></div>
       </div>`;
@@ -21414,43 +23689,810 @@ async noiseMeter(root) {
     window.print();
   },
 
+  /* ============================================================================
+     SF9 — Learner's Performance Report Card (SY 2026-2027)
+     Interactive editor: dropdown learner selector, auto-populated grades from
+     the Gradebook where the teacher handles the subject, manual entry elsewhere.
+     ============================================================================ */
   async sf9(root) {
     const cls = State.activeClass;
-    if (!cls) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'file', title:'No class selected', message:'Create or select a class first.'})}</div>`; return; }
-    const policy = GRADING_POLICIES[cls.gradingPolicyVersion] || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
-    const learners = State.learners;
+    if (!cls) {
+      root.innerHTML = `<div class="card">${UI.emptyState({
+        icon:'file', title:'No class selected',
+        message:'Create or select a class first.',
+        actionLabel:'+ Create Class', actionFn:'App.openClassForm()'
+      })}</div>`;
+      return;
+    }
+    if (!State.learners.length) {
+      root.innerHTML = `<div class="card">${UI.emptyState({
+        icon:'users', title:'No learners in this class',
+        message:'Add learners before preparing SF9 report cards.',
+        actionLabel:'+ Add Learner', actionFn:'App.openLearnerForm()'
+      })}</div>`;
+      return;
+    }
+
+    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+                || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+    const band = resolveSf9Band(cls.gradeLevel);
+    const learningAreas = SF9_LEARNING_AREAS[band];
+
+    // Which selected learner?
+    const selectedId = State._sf9LearnerId && State.learners.some(l => l.id === State._sf9LearnerId)
+      ? State._sf9LearnerId
+      : State.learners[0].id;
+    State._sf9LearnerId = selectedId;
+
     root.innerHTML = `
-      <div class="page-head"><div><h2>SF9 — Learner's Performance Report (Report Card)</h2><p>Generated from finalized/current grades and attendance</p></div></div>
-      <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this is a functional, DepEd-labeled rendering built from your data — KlazAssist could not verify exact official SF9 template geometry (per grade-level variant) against a live source. Verify against your school/division's current SF9 template before releasing to parents/learners.</div></div>
-      <div class="card mb-16">
-        <div class="form-row">
-          <div class="form-group"><label>Class</label>
-            <select class="form-control" id="sf9-class">${State.classes.map(c => `<option value="${Utils.attr(c.id)}" ${c.id===cls.id?'selected':''}>${Utils.esc(c.gradeLevel)} - ${Utils.esc(c.section)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>Reporting Period</label>
-            <select class="form-control" id="sf9-term">
-              ${policy.terms.map(t => `<option value="${Utils.attr(t)}">${Utils.esc(t)}</option>`).join('')}
-              <option value="FINAL">Final Grade (average of finalized terms)</option>
-            </select></div>
+      <div class="page-head">
+        <div>
+          <h2>SF9 — Learner's Performance Report</h2>
+          <p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
         </div>
-        <div class="form-group"><label>Learners</label>
-          <div class="flex gap-8 mb-8"><button class="btn btn-sm btn-outline" id="sf9-all">Select All</button><button class="btn btn-sm btn-outline" id="sf9-none">Select None</button></div>
-          <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;">
-            ${learners.map(l => `<label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><input type="checkbox" class="sf9-learner-check" value="${Utils.attr(l.id)}" checked> ${Utils.esc(Utils.fullName(l))} <span class="text-xs text-muted">LRN ${Utils.esc(l.lrn||'—')}</span></label>`).join('')}
-          </div>
-        </div>
-        <div class="flex gap-8" style="flex-wrap:wrap;">
-          <button class="btn btn-primary" id="sf9-generate">${icon('check')} Validate &amp; Preview</button>
+        <div class="page-actions">
+          <select class="form-control" id="sf9-print-mode" style="max-width:220px;"
+                  title="Choose print layout">
+            <option value="a5">A5 · Back-to-back (per-learner booklet)</option>
+            <option value="a4">A4 · Landscape (both pages side-by-side)</option>
+          </select>
+          <button class="btn btn-outline" id="sf9-load-grades">${icon('chart')} Pull from Gradebook</button>
+          <button class="btn btn-primary" id="sf9-print">${icon('printer')} Print / Save as PDF</button>
         </div>
       </div>
-      <div id="sf9-preview"></div>`;
-    root.querySelector('#sf9-all').onclick = () => root.querySelectorAll('.sf9-learner-check').forEach(c => c.checked = true);
-    root.querySelector('#sf9-none').onclick = () => root.querySelectorAll('.sf9-learner-check').forEach(c => c.checked = false);
-    root.querySelector('#sf9-generate').onclick = () => this.generateSF9Preview(
-      root.querySelector('#sf9-class').value,
-      root.querySelector('#sf9-term').value,
-      Array.from(root.querySelectorAll('.sf9-learner-check:checked')).map(c => c.value)
-    );
+
+      <div class="alert alert-info mb-16">${icon('info')}<div>
+        Grades are auto-pulled from the Gradebook for the subjects <strong>you handle</strong> in this class. For subjects handled by other teachers, enter the term grades manually. Final Grade and General Average compute automatically.
+      </div></div>
+
+      <div class="card mb-16">
+        <div class="form-row">
+          <div class="form-group" style="flex:2;">
+            <label>Select a Learner</label>
+            <select class="form-control" id="sf9-learner-select">
+              ${State.learners.map(l => `
+                <option value="${Utils.attr(l.id)}" ${l.id === selectedId ? 'selected' : ''}>
+                  ${Utils.esc(Utils.lastNameFirst(l))} — LRN ${Utils.esc(l.lrn || '—')}
+                </option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" style="flex:1;">
+            <label>Learning-Area Set</label>
+            <input class="form-control" value="${Utils.attr(band)}" readonly
+                   style="background:var(--bg);cursor:not-allowed;" title="Determined by the class grade level">
+          </div>
+        </div>
+      </div>
+
+      <div id="sf9-editor-container"></div>
+    `;
+
+    root.querySelector('#sf9-learner-select').onchange = (e) => {
+      State._sf9LearnerId = e.target.value;
+      Pages._renderSf9Editor();
+    };
+    root.querySelector('#sf9-load-grades').onclick = () => Pages._sf9PullFromGradebook();
+    root.querySelector('#sf9-print').onclick = () => Pages._sf9PrintCurrent();
+
+    const modeSel = root.querySelector('#sf9-print-mode');
+    if (modeSel) {
+      modeSel.value = State._sf9PrintMode || 'a5';
+      modeSel.onchange = (e) => { State._sf9PrintMode = e.target.value; };
+    }
+
+    await Pages._renderSf9Editor();
   },
+
+  /* ---------- Internal helper: render the SF9 editor for the selected learner ---------- */
+  async _renderSf9Editor() {
+    const container = document.getElementById('sf9-editor-container');
+    if (!container) return;
+
+    const cls = State.activeClass;
+    const learnerId = State._sf9LearnerId;
+    const learner = State.learners.find(l => l.id === learnerId);
+    if (!learner) { container.innerHTML = ''; return; }
+
+    container.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);">Loading SF9 for ${Utils.esc(Utils.fullName(learner))}…</div>`;
+
+    const schoolYear = cls.schoolYear || State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
+    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+                || GradingEngine.resolvePolicy({ schoolYear });
+    const band = resolveSf9Band(cls.gradeLevel);
+    const learningAreas = SF9_LEARNING_AREAS[band];
+
+    // Load (or initialize) the SF9 record
+    const recId = `sf9-${cls.id}-${learnerId}-${schoolYear}`;
+    let rec = await DB.get('sf9Records', recId);
+    if (!rec) {
+      rec = {
+        id: recId,
+        classId: cls.id,
+        learnerId: learner.id,
+        schoolYear,
+        subjects: {},
+        coreValues: {
+          'Maka-Diyos':        { term1: '', term2: '', term3: '' },
+          'Makatao':           { term1: '', term2: '', term3: '' },
+          'Makakalikasan':     { term1: '', term2: '', term3: '' },
+          'Makabansa':         { term1: '', term2: '', term3: '' }
+        },
+        teacherComments: { term1: '', term2: '', term3: '' },
+        transfer: {
+          admittedToGrade: '', eligibleFor: '', approved: '',
+          cancelledDate: '', cancelledBy: ''
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await DB.put('sf9Records', rec);
+    }
+
+    // Ensure every learning area has a row object
+    learningAreas.forEach(area => {
+      if (!rec.subjects[area]) {
+        rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
+      }
+    });
+
+    // Load finalized termGrades for this learner so we can auto-lock handled subjects
+    const allTermGrades = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
+    const handledSubjects = new Set(State.classes.filter(c => c.schoolYear === schoolYear).map(c => (c.subject || '').trim()));
+    const autoGradeMap = {};   // subject → { term1, term2, term3 }
+
+    learningAreas.forEach(area => {
+      if (!handledSubjects.has(area)) return;
+      const t1 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[0] && g.status === 'finalized');
+      const t2 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[1] && g.status === 'finalized');
+      const t3 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[2] && g.status === 'finalized');
+      if (t1 || t2 || t3) {
+        autoGradeMap[area] = {
+          term1: t1 ? t1.reportedGrade : '',
+          term2: t2 ? t2.reportedGrade : '',
+          term3: t3 ? t3.reportedGrade : ''
+        };
+      }
+    });
+
+    // Compute per-subject finals and the GWA
+    const rowState = {};
+    learningAreas.forEach(area => {
+      const manual = rec.subjects[area];
+      const auto = autoGradeMap[area];
+      const t1 = auto ? auto.term1 : manual.term1;
+      const t2 = auto ? auto.term2 : manual.term2;
+      const t3 = auto ? auto.term3 : manual.term3;
+      const isAuto = !!auto;
+      const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
+      const remarks = GradingEngine.getSubjectRemarks(final, policy.passingGrade);
+      rowState[area] = { t1, t2, t3, final, remarks, isAuto };
+    });
+    const generalAverage = GradingEngine.calculateGeneralAverageFromFinals(
+      Object.values(rowState).map(r => r.final)
+    );
+
+    // Auto-compute attendance from the Attendance module
+    const allAtt = (await DB.getAll('attendance')).filter(a => a.learnerId === learner.id && a.classId === cls.id);
+
+    const months = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr'];
+    const monthMap = ['06','07','08','09','10','11','12','01','02','03','04'];
+    const attendanceRows = months.map((m, i) => {
+      const prefix = `${schoolYear.split('-')[0]}-${monthMap[i]}`;
+      const inMonth = allAtt.filter(a => (a.date || '').startsWith(prefix));
+      return {
+        month: m,
+        open: inMonth.length,
+        present: inMonth.filter(a => a.status === 'Present' || a.status === 'Late' || a.status === 'Excused').length,
+        absent: inMonth.filter(a => a.status === 'Absent').length
+      };
+    });
+    const attTotals = attendanceRows.reduce((acc, r) => ({
+      open: acc.open + r.open,
+      present: acc.present + r.present,
+      absent: acc.absent + r.absent
+    }), { open: 0, present: 0, absent: 0 });
+
+    /* ---------------- Render ---------------- */
+    container.innerHTML = `
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3>${Utils.esc(Utils.fullName(learner))}</h3>
+          <span class="text-sm text-muted">
+            LRN ${Utils.esc(learner.lrn || '—')} · ${Utils.esc(learner.sex || '—')} · Age ${Utils.calcAge(learner.birthDate) || '—'}
+          </span>
+        </div>
+        <p class="text-xs text-muted">
+          Auto-locked rows come from your finalized Gradebook terms. Editable rows are for subjects handled by other teachers.
+        </p>
+      </div>
+
+      <div class="card mb-16">
+        <div class="card-head"><h3>Learning Progress and Achievement</h3></div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12px;">
+            <thead><tr>
+              <th style="min-width:220px;">Learning Areas</th>
+              <th style="width:80px;text-align:center;">Term 1</th>
+              <th style="width:80px;text-align:center;">Term 2</th>
+              <th style="width:80px;text-align:center;">Term 3</th>
+              <th style="width:90px;text-align:center;">Final Grade</th>
+              <th style="width:100px;text-align:center;">Remarks</th>
+            </tr></thead>
+            <tbody>
+              ${learningAreas.map(area => {
+                const r = rowState[area];
+                const lock = r.isAuto ? 'readonly style="background:var(--bg);cursor:not-allowed;text-align:center;"' : 'style="text-align:center;"';
+                return `<tr>
+                  <td><strong>${Utils.esc(area)}</strong>${r.isAuto ? ' <span class="badge badge-blue" style="font-size:9px;">auto</span>' : ''}</td>
+                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="1" value="${Utils.attr(r.t1)}" ${lock}></td>
+                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="2" value="${Utils.attr(r.t2)}" ${lock}></td>
+                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="3" value="${Utils.attr(r.t3)}" ${lock}></td>
+                  <td style="text-align:center;"><strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? r.final : '—'}</strong></td>
+                  <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">${r.remarks || '—'}</td>
+                </tr>`;
+              }).join('')}
+              <tr style="background:var(--light-blue);">
+                <td colspan="4" style="text-align:right;"><strong>General Average</strong></td>
+                <td style="text-align:center;"><strong id="sf9-gwa">${generalAverage !== null ? generalAverage : '—'}</strong></td>
+                <td style="text-align:center;" id="sf9-gwa-remarks">${GradingEngine.getSubjectRemarks(generalAverage, policy.passingGrade) || '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid grid-2 mb-16">
+        <div class="card">
+          <div class="card-head"><h3>Attendance Record</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" style="font-size:11px;">
+              <thead><tr>
+                <th>Month</th>${attendanceRows.map(r => `<th style="text-align:center;">${r.month}</th>`).join('')}<th style="text-align:center;">TOTAL</th>
+              </tr></thead>
+              <tbody>
+                <tr><td>No. of Class Days</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.open}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.open}</strong></td></tr>
+                <tr><td>No. of Days Present</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.present}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.present}</strong></td></tr>
+                <tr><td>No. of Days Absent</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.absent}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.absent}</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Core Values (per Term)</h3></div>
+          <p class="text-xs text-muted mb-12">Marking: <strong>AO</strong> = Always Observed · <strong>SO</strong> = Sometimes Observed · <strong>RO</strong> = Rarely Observed · <strong>NO</strong> = Not Observed</p>
+          <div class="table-wrap">
+            <table class="data-table" style="font-size:12px;">
+              <thead><tr><th>Core Value</th><th style="text-align:center;">Term 1</th><th style="text-align:center;">Term 2</th><th style="text-align:center;">Term 3</th></tr></thead>
+              <tbody>
+                ${Object.keys(rec.coreValues).map(cv => `
+                  <tr><td><strong>${Utils.esc(cv)}</strong></td>
+                    ${['term1','term2','term3'].map(t => `
+                      <td><select class="form-control sf9-cv-input" data-cv="${Utils.attr(cv)}" data-term="${t}" style="min-width:70px;text-align:center;">
+                        <option value=""></option>
+                        ${['AO','SO','RO','NO'].map(v => `<option value="${v}" ${rec.coreValues[cv][t] === v ? 'selected' : ''}>${v}</option>`).join('')}
+                      </select></td>`).join('')}
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-16">
+        <div class="card-head"><h3>Teacher's Comments / Remarks</h3></div>
+        <div class="form-group"><label>Term 1</label>
+          <textarea class="form-control" id="sf9-comment-1" rows="2" placeholder="e.g. A consistent and engaged learner.">${Utils.esc(rec.teacherComments.term1)}</textarea></div>
+        <div class="form-group"><label>Term 2</label>
+          <textarea class="form-control" id="sf9-comment-2" rows="2">${Utils.esc(rec.teacherComments.term2)}</textarea></div>
+        <div class="form-group"><label>Term 3</label>
+          <textarea class="form-control" id="sf9-comment-3" rows="2">${Utils.esc(rec.teacherComments.term3)}</textarea></div>
+      </div>
+
+      <details class="card mb-16">
+        <summary style="cursor:pointer;font-weight:700;font-size:14px;padding:6px 0;">Certificate of Transfer (optional)</summary>
+        <div class="mt-12">
+          <div class="form-row">
+            <div class="form-group"><label>Admitted to Grade</label><input class="form-control" id="sf9-tx-admitted" value="${Utils.attr(rec.transfer.admittedToGrade)}"></div>
+            <div class="form-group"><label>Eligible for Admission to Grade</label><input class="form-control" id="sf9-tx-eligible" value="${Utils.attr(rec.transfer.eligibleFor)}"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Approved</label><input class="form-control" id="sf9-tx-approved" value="${Utils.attr(rec.transfer.approved)}"></div>
+            <div class="form-group"><label>Cancellation Date</label><input type="date" class="form-control" id="sf9-tx-cancel-date" value="${Utils.attr(rec.transfer.cancelledDate)}"></div>
+          </div>
+          <div class="form-group"><label>Cancelled By</label><input class="form-control" id="sf9-tx-cancel-by" value="${Utils.attr(rec.transfer.cancelledBy)}"></div>
+        </div>
+      </details>
+
+      <div class="card">
+        <div class="flex gap-8" style="justify-content:flex-end;">
+          <button class="btn btn-outline" id="sf9-reset">Reset Form</button>
+          <button class="btn btn-primary btn-lg" id="sf9-save">${icon('save')} Save SF9</button>
+        </div>
+      </div>
+    `;
+
+    /* ---------- Live grade recomputation ---------- */
+    container.querySelectorAll('.sf9-input').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const area = inp.dataset.area;
+        const all = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
+        const t1 = all[0].value, t2 = all[1].value, t3 = all[2].value;
+        const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
+        const remarks = GradingEngine.getSubjectRemarks(final, policy.passingGrade);
+        const finalEl = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
+        const remEl   = container.querySelector(`.sf9-remarks[data-area="${CSS.escape(area)}"]`);
+        if (finalEl) finalEl.textContent = final !== null ? final : '—';
+        if (remEl)   remEl.textContent = remarks || '—';
+        Pages._recomputeSf9Gwa(container, learningAreas, policy);
+      });
+    });
+
+    /* ---------- Bind Save ---------- */
+    container.querySelector('#sf9-save').onclick = async () => {
+      rec.subjects = rec.subjects || {};
+      learningAreas.forEach(area => {
+        const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
+        const manual = rec.subjects[area] || { source: 'manual' };
+        if (!manual.source || manual.source !== 'auto') {
+          manual.term1 = inputs[0].value;
+          manual.term2 = inputs[1].value;
+          manual.term3 = inputs[2].value;
+          manual.source = manual.source || 'manual';
+        }
+        rec.subjects[area] = manual;
+      });
+      Object.keys(rec.coreValues).forEach(cv => {
+        ['term1','term2','term3'].forEach(t => {
+          const el = container.querySelector(`.sf9-cv-input[data-cv="${CSS.escape(cv)}"][data-term="${t}"]`);
+          if (el) rec.coreValues[cv][t] = el.value;
+        });
+      });
+      rec.teacherComments = {
+        term1: container.querySelector('#sf9-comment-1').value,
+        term2: container.querySelector('#sf9-comment-2').value,
+        term3: container.querySelector('#sf9-comment-3').value
+      };
+      rec.transfer = {
+        admittedToGrade: container.querySelector('#sf9-tx-admitted').value,
+        eligibleFor:     container.querySelector('#sf9-tx-eligible').value,
+        approved:        container.querySelector('#sf9-tx-approved').value,
+        cancelledDate:   container.querySelector('#sf9-tx-cancel-date').value,
+        cancelledBy:     container.querySelector('#sf9-tx-cancel-by').value
+      };
+      rec.updatedAt = new Date().toISOString();
+      await DB.put('sf9Records', rec);
+      App.logActivity('SF9 saved for ' + Utils.fullName(learner), 'Reports');
+      UI.toast('SF9 saved', 'success');
+    };
+
+    /* ---------- Reset ---------- */
+    container.querySelector('#sf9-reset').onclick = async () => {
+      UI.confirm({
+        title: 'Reset SF9?',
+        message: 'Clear all manual entries for this learner? Auto-pulled grades are unaffected.',
+        confirmText: 'Reset', confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          learningAreas.forEach(area => {
+            rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
+          });
+          Object.keys(rec.coreValues).forEach(cv => {
+            rec.coreValues[cv] = { term1: '', term2: '', term3: '' };
+          });
+          rec.teacherComments = { term1: '', term2: '', term3: '' };
+          rec.updatedAt = new Date().toISOString();
+          await DB.put('sf9Records', rec);
+          await Pages._renderSf9Editor();
+        }
+      });
+    };
+
+    // Stash computed state so the print method can reuse it
+    State._sf9LastRender = { rec, rowState, generalAverage, attendanceRows, attTotals, learningAreas, policy, band };
+  },
+
+  /* ---------- Recompute the GWA live as the teacher types ---------- */
+  _recomputeSf9Gwa(container, learningAreas, policy) {
+    const finals = learningAreas.map(area => {
+      const el = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
+      const v = el ? Number(el.textContent) : NaN;
+      return isNaN(v) ? null : v;
+    }).filter(n => n !== null);
+    const gwa = GradingEngine.calculateGeneralAverageFromFinals(finals);
+    const gwaEl = container.querySelector('#sf9-gwa');
+    const gwaRem = container.querySelector('#sf9-gwa-remarks');
+    if (gwaEl) gwaEl.textContent = gwa !== null ? gwa : '—';
+    if (gwaRem) gwaRem.textContent = GradingEngine.getSubjectRemarks(gwa, policy.passingGrade) || '—';
+  },
+
+  /* ---------- Pull the latest finalized term grades for this learner ---------- */
+  async _sf9PullFromGradebook() {
+    const cls = State.activeClass;
+    const learner = State.learners.find(l => l.id === State._sf9LearnerId);
+    if (!cls || !learner) return;
+
+    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+                || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+    const tg = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
+    const finalizedCount = tg.filter(g => g.status === 'finalized').length;
+    UI.toast(`Found ${finalizedCount} finalized term grade${finalizedCount === 1 ? '' : 's'} in the Gradebook.`, 'info', 3500);
+    await Pages._renderSf9Editor();
+  },
+
+  /* ============================================================================
+     SF9 — PIXEL-PERFECT PRINT RENDERER
+     Produces the official DepEd SF9 layout in Bookman Old Style.
+     Supports A5 back-to-back (default) and A4 landscape (both pages side-by-side).
+     ============================================================================ */
+  async _sf9PrintCurrent() {
+    const cls = State.activeClass;
+    const learner = State.learners.find(l => l.id === State._sf9LearnerId);
+    if (!cls || !learner) { UI.toast('No learner selected.', 'warning'); return; }
+
+    const last = State._sf9LastRender;
+    if (!last) { UI.toast('Editor not ready yet.', 'warning'); return; }
+
+    const school = State.schools[0] || {};
+    const teacher = State.currentUser || {};
+    const { rec, rowState, generalAverage, attendanceRows, attTotals, learningAreas, policy } = last;
+    const mode = State._sf9PrintMode || 'a5';
+
+    // Inject the correct @page geometry for this print run. This is far more
+    // reliable than named-page CSS, which browsers handle inconsistently.
+    const priorPageStyle = document.getElementById('sf9-page-geometry');
+    if (priorPageStyle) priorPageStyle.remove();
+    const pageGeom = document.createElement('style');
+    pageGeom.id = 'sf9-page-geometry';
+    pageGeom.media = 'print';
+    pageGeom.textContent = (mode === 'a4')
+      ? '@page { size: A4 landscape; margin: 0; }'
+      : '@page { size: 148mm 210mm; margin: 0; }';
+    document.head.appendChild(pageGeom);
+
+    // ── Escape helper ──
+    const esc = Utils.esc;
+    const req = (v) => v && String(v).trim() ? esc(v) : '';
+
+    // ── Grade cell renderer ──
+    const cell = (v) => (v !== '' && v !== null && v !== undefined) ? esc(v) : '';
+
+    // ── Learning-area rows with MAPEH children indented ──
+    const MAPEH_CHILDREN = ['Music and Arts', 'Physical Education and Health'];
+    const gradeRowsHTML = learningAreas.map(area => {
+      const r = rowState[area];
+      const isChild = MAPEH_CHILDREN.includes(area);
+      const isParent = area === 'MAPEH';
+      const cls2 = isChild ? 'sf9-subject sf9-subject-child'
+                : isParent ? 'sf9-subject sf9-subject-parent'
+                : 'sf9-subject';
+      const finalVal = r.final !== null ? r.final : '';
+      return `<tr>
+        <td class="${cls2}">${esc(area)}</td>
+        <td>${cell(r.t1)}</td>
+        <td>${cell(r.t2)}</td>
+        <td>${cell(r.t3)}</td>
+        <td>${cell(finalVal)}</td>
+        <td>${esc(r.remarks || '')}</td>
+      </tr>`;
+    }).join('');
+
+    // ── Attendance rows ──
+    const attMonths = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr'];
+    const attHeaderHTML = attMonths.map(m =>
+      `<th class="sf9-att-month">${m}</th>`).join('');
+    const attRowHTML = (label, key) =>
+      `<tr>
+        <td class="sf9-att-label">${label}</td>
+        ${attendanceRows.map(r => `<td>${r[key] || ''}</td>`).join('')}
+        <td class="sf9-att-total">${attTotals[key] || ''}</td>
+      </tr>`;
+
+    // ── Performance descriptors (fixed DepEd table) ──
+    const descriptors = [
+      ['90 - 100', 'Advancing', 'Passed'],
+      ['80 - 89',  'Benchmarking', 'Passed'],
+      ['75 - 79',  'Connecting', 'Passed'],
+      ['65 - 74',  'Developing', 'Failed'],
+      ['0 - 64',   'Emerging', 'Failed']
+    ];
+    const descriptorsHTML = descriptors.map(d =>
+      `<tr><td>${esc(d[0])}</td><td>${esc(d[1])}</td><td>${esc(d[2])}</td></tr>`
+    ).join('');
+
+    // ── Logos ──
+    // Left logo: user-uploaded DepEd seal, falling back to the bundled PNG.
+    const leftLogo  = school.depedSeal || DEPED_SEAL_PATH;
+    // Right logo: school logo, falling back to the division logo.
+    const rightLogo = school.schoolLogo || school.divisionLogo || '';
+
+    // ── Learner info values (print shows name as text, not dropdown) ──
+    const learnerName = Utils.fullName(learner);
+    const learnerLrn  = learner.lrn || '';
+    const learnerAge  = Utils.calcAge(learner.birthDate) || '';
+    const learnerSex  = learner.sex || '';
+    const gradeLevel  = cls.gradeLevel || '';
+    const section     = cls.section || '';
+    const schoolYear  = cls.schoolYear || State.schoolYear || '';
+
+    // ── Adviser / Head names ──
+    // Adviser priority: explicit value on the class → logged-in teacher's name.
+    // School Head priority: school profile → empty (leaves the line for a hand signature).
+    const adviserName = (cls.adviser && cls.adviser.trim())
+      || (teacher.fullName && teacher.fullName.trim())
+      || '';
+    const headName = (school.schoolHead && school.schoolHead.trim()) || '';
+
+    /* ======================================================================
+       PAGE 1 (Front) — Learner info, letter, grades, descriptors
+       ====================================================================== */
+    const page1 = `
+      <div class="sf9-page sf9-front">
+
+        <!-- Header -->
+        <div class="sf9-header">
+          <div class="sf9-logo-wrap">
+            <img class="sf9-logo"
+                 src="${Utils.attr(leftLogo)}"
+                 alt="DepEd Seal"
+                 onerror="this.style.display='none';this.parentNode.innerHTML='<div class=\'sf9-logo-placeholder\'></div>';">
+          </div>
+          <div class="sf9-header-text">
+            <div class="sf9-republic">Republic of the Philippines</div>
+            <div class="sf9-deped">Department of Education</div>
+            <div class="sf9-region">${esc(school.region || 'Region V - Bicol Region')}</div>
+            <div class="sf9-division">${esc(school.division || 'DIVISION OF CAMARINES SUR')}</div>
+            <div class="sf9-district">${esc(school.district || 'District of Tigao')}</div>
+            <div class="sf9-municipality">${esc(school.municipality || 'Municipality of Tigao')}</div>
+            <div class="sf9-school-name">${esc(school.name || 'CABALINADAN HIGH SCHOOL')}</div>
+          </div>
+          <div class="sf9-logo-wrap">
+            ${rightLogo
+              ? `<img class="sf9-logo" src="${Utils.attr(rightLogo)}" alt="School Seal">`
+              : `<div class="sf9-logo-placeholder"></div>`}
+          </div>
+        </div>
+
+        <!-- Title -->
+        <div class="sf9-title-block">
+          <div class="sf9-main-title">LEARNER'S PERFORMANCE REPORT</div>
+          <div class="sf9-sy">School Year ${esc(schoolYear)}</div>
+        </div>
+
+        <!-- Learner Info -->
+        <div class="sf9-learner-info">
+          <div class="sf9-info-row">
+            <span class="sf9-info-label">Name:</span>
+            <span class="sf9-info-value sf9-name-value">${esc(learnerName)}</span>
+            <span class="sf9-info-label">Age:</span>
+            <span class="sf9-info-value" style="max-width:18mm;text-align:center;">${esc(learnerAge)}</span>
+            <span class="sf9-info-label">Sex:</span>
+            <span class="sf9-info-value" style="max-width:18mm;text-align:center;">${esc(learnerSex)}</span>
+          </div>
+          <div class="sf9-info-row">
+            <span class="sf9-info-label">LRN:</span>
+            <span class="sf9-info-value" style="max-width:45mm;">${esc(learnerLrn)}</span>
+            <span class="sf9-info-label">Grade:</span>
+            <span class="sf9-info-value" style="max-width:20mm;text-align:center;">${esc(gradeLevel)}</span>
+            <span class="sf9-info-label">Section:</span>
+            <span class="sf9-info-value" style="max-width:30mm;">${esc(section)}</span>
+          </div>
+        </div>
+
+        <!-- Letter -->
+        <div class="sf9-letter">
+          <div class="sf9-letter-greeting">Dear Parents,</div>
+          <p>This Performance Report shows the ability and progress your child has made in
+             the different learning areas as well as his/her core values.</p>
+          <p>The school welcomes you should you desire to know more about your child's
+             progress.</p>
+        </div>
+
+        <!-- Signature lines (top) -->
+        <div class="sf9-signatures-top"
+             style="display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:space-between;align-items:flex-start;width:100%;margin:4mm 0 2mm;padding:0 2mm;box-sizing:border-box;gap:8mm;">
+          <div class="sf9-signature-block"
+               style="flex:0 0 45%;max-width:45%;display:flex;flex-direction:column;align-items:center;text-align:center;box-sizing:border-box;">
+            <div class="sf9-signature-name" style="font-size:7.5pt;font-weight:700;min-height:3.5mm;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(headName)}</div>
+            <div class="sf9-signature-line" style="border-bottom:0.5px solid #000;height:0;width:100%;margin:0.5mm 0;"></div>
+            <div class="sf9-signature-label" style="font-size:7pt;font-weight:600;width:100%;margin-top:0.5mm;">School Head</div>
+          </div>
+          <div class="sf9-signature-block"
+               style="flex:0 0 45%;max-width:45%;display:flex;flex-direction:column;align-items:center;text-align:center;box-sizing:border-box;">
+            <div class="sf9-signature-name" style="font-size:7.5pt;font-weight:700;min-height:3.5mm;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(adviserName)}</div>
+            <div class="sf9-signature-line" style="border-bottom:0.5px solid #000;height:0;width:100%;margin:0.5mm 0;"></div>
+            <div class="sf9-signature-label" style="font-size:7pt;font-weight:600;width:100%;margin-top:0.5mm;">Adviser</div>
+          </div>
+        </div>
+
+        <!-- Learning Progress Table -->
+        <div class="sf9-section-title">LEARNING PROGRESS AND ACHIEVEMENT</div>
+        <table class="sf9-table sf9-grades-table">
+          <thead>
+            <tr>
+              <th rowspan="2" class="sf9-th-learning">Learning Areas</th>
+              <th colspan="3" class="sf9-th-term">TERM</th>
+              <th rowspan="2" class="sf9-th-final">Final<br>Grade</th>
+              <th rowspan="2" class="sf9-th-remarks">Remarks</th>
+            </tr>
+            <tr>
+              <th class="sf9-th-term-num">1</th>
+              <th class="sf9-th-term-num">2</th>
+              <th class="sf9-th-term-num">3</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${gradeRowsHTML}
+            <tr class="sf9-general-average">
+              <td colspan="4" class="sf9-ga-label">General Average</td>
+              <td>${generalAverage !== null ? generalAverage : ''}</td>
+              <td>${GradingEngine.getSubjectRemarks(generalAverage, policy.passingGrade) || ''}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Performance Descriptors -->
+        <div class="sf9-section-title">PERFORMANCE DESCRIPTORS</div>
+        <table class="sf9-table sf9-descriptors-table">
+          <thead>
+            <tr>
+              <th>Grading Scale</th>
+              <th>Description</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>${descriptorsHTML}</tbody>
+        </table>
+
+      </div>`;
+
+    /* ======================================================================
+       PAGE 2 (Back) — Attendance, comments, signatures, transfer
+       ====================================================================== */
+    const page2 = `
+      <div class="sf9-page sf9-back">
+
+        <!-- Attendance Record -->
+        <div class="sf9-section-title">ATTENDANCE RECORD</div>
+        <table class="sf9-table sf9-attendance-table">
+          <thead>
+            <tr>
+              <th class="sf9-att-corner">Month</th>
+              ${attHeaderHTML}
+              <th class="sf9-att-total">TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${attRowHTML('No. of Class Days', 'open')}
+            ${attRowHTML('No. of Days Present', 'present')}
+            ${attRowHTML('No. of Days Absent', 'absent')}
+          </tbody>
+        </table>
+
+        <!-- Teacher's Comments -->
+        <div class="sf9-section-title">TEACHER'S COMMENTS/REMARKS</div>
+        <div class="sf9-comments-container">
+          <div class="sf9-comment-block">
+            <div class="sf9-comment-label">Term 1</div>
+            <div class="sf9-comment-box">${esc(rec.teacherComments.term1 || '')}</div>
+          </div>
+          <div class="sf9-comment-block">
+            <div class="sf9-comment-label">Term 2</div>
+            <div class="sf9-comment-box">${esc(rec.teacherComments.term2 || '')}</div>
+          </div>
+          <div class="sf9-comment-block">
+            <div class="sf9-comment-label">Term 3</div>
+            <div class="sf9-comment-box">${esc(rec.teacherComments.term3 || '')}</div>
+          </div>
+        </div>
+
+        <!-- Parents/Guardian's Signature -->
+        <div class="sf9-section-title">PARENTS/GUARDIAN'S SIGNATURE</div>
+        <div class="sf9-signature-lines">
+          <div class="sf9-signature-row">
+            <span class="sf9-signature-term">Term 1</span>
+            <span class="sf9-signature-line-long"></span>
+          </div>
+          <div class="sf9-signature-row">
+            <span class="sf9-signature-term">Term 2</span>
+            <span class="sf9-signature-line-long"></span>
+          </div>
+          <div class="sf9-signature-row">
+            <span class="sf9-signature-term">Term 3</span>
+            <span class="sf9-signature-line-long"></span>
+          </div>
+        </div>
+
+        <!-- Certificate of Transfer -->
+        <div class="sf9-section-title">CERTIFICATE OF TRANSFER</div>
+        <p class="sf9-transfer-text">
+          This is to certify that the above-named learner has satisfactorily
+          completed the requirements for the grade level indicated.
+        </p>
+        <div class="sf9-transfer-fields">
+          <div class="sf9-transfer-field">
+            <span>Admitted to Grade:</span>
+            <span class="sf9-transfer-line">${esc(rec.transfer.admittedToGrade || '')}</span>
+          </div>
+          <div class="sf9-transfer-field">
+            <span>Eligible for Admission to Grade:</span>
+            <span class="sf9-transfer-line">${esc(rec.transfer.eligibleFor || '')}</span>
+          </div>
+          <div class="sf9-transfer-field">
+            <span>Approved:</span>
+            <span class="sf9-transfer-line">${esc(rec.transfer.approved || '')}</span>
+          </div>
+        </div>
+        <div class="sf9-transfer-signatures"
+             style="display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:space-between;align-items:flex-start;width:100%;margin:4mm 0 2mm;padding:0 2mm;box-sizing:border-box;gap:8mm;">
+          <div class="sf9-signature-block"
+               style="flex:0 0 45%;max-width:45%;display:flex;flex-direction:column;align-items:center;text-align:center;box-sizing:border-box;">
+            <div class="sf9-signature-name" style="font-size:7.5pt;font-weight:700;min-height:3.5mm;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(headName)}</div>
+            <div class="sf9-signature-line" style="border-bottom:0.5px solid #000;height:0;width:100%;margin:0.5mm 0;"></div>
+            <div class="sf9-signature-label" style="font-size:7pt;font-weight:600;width:100%;margin-top:0.5mm;">School Head</div>
+          </div>
+          <div class="sf9-signature-block"
+               style="flex:0 0 45%;max-width:45%;display:flex;flex-direction:column;align-items:center;text-align:center;box-sizing:border-box;">
+            <div class="sf9-signature-name" style="font-size:7.5pt;font-weight:700;min-height:3.5mm;line-height:1.2;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(adviserName)}</div>
+            <div class="sf9-signature-line" style="border-bottom:0.5px solid #000;height:0;width:100%;margin:0.5mm 0;"></div>
+            <div class="sf9-signature-label" style="font-size:7pt;font-weight:600;width:100%;margin-top:0.5mm;">Adviser</div>
+          </div>
+        </div>
+
+        <!-- Cancellation of Eligibility -->
+        <div class="sf9-section-title">CANCELLATION OF ELIGIBILITY TO TRANSFER</div>
+        <div class="sf9-cancellation">
+          <div class="sf9-cancellation-row">
+            <span>Admitted in:</span>
+            <span class="sf9-cancellation-line">${esc(rec.transfer.cancelledBy || '')}</span>
+          </div>
+          <div class="sf9-cancellation-row">
+            <span>Date:</span>
+            <span class="sf9-cancellation-line">${esc(rec.transfer.cancelledDate || '')}</span>
+          </div>
+        </div>
+        <div class="sf9-cancellation-signature">
+          <div class="sf9-signature-name">${esc(headName)}</div>
+          <div class="sf9-signature-line"></div>
+          <div class="sf9-signature-label">School Head</div>
+        </div>
+
+      </div>`;
+
+    /* ======================================================================
+       Assemble and inject
+       ====================================================================== */
+    const modeClass = mode === 'a4' ? 'a4-mode' : '';
+    document.getElementById('print-area').innerHTML = `
+      <div class="print-sf9 ${modeClass}">
+        <div class="sf9-container">
+          ${page1}
+          ${page2}
+        </div>
+      </div>`;
+
+    // Log + snapshot
+    App.logActivity('SF9 printed for ' + Utils.fullName(learner) + ' (' + (mode === 'a4' ? 'A4 landscape' : 'A5 back-to-back') + ')', 'Reports');
+    Pages.saveReportSnapshot({
+      reportType: 'SF9',
+      classId: cls.id,
+      learnerId: learner.id,
+      templateVersion: 'SF9-2026-2027-v2',
+      policyVersion: cls.gradingPolicyVersion || null,
+      context: { schoolYear: cls.schoolYear, printMode: mode }
+    });
+
+    // Print, then clean up the injected @page geometry.
+    setTimeout(() => {
+      try { window.print(); }
+      finally {
+        setTimeout(() => {
+          const s = document.getElementById('sf9-page-geometry');
+          if (s) s.remove();
+        }, 500);
+      }
+    }, 150);
+  },
+
   async generateSF9Preview(classId, term, learnerIds) {
     const cls = State.classes.find(c => c.id === classId);
     const preview = document.getElementById('sf9-preview');
@@ -22877,6 +25919,7 @@ If you received this message, Web3Forms is configured correctly and you can now 
     const s = State.schools[0] || {};
     let pendingSchoolLogo = s.schoolLogo || '';
     let pendingDivisionLogo = s.divisionLogo || '';
+    let pendingDepedSeal = s.depedSeal || '';
 
     root.innerHTML = `
       <div class="page-head">
@@ -22886,7 +25929,21 @@ If you received this message, Web3Forms is configured correctly and you can now 
       <div class="card mb-16">
         <div class="card-head"><h3>School &amp; Division Logos</h3></div>
         <p class="text-sm text-muted mb-16">Upload logos that will appear on printed reports (SF2, SF9, and other documents). PNG with transparent background works best. Images are auto-compressed to 400×400 and stored locally — they are never uploaded anywhere.</p>
-        <div class="grid grid-2">
+        <div class="grid grid-3">
+          <div class="photo-upload-row" style="margin-bottom:0;">
+            <div class="photo-preview-wrap ${pendingDepedSeal ? 'has-photo' : 'has-photo'}" id="sp-deped-seal-wrap">
+              <div id="sp-deped-seal-inner">
+                  <img src="${Utils.attr(pendingDepedSeal || DEPED_SEAL_PATH)}" alt="DepEd Seal">
+              </div>
+              <button type="button" class="photo-remove" id="sp-deped-seal-remove" title="Reset to built-in DepEd seal">&times;</button>
+            </div>
+            <div class="photo-actions" style="flex:1;min-width:140px;">
+              <strong style="font-size:13px;">DepEd Seal</strong>
+              <p class="photo-help">Left-hand logo on the SF9. Leave as-is for the built-in seal, or upload the official artwork.</p>
+              <input type="file" accept="image/*" id="sp-deped-seal-input" class="hidden-file">
+              <button type="button" class="btn btn-secondary btn-sm" id="sp-deped-seal-choose">${icon('image')} Upload Seal</button>
+            </div>
+          </div>
           <div class="photo-upload-row" style="margin-bottom:0;">
             <div class="photo-preview-wrap ${pendingSchoolLogo ? 'has-photo' : ''}" id="sp-school-logo-wrap">
               <div id="sp-school-logo-inner">
@@ -22896,9 +25953,9 @@ If you received this message, Web3Forms is configured correctly and you can now 
               </div>
               <button type="button" class="photo-remove" id="sp-school-logo-remove" title="Remove logo">&times;</button>
             </div>
-            <div class="photo-actions" style="flex:1;min-width:160px;">
+            <div class="photo-actions" style="flex:1;min-width:140px;">
               <strong style="font-size:13px;">School Logo</strong>
-              <p class="photo-help">Appears on the left side of printed report headers.</p>
+              <p class="photo-help">Right-hand logo on the SF9 and primary seal on other reports.</p>
               <input type="file" accept="image/*" id="sp-school-logo-input" class="hidden-file">
               <button type="button" class="btn btn-secondary btn-sm" id="sp-school-logo-choose">${icon('image')} Choose Logo</button>
             </div>
@@ -22912,13 +25969,14 @@ If you received this message, Web3Forms is configured correctly and you can now 
               </div>
               <button type="button" class="photo-remove" id="sp-division-logo-remove" title="Remove logo">&times;</button>
             </div>
-            <div class="photo-actions" style="flex:1;min-width:160px;">
+            <div class="photo-actions" style="flex:1;min-width:140px;">
               <strong style="font-size:13px;">Division Logo</strong>
-              <p class="photo-help">Appears on the right side of printed report headers.</p>
+              <p class="photo-help">Available for future report templates.</p>
               <input type="file" accept="image/*" id="sp-division-logo-input" class="hidden-file">
               <button type="button" class="btn btn-secondary btn-sm" id="sp-division-logo-choose">${icon('image')} Choose Logo</button>
             </div>
           </div>
+        </div>
         </div>
       </div>
 
@@ -22992,6 +26050,15 @@ If you received this message, Web3Forms is configured correctly and you can now 
     };
 
     bindLogoSlot({
+      wrapId: 'sp-deped-seal-wrap',
+      innerId: 'sp-deped-seal-inner',
+      inputId: 'sp-deped-seal-input',
+      chooseId: 'sp-deped-seal-choose',
+      removeId: 'sp-deped-seal-remove',
+      setter: (v) => { pendingDepedSeal = v; },
+      fallbackSrc: DEPED_SEAL_PATH
+    });
+    bindLogoSlot({
       wrapId: 'sp-school-logo-wrap', innerId: 'sp-school-logo-inner',
       inputId: 'sp-school-logo-input', chooseId: 'sp-school-logo-choose',
       removeId: 'sp-school-logo-remove',
@@ -23022,9 +26089,11 @@ If you received this message, Web3Forms is configured correctly and you can now 
     s.website = document.getElementById('sp-website').value.trim();
     s.socialMedia = document.getElementById('sp-social').value.trim();
     if (pending) {
-      s.schoolLogo = pending.schoolLogo || '';
+      s.schoolLogo   = pending.schoolLogo   || '';
       s.divisionLogo = pending.divisionLogo || '';
+      s.depedSeal    = pending.depedSeal    || '';
     }
+  
     await DB.put('schools', s);
     State.schools[0] = s;
     App.logActivity('School profile updated', 'Settings');
@@ -26442,9 +29511,11 @@ for (const k in aliases) {
  'saveSchoolProfile','clearActivityLog','generateAttendanceReport','filterLearnerProfileList',
  'filterLearners','toggleAllLearners','markAll','clearAttendance','saveAttendance','setStatus',
  'renderSeating','renderGradebookRows','renderNotesList','renderNotesListHtml',
- 'securitySettings','openChangePasswordModal','openRegenerateRecoveryModal'
+ 'securitySettings','openChangePasswordModal','openRegenerateRecoveryModal',
+ 'gradeSummary','_gsExportCSV','_gsOpenLearnerDetail','_gsPrintLearnerReport',
+ '_renderTermSummarySheet','_tsLoadRecords','_tsBuildAutoIndex','_tsExportCSV','_tsPrintSheet',
+ '_tsReflowStats','_tsOpenCopyFromTerm','_tsSubjectKey','_tsShortLabel'
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
-
 /* ============================================================================
    EXPORTS + BOOT
    ============================================================================ */
