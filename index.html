@@ -1010,6 +1010,12 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   align-items: center;
   gap: 8px;
 }
+.dash-checklist h3 svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: block;
+}
 .dash-checklist p { font-size: 12.5px; color: var(--text-muted); margin-bottom: 14px; }
 .dash-checklist-item {
   display: flex;
@@ -1948,6 +1954,337 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 .picker-display .picker-photo { width: 80px; height: 80px; border-radius: 50%; object-fit: cover; box-shadow: 0 4px 16px rgba(0,56,168,0.3); border: 3px solid var(--card); }
 .picker-display .picker-photo-fallback { width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 28px; }
 
+
+/* ============================================================
+   RANDOMIZER — animated tool cards
+   ============================================================ */
+.rz-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 720px) { .rz-grid { grid-template-columns: 1fr; } }
+
+.rz-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow .18s;
+}
+.rz-card:hover { box-shadow: var(--shadow); }
+
+.rz-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.rz-card-head h3 {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.rz-card-head h3 svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+.rz-stage {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(0,56,168,.08) 0%, transparent 60%),
+    radial-gradient(circle at 50% 100%, rgba(247,201,72,.10) 0%, transparent 60%),
+    var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin-bottom: 14px;
+  padding: 16px;
+}
+
+/* Number display */
+.rz-number {
+  font-size: clamp(56px, 10vw, 108px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--deped-blue);
+  letter-spacing: -3px;
+  transition: transform .3s cubic-bezier(.34,1.56,.64,1), color .2s, opacity .2s;
+}
+.rz-number.rolling {
+  color: var(--secondary-blue);
+  opacity: .72;
+  filter: blur(.6px);
+  animation: rzJitter .09s infinite;
+}
+.rz-number.settled { animation: rzPop .5s cubic-bezier(.34,1.56,.64,1); }
+
+@keyframes rzJitter {
+  0%   { transform: translate(0,0) rotate(0deg); }
+  25%  { transform: translate(-1px,-2px) rotate(-1.5deg); }
+  50%  { transform: translate(2px,1px) rotate(1.5deg); }
+  75%  { transform: translate(-2px,2px) rotate(-1deg); }
+  100% { transform: translate(0,0) rotate(0deg); }
+}
+@keyframes rzPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.22); }
+  70%  { transform: scale(.96); }
+  100% { transform: scale(1); }
+}
+
+/* Dice */
+.rz-dice-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+.rz-die {
+  width: clamp(60px, 8vw, 88px);
+  height: clamp(60px, 8vw, 88px);
+  color: var(--deped-blue);
+  will-change: transform;
+}
+.rz-die svg { width: 100%; height: 100%; display: block; }
+.rz-die.rolling { animation: rzDieShake .35s infinite; }
+.rz-die.settled { animation: rzPop .5s cubic-bezier(.34,1.56,.64,1); }
+.rz-die:nth-child(odd)  { animation-delay: .04s; }
+.rz-die:nth-child(even) { animation-delay: .09s; }
+
+@keyframes rzDieShake {
+  0%   { transform: translate(0,0) rotate(0deg) scale(1); }
+  25%  { transform: translate(-3px,-6px) rotate(-12deg) scale(1.02); }
+  50%  { transform: translate(3px,2px) rotate(10deg) scale(.98); }
+  75%  { transform: translate(-2px,4px) rotate(-6deg) scale(1.03); }
+  100% { transform: translate(0,0) rotate(0deg) scale(1); }
+}
+
+.rz-poly-die {
+  width: clamp(60px, 8vw, 88px);
+  height: clamp(60px, 8vw, 88px);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #fff, var(--light-blue));
+  border: 2px solid var(--deped-blue);
+  color: var(--deped-blue);
+  box-shadow: 0 4px 12px rgba(0,56,168,.15);
+  will-change: transform;
+}
+.rz-poly-die .num { font-size: clamp(20px,3vw,32px); font-weight: 800; line-height: 1; }
+.rz-poly-die .sides {
+  font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+  font-weight: 700; opacity: .65; margin-top: 2px;
+}
+.rz-poly-die.rolling { animation: rzDieShake .35s infinite; }
+.rz-poly-die.settled { animation: rzPop .5s cubic-bezier(.34,1.56,.64,1); }
+
+.rz-sum {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: .5px;
+  margin-top: 12px;
+  opacity: 0;
+  transition: opacity .3s;
+}
+.rz-sum.show { opacity: 1; }
+.rz-sum .value {
+  color: var(--deped-blue);
+  font-weight: 800;
+  font-size: 18px;
+  margin-left: 4px;
+}
+
+/* Coin */
+.rz-coin-scene {
+  perspective: 900px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 150px;
+}
+.rz-coin {
+  width: clamp(110px,14vw,150px);
+  height: clamp(110px,14vw,150px);
+  position: relative;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.rz-coin-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Georgia', serif;
+  box-shadow:
+    inset 0 4px 12px rgba(255,255,255,.4),
+    inset 0 -6px 14px rgba(0,0,0,.2),
+    0 12px 30px rgba(0,0,0,.18);
+  border-width: 5px;
+  border-style: solid;
+}
+.rz-coin-face .glyph { font-size: clamp(44px,6vw,66px); line-height: 1; font-weight: 800; }
+.rz-coin-heads {
+  background: radial-gradient(circle at 40% 30%, #FDE68A, #F7C948 60%, #B45309);
+  border-color: #92400E;
+  color: #7C2D12;
+}
+.rz-coin-tails {
+  background: radial-gradient(circle at 40% 30%, #E2E8F0, #94A3B8 60%, #475569);
+  border-color: #1E293B;
+  color: #0F172A;
+  transform: rotateX(180deg);
+}
+.rz-coin.settled { filter: drop-shadow(0 0 14px rgba(247,201,72,.65)); }
+
+.rz-coin-stats {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  margin-top: 6px;
+}
+.rz-coin-stats .stat { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.rz-coin-stats .stat .lbl {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  font-weight: 700; color: var(--text-muted);
+}
+.rz-coin-stats .stat .val {
+  font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.rz-coin-stats .stat.heads .val { color: #B45309; }
+.rz-coin-stats .stat.tails .val { color: #334155; }
+.rz-coin-stats .stat.streak .val { color: var(--deped-blue); }
+
+/* Yes / No */
+.rz-yn-stage {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  margin-bottom: 14px;
+  position: relative;
+  overflow: hidden;
+  transition: background .4s, border-color .4s;
+}
+.rz-yn-stage.rolling {
+  background: linear-gradient(135deg, rgba(0,56,168,.06), rgba(124,58,237,.06));
+  border-color: var(--deped-blue);
+}
+.rz-yn-stage.yes {
+  background: linear-gradient(135deg, rgba(25,135,84,.14), rgba(25,135,84,.04));
+  border-color: var(--success);
+}
+.rz-yn-stage.no {
+  background: linear-gradient(135deg, rgba(220,53,69,.14), rgba(220,53,69,.04));
+  border-color: var(--danger);
+}
+.rz-yn-value {
+  font-size: clamp(44px,7vw,84px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -2px;
+  transition: color .3s, opacity .2s;
+}
+.rz-yn-stage.rolling .rz-yn-value {
+  animation: rzJitter .08s infinite;
+  color: var(--text-muted);
+  opacity: .6;
+}
+.rz-yn-stage.yes .rz-yn-value { color: var(--success); animation: rzPop .55s cubic-bezier(.34,1.56,.64,1); }
+.rz-yn-stage.no  .rz-yn-value { color: var(--danger);  animation: rzPop .55s cubic-bezier(.34,1.56,.64,1); }
+
+/* Controls */
+.rz-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.rz-controls .btn { flex: 1; min-width: 130px; }
+
+.rz-segment {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+.rz-segment button {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all .15s;
+}
+.rz-segment button:hover { color: var(--deped-blue); }
+.rz-segment button.active {
+  background: var(--card);
+  color: var(--deped-blue);
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+
+/* History chips */
+.rz-history {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  min-height: 24px;
+  align-items: center;
+}
+.rz-history-empty {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+.rz-history-chip {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 9px;
+  border-radius: 12px;
+  background: var(--light-blue);
+  color: var(--deped-blue);
+  border: 1px solid transparent;
+  animation: rzChipIn .3s cubic-bezier(.34,1.56,.64,1);
+}
+[data-theme="dark"] .rz-history-chip { color: #6FA8FF; }
+.rz-history-chip.latest {
+  background: var(--gradient-primary);
+  color: #fff;
+  border-color: var(--deped-blue);
+}
+@keyframes rzChipIn {
+  from { transform: scale(.4); opacity: 0; }
+  to   { transform: scale(1);  opacity: 1; }
+}
 
 /* Live noise meter (mic-driven) */
 .noise-meter-live {
@@ -6357,6 +6694,7 @@ const ICONS = {
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   printer: '<path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   download: '<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  upload:   '<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   folder: '<path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>',
   note: '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/>',
   save: '<path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
@@ -10045,7 +10383,19 @@ const XlsxReader = {
           const vEl = c.querySelector('v');
           if (vEl) {
             const raw = vEl.textContent;
-            value = (type === 's') ? (sharedStrings[Number(raw)] ?? '') : raw;
+            if (type === 's') {
+              value = sharedStrings[Number(raw)] ?? '';
+            } else if (type === 'str' || type === 'inlineStr') {
+              value = raw;
+            } else if (type === 'b') {
+              value = raw === '1' ? 'TRUE' : 'FALSE';
+            } else {
+              // Numeric cell. Excel writes large integers (like a 12-digit
+              // LRN) in scientific notation, e.g. <v>1.13095130073E+11</v>.
+              // Expand back to the canonical integer form so the SF1
+              // parser sees 113095130073 and not the exponent.
+              value = XlsxReader._normalizeNumeric(raw);
+            }
           }
         }
         row[colIdx] = value;
@@ -10059,6 +10409,155 @@ const XlsxReader = {
     let n = 0;
     for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
     return n - 1;
+  },
+  /* Convert any numeric cell representation back to a plain decimal string.
+     Handles:
+       113095130073          → "113095130073"
+       113095130073.         → "113095130073"      ← Excel's float-int form
+       113095130073.0        → "113095130073"
+       1.13095130073E+11     → "113095130073"      ← scientific notation
+       " 113095130073 "      → "113095130073"
+
+     Non-integer numbers (e.g. 3.14) and non-numeric strings are returned
+     untouched, so this is safe to run on every cell in a sheet. */
+  _normalizeNumeric(raw) {
+    if (raw === undefined || raw === null) return '';
+    const s = String(raw).trim();
+    if (!s) return '';
+
+    // Fast path: already a clean integer.
+    if (/^-?\d+$/.test(s)) return s;
+
+    // Generic numeric shape: optional sign, digits, optional decimal part
+    // (which may be empty, as in "123."), optional exponent.
+    if (/^-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?$/.test(s)) {
+      const n = Number(s);
+      if (Number.isFinite(n) &&
+          Math.abs(n) < Number.MAX_SAFE_INTEGER &&
+          Number.isInteger(n)) {
+        return n.toFixed(0);
+      }
+    }
+    return s;
+  },
+};
+
+/* ============================================================================
+   SPREADSHEET READER — unified entry point
+   ----------------------------------------------------------------------------
+   Detects the container format from the first 8 bytes and routes accordingly:
+     • ZIP  (50 4B 03 04)  →  .xlsx / .xlsm  →  native XlsxReader (no deps)
+     • OLE2 (D0 CF 11 E0)  →  .xls (BIFF8)   →  SheetJS, lazy-loaded from CDN
+     • otherwise                              →  SheetJS as a last resort
+   Both paths return the same shape: Array<Array<string>>.
+   ============================================================================ */
+const SpreadsheetReader = {
+  async read(file) {
+    const header = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    const isZip = header[0] === 0x50 && header[1] === 0x4B;
+    const isOLE = header[0] === 0xD0 && header[1] === 0xCF &&
+                  header[2] === 0x11 && header[3] === 0xE0;
+
+    // .xlsx / .xlsm — try the zero-dependency path first
+    if (isZip) {
+      try {
+        return await XlsxReader.read(file);
+      } catch (e) {
+        console.warn('[Spreadsheet] Native .xlsx reader failed, falling back to SheetJS:', e);
+        return await this._readWithSheetJS(file);
+      }
+    }
+
+    // .xls (legacy LIS export) or anything else — SheetJS
+    return await this._readWithSheetJS(file);
+  },
+
+  async _readWithSheetJS(file) {
+    const ok = await this._ensureSheetJS();
+    if (!ok) {
+      throw new Error(
+        'Could not load the .xls reader. Please check your internet connection, ' +
+        'or open the file in Excel / Google Sheets and save as .xlsx or .csv.'
+      );
+    }
+
+    const buf = await file.arrayBuffer();
+    const wb = window.XLSX.read(buf, {
+      type: 'array',
+      cellDates: false,
+      // Preserve number-format metadata so sheet_to_json can produce a
+      // proper .w (display text) instead of falling back to String(v).
+      cellNF: true,
+      cellText: true
+    });
+
+    if (!wb.SheetNames || !wb.SheetNames.length) {
+      throw new Error('Workbook contains no sheets.');
+    }
+
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    // header: 1  → array-of-arrays
+    // raw: false → use Excel's formatted string (important for SF1 dates)
+    const rows = window.XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: '',
+      blankrows: false,
+      raw: false
+    });
+
+    // Normalize every cell to a string. If Excel serialized a numeric
+    // cell as "1.13095130073E+11", expand it back to the plain digits.
+    return rows.map(r =>
+      Array.isArray(r)
+        ? r.map(c => {
+            if (c === null || c === undefined) return '';
+            if (typeof c === 'number') {
+              return Number.isInteger(c) ? c.toFixed(0) : String(c);
+            }
+            const s = String(c).trim();
+            if (/^-?\d+$/.test(s)) return s;
+            // Handles "123.", "123.0", "1.23E+11", etc.
+            if (/^-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?$/.test(s)) {
+              const n = Number(s);
+              if (Number.isFinite(n) &&
+                  Math.abs(n) < Number.MAX_SAFE_INTEGER &&
+                  Number.isInteger(n)) {
+                return n.toFixed(0);
+              }
+            }
+            return s;
+          })
+        : []
+    );
+  },
+
+  _sheetJSLoading: null,
+  _ensureSheetJS() {
+    if (window.XLSX) return Promise.resolve(true);
+    if (this._sheetJSLoading) return this._sheetJSLoading;
+
+    const src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    this._sheetJSLoading = new Promise((resolve) => {
+      // Already in the DOM? Just wait for it to finish loading.
+      if (document.querySelector(`script[src="${src}"]`)) {
+        const t = setInterval(() => {
+          if (window.XLSX) { clearInterval(t); resolve(true); }
+        }, 50);
+        setTimeout(() => { clearInterval(t); resolve(!!window.XLSX); }, 8000);
+        return;
+      }
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = () => resolve(true);
+      s.onerror = () => {
+        console.warn('[Spreadsheet] SheetJS failed to load');
+        resolve(false);
+      };
+      document.head.appendChild(s);
+    });
+
+    return this._sheetJSLoading;
   }
 };
 
@@ -10079,7 +10578,9 @@ const SF1Parser = {
     age:              [/^age\b/i, /age\s+as\s+of/i],
     motherTongue:     [/mother\s*tongue/i],
     ethnicGroup:      [/^ip\b/i, /ethnic\s*group/i],
-    religion:         [/^religion$/i],
+    // Matches the K-10 "Religion" header AND the SHS SF1's
+    // "Religious Affilication" (the typo is preserved in the LIS template).
+    religion:         [/^religio/i],
     parentContact:    [/contact\s*number/i, /cp\s*number/i],
     learningModality: [/learning\s*modality/i],
     remarks:          [/^remarks$/i]
@@ -10094,7 +10595,11 @@ const SF1Parser = {
     province:     [/^province$/i],
     father:       [/^father/i],
     mother:       [/^mother/i],
-    guardian:     [/^name$/i],
+    // The K-10 SF1 uses a bare "Name" header; the SHS SF1 uses
+    // "Name (Last Name, First Name, Name Extension, Middle" — sometimes
+    // with a newline or a literal <br> between "Name" and "(".
+    // `\b` matches regardless of what follows.
+    guardian:     [/^name\b/i],
     relationship: [/^relationship$/i]
   },
 
@@ -10193,10 +10698,30 @@ const SF1Parser = {
     return '';
   },
 
+  /* Read a single cell, normalizing any Excel numeric representation
+     back to a plain decimal string. Guarantees that a 12-digit LRN like
+     113095130073 is never stored as "113095130073." or "1.13095130073E+11". */
   pickCell(row, idx) {
     if (idx === undefined || idx === null) return '';
     const v = row[idx];
-    return v === undefined || v === null ? '' : String(v).trim();
+    if (v === undefined || v === null) return '';
+
+    if (typeof v === 'number') {
+      return Number.isInteger(v) ? v.toFixed(0) : String(v);
+    }
+
+    const s = String(v).trim();
+    if (/^-?\d+$/.test(s)) return s;
+
+    if (/^-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?$/.test(s)) {
+      const n = Number(s);
+      if (Number.isFinite(n) &&
+          Math.abs(n) < Number.MAX_SAFE_INTEGER &&
+          Number.isInteger(n)) {
+        return n.toFixed(0);
+      }
+    }
+    return s;
   },
 
   parse(rows, opts = {}) {
@@ -10340,7 +10865,124 @@ const SF1Parser = {
       });
     }
     return { format: 'CSV (generic)', learners };
+  },
+  /* ------------------------------------------------------------------
+   Read the SF1 header block and pull out the class metadata.
+
+   Supports both the K-10 SF1 (metadata on rows 1–6) and the SHS SF1
+   (metadata on rows 1–14, including Semester, Track and Strand, Course).
+
+   The `headerRowIdx` argument is the index of the row that contains the
+   standalone "LRN" cell (returned by `findHeaderRow`). When supplied, the
+   scan stops just before that row, so we can never accidentally read a
+   learner's name as if it were a metadata value.
+   ------------------------------------------------------------------ */
+  detectClassInfo(rows, headerRowIdx) {
+    const info = {
+      gradeLevel: '',
+      section: '',
+      schoolYear: '',
+      schoolName: '',
+      schoolId: '',
+      region: '',
+      division: '',
+      district: '',
+      // SHS-only (blank for K-10 SF1s)
+      semester: '',
+      trackStrand: '',
+      course: ''
+    };
+    if (!Array.isArray(rows) || !rows.length) return info;
+
+    const labelFinders = [
+      { key: 'schoolId',    re: /^school\s*id$/i,   maxLook: 8 },
+      { key: 'schoolName',  re: /^school\s*name$/i, maxLook: 8 },
+      { key: 'region',      re: /^region$/i,        maxLook: 8 },
+      { key: 'division',    re: /^division$/i,      maxLook: 8 },
+      { key: 'district',    re: /^district$/i,      maxLook: 8 },
+      { key: 'schoolYear',  re: /^school\s*year$/i, maxLook: 8 },
+      { key: 'gradeLevel',  re: /^grade\s*level$/i, maxLook: 8 },
+      { key: 'section',     re: /^section$/i,       maxLook: 8 },
+      // SHS-only labels — silently ignored on K-10 SF1s
+      { key: 'semester',    re: /^semester$/i,      maxLook: 8 },
+      { key: 'trackStrand', re: /^track\s*(?:and|&)\s*strand$/i, maxLook: 8 },
+      { key: 'course',      re: /^course\b/i,       maxLook: 8 }
+    ];
+
+    const scanRow = (row) => {
+      if (!Array.isArray(row)) return;
+      for (let c = 0; c < row.length; c++) {
+        const cell = String(row[c] || '').trim();
+        if (!cell) continue;
+        for (const f of labelFinders) {
+          if (info[f.key]) continue;              // already found in an earlier row
+          if (f.re.test(cell)) {
+            for (let k = 1; k <= f.maxLook; k++) {
+              const v = row[c + k];
+              if (v !== undefined && v !== null && String(v).trim() !== '') {
+                info[f.key] = String(v).trim();
+                break;
+              }
+            }
+          }
+        }
+      }
+    };
+
+    // Upper bound: stop at the header row when known, otherwise 20 rows.
+    const limit = (typeof headerRowIdx === 'number' && headerRowIdx > 0)
+      ? Math.min(headerRowIdx, 20)
+      : Math.min(rows.length, 20);
+    for (let i = 0; i < limit; i++) scanRow(rows[i]);
+
+    // "Grade 9 (Year III)" → "Grade 9"
+    if (info.gradeLevel) {
+      const m = info.gradeLevel.match(/grade\s*(\d{1,2})/i);
+      info.gradeLevel = m ? ('Grade ' + m[1])
+                          : info.gradeLevel.replace(/\s*\(.*\)\s*$/, '').trim();
+    }
+
+    // "2025 - 2026" → "2025-2026"
+    if (info.schoolYear) {
+      info.schoolYear = info.schoolYear.replace(/\s+/g, ' ').trim().replace(/\s*-\s*/g, '-');
+    }
+
+    return info;
+  },
+/* ------------------------------------------------------------------
+   Compare the SF1 header against the currently active class.
+   Returns one of:
+     { status: 'no-active-class' }              — nothing to compare against
+     { status: 'no-info' }                      — SF1 header lacked grade/section
+     { status: 'match' }                        — grade + section agree
+     { status: 'mismatch', grade, section, ... }— grade and/or section differ
+   ------------------------------------------------------------------ */
+  compareClassInfo(detected) {
+  const cls = State.activeClass;
+  if (!cls) return { status: 'no-active-class' };
+  if (!detected || (!detected.gradeLevel && !detected.section)) {
+    return { status: 'no-info' };
   }
+
+  const norm = (s) => String(s || '').toLowerCase()
+    .replace(/^grade\s*/i, '')       // "Grade 9" → "9"
+    .replace(/\s*\(.*?\)\s*/g, '')   // drop "(Year III)" and similar qualifiers
+    .replace(/[^a-z0-9]/g, '')       // keep only alphanumerics
+    .trim();
+
+  const gradeMatch   = !detected.gradeLevel || norm(detected.gradeLevel) === norm(cls.gradeLevel);
+  const sectionMatch = !detected.section    || norm(detected.section)    === norm(cls.section);
+
+  if (gradeMatch && sectionMatch) return { status: 'match' };
+
+  return {
+    status: 'mismatch',
+    grade: detected.gradeLevel || '(unknown)',
+    section: detected.section || '(unknown)',
+    currentGrade: cls.gradeLevel,
+    currentSection: cls.section
+  };
+},
 };
 
 /* ============================================================================
@@ -13055,7 +13697,7 @@ async autoNudgeLowAttendance(cls) {
         </div>
         <div class="page-actions">
           <button class="btn btn-outline" onclick="Pages.openImportLearners()">${icon('download')} Import</button>
-          <button class="btn btn-outline" onclick="Pages.exportLearners()">${icon('download')} Export</button>
+          <button class="btn btn-outline" onclick="Pages.exportLearners()">${icon('upload')} Export</button>
           <button class="btn btn-primary" onclick="App.openLearnerForm()">${icon('users')} + Add Learner</button>
         </div>
       </div>
@@ -13506,7 +14148,7 @@ async autoNudgeLowAttendance(cls) {
             </button>
             <button class="btn btn-sm" data-bulk="export"
                     style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);font-weight:600;">
-              ${icon('download')} Export CSV
+              ${icon('upload')} Export CSV
             </button>
             <button class="btn btn-sm" data-bulk="delete"
                     style="background:rgba(220,53,69,.85);color:#fff;border:1px solid rgba(255,255,255,.25);font-weight:600;">
@@ -14247,6 +14889,165 @@ async autoNudgeLowAttendance(cls) {
       }
     }, 100);
   },
+  /* ----------------------------------------------------------------------------
+   Show the class-mismatch dialog. Resolves to `true` if the user chose to
+   proceed (either by creating a new class or by overriding), or `false` if
+   they cancelled. Side-effects: may create + activate a new class.
+   ---------------------------------------------------------------------------- */
+_showClassMismatchDialog(comparison, classInfo) {
+  return new Promise((resolve) => {
+    let decided = false;                              // ← ADD THIS
+
+    const safeGrade   = comparison.grade.replace(/^grade\s*/i, '').trim() || '?';
+    const safeSection = comparison.section || '?';
+
+    const m = UI.modal({
+      title: 'Grade / Section Mismatch',
+      body: `
+        <div class="alert alert-warning">
+          ${icon('alert')}
+          <div>
+            The SF1 file you are importing is for
+            <strong>${Utils.esc(comparison.grade)} &mdash; ${Utils.esc(comparison.section)}</strong>,
+            but your current active class is
+            <strong>${Utils.esc(comparison.currentGrade)} &mdash; ${Utils.esc(comparison.currentSection)}</strong>.
+            Importing into the wrong class will mix learners from different sections together.
+          </div>
+        </div>
+
+        <p class="text-sm text-muted mb-12">Choose how you want to proceed:</p>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <button class="btn btn-primary" id="mm-create"
+                  style="justify-content:flex-start;text-align:left;padding:12px 14px;">
+            <span style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="flex-shrink:0;margin-top:2px;">${icon('users')}</span>
+              <span style="flex:1;min-width:0;">
+                <span style="display:block;font-weight:700;">Create a new class for this SF1</span>
+                <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                  Grade ${Utils.esc(safeGrade)} &mdash; ${Utils.esc(safeSection)}
+                  ${classInfo.schoolYear ? ' · SY ' + Utils.esc(classInfo.schoolYear) : ''}
+                  ${classInfo.semester   ? ' · ' + Utils.esc(classInfo.semester)   : ''}
+                  ${classInfo.trackStrand? ' · ' + Utils.esc(classInfo.trackStrand) : ''}
+                  · This will be your new active class.
+                </span>
+              </span>
+            </span>
+          </button>
+
+          <button class="btn btn-outline" id="mm-anyway"
+                  style="justify-content:flex-start;text-align:left;padding:12px 14px;border-color:var(--warning);color:#B45309;">
+            <span style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="flex-shrink:0;margin-top:2px;">${icon('alert')}</span>
+              <span style="flex:1;min-width:0;">
+                <span style="display:block;font-weight:700;">Import into the current class anyway</span>
+                <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                  I understand these learners may not belong to
+                  ${Utils.esc(comparison.currentGrade)} — ${Utils.esc(comparison.currentSection)}.
+                  This choice is logged in the Activity Log.
+                </span>
+              </span>
+            </span>
+          </button>
+
+          <button class="btn btn-ghost" id="mm-cancel"
+                  style="justify-content:flex-start;text-align:left;padding:12px 14px;">
+            <span style="display:flex;gap:12px;align-items:flex-start;">
+              <span style="flex-shrink:0;margin-top:2px;">${icon('xCircle')}</span>
+              <span style="flex:1;min-width:0;">
+                <span style="display:block;font-weight:700;">Cancel the import</span>
+                <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                  Nothing will be saved. You can re-open Import later.
+                </span>
+              </span>
+            </span>
+          </button>
+        </div>
+      `,
+      footer: false,
+      onClose: () => { if (!decided) resolve(false); }   // ← GUARDED
+    });
+
+    /* ----- Create a new class, then proceed ----- */
+    m.overlay.querySelector('#mm-create').onclick = async () => {
+      try {
+        const newClass = {
+          id: Utils.uid('c-'),
+          gradeLevel: comparison.grade,
+          section: comparison.section,
+          subject: '',                              // teacher fills in later
+          schoolYear: classInfo.schoolYear || State.schoolYear,
+          adviser: State.currentUser ? (State.currentUser.fullName || '') : '',
+          room: '',
+          schedule: '',
+          archived: false,
+          createdAt: new Date().toISOString(),
+
+          // SHS-only metadata (blank on K-10 SF1 imports, so K-10
+          // classes stay byte-for-byte identical to what they were before)
+          semester:    classInfo.semester    || '',
+          trackStrand: classInfo.trackStrand || '',
+          course:      classInfo.course      || '',
+          isSHS:       !!(classInfo.semester || classInfo.trackStrand)
+        };
+
+        // Resolve the grading policy for this SY
+        const policy = GradingEngine.resolvePolicy({ schoolYear: newClass.schoolYear });
+        newClass.gradingPolicyVersion = policy.version;
+        newClass.termModel = policy.termModel;
+        if (policy.version === 'LEGACY-DO8-2015') {
+          newClass.weightKey = 'DEFAULT';
+          newClass.weights = Object.assign({}, CONFIG.DEFAULT_WEIGHTS);
+          newClass.gradingOverride = false;
+        } else {
+          newClass.weightKey = GradingEngine.resolveWeightKey(newClass.gradeLevel, '', null);
+          newClass.resolvedWeights = policy.weights[newClass.weightKey] || policy.weights['KS2_CORE'];
+          newClass.gradingOverride = false;
+        }
+
+        await DB.put('classes', newClass);
+        State.classes.push(newClass);
+        State.activeClass = newClass;
+        await DB.setSetting('activeClassId', newClass.id);
+        await App.loadLearners();
+        App.updateTopbarClass();
+
+        App.logActivity(
+          `Class created from SF1 import: ${newClass.gradeLevel} - ${newClass.section}`,
+          'Classes'
+        );
+        UI.toast(`Created ${newClass.gradeLevel} - ${newClass.section}. You can add a subject later.`, 'success', 5000);
+
+        decided = true;                   // ← ADD
+        m.close();
+        resolve(true);
+      } catch (e) {
+        console.error('[Import] Could not create class:', e);
+        UI.toast('Could not create the class: ' + (e.message || 'unknown error'), 'error', 5000);
+      }
+    };
+
+    /* ----- Import into the current class anyway ----- */
+    m.overlay.querySelector('#mm-anyway').onclick = () => {
+      App.logActivity(
+        `SF1 imported into a mismatched class ` +
+        `(SF1: ${comparison.grade} - ${comparison.section}, ` +
+        `class: ${comparison.currentGrade} - ${comparison.currentSection})`,
+        'Learners'
+      );
+      decided = true;                   // ← ADD
+      m.close();
+      resolve(true);
+    };
+
+    /* ----- Cancel ----- */
+    m.overlay.querySelector('#mm-cancel').onclick = () => {
+      decided = true;                   // ← ADD (prevents the guard from firing twice)
+      m.close();
+      resolve(false);
+    };
+  });
+},
 
   openImportLearners() {
     if (!State.activeClass) { UI.toast('Select a class first', 'warning'); return; }
@@ -14268,16 +15069,31 @@ async autoNudgeLowAttendance(cls) {
         <div class="form-group">
           <label>Choose a file</label>
           <input type="file" class="form-control" id="imp-file" accept=".xls,.xlsx,.csv,.txt,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">
-          <p class="text-xs text-muted mt-8">Supported: <strong>.xlsx</strong> · <strong>.csv</strong> · <strong>.txt</strong>. Legacy <strong>.xls</strong> must first be converted (see below).</p>
+            <p class="text-xs text-muted mt-8">
+              Supported: <strong>.xls</strong> (LIS export) · <strong>.xlsx</strong> · <strong>.csv</strong> · <strong>.txt</strong>.
+              <span style="color:var(--success);">Legacy <strong>.xls</strong> files are read directly — no conversion needed.</span>
+            </p>
         </div>
-        <details style="margin-bottom:16px;">
-          <summary class="text-sm" style="cursor:pointer;color:var(--deped-blue);font-weight:600;">How to convert a legacy .xls file</summary>
-          <div class="text-sm text-muted" style="padding:10px 0;line-height:1.7;">
-            <p style="margin:0 0 8px;"><strong>Microsoft Excel:</strong> open the SF1 → File → Save As → choose <em>Excel Workbook (.xlsx)</em> or <em>CSV UTF-8 (Comma delimited) (.csv)</em>.</p>
-            <p style="margin:0 0 8px;"><strong>Google Sheets:</strong> upload the .xls → File → Download → choose <em>Microsoft Excel (.xlsx)</em> or <em>Comma-separated values (.csv)</em>.</p>
-            <p style="margin:0;"><strong>Fastest route:</strong> open the file in Excel or Sheets, select the entire data range, copy, then switch to the <em>Paste from Excel</em> tab below and paste. That path always works.</p>
-          </div>
-        </details>
+          <details style="margin-bottom:16px;">
+            <summary class="text-sm" style="cursor:pointer;color:var(--deped-blue);font-weight:600;">
+              .xls file still won't open?
+            </summary>
+            <div class="text-sm text-muted" style="padding:10px 0;line-height:1.7;">
+              <p style="margin:0 0 8px;">
+                KlazAssist reads standard SF1 files exported from the DepEd LIS system directly,
+                including the legacy <strong>.xls</strong> format. If your file still fails to load,
+                it may be a very old BIFF5 workbook or contain macro sheets. In that case:
+              </p>
+              <p style="margin:0 0 8px;">
+                <strong>Excel:</strong> File → Save As → <em>Excel Workbook (.xlsx)</em> or <em>CSV UTF-8 (.csv)</em>.<br>
+                <strong>Google Sheets:</strong> Upload → File → Download → <em>Microsoft Excel (.xlsx)</em>.
+              </p>
+              <p style="margin:0;">
+                <strong>Fallback that always works:</strong> open the SF1, select the data range, copy,
+                and paste into the <em>Paste from Excel</em> tab above.
+              </p>
+            </div>
+          </details>
       </div>
 
       <div id="imp-paste-panel" style="display:none;">
@@ -14356,7 +15172,7 @@ async autoNudgeLowAttendance(cls) {
             <tbody>
               ${parsed.learners.map((l, i) => `
                 <tr>
-                  <td><input type="checkbox" class="imp-row-cb" data-idx="${i}" ${!l._issues.length ? 'checked' : ''}></td>
+                  <td><input type="checkbox" class="imp-row-cb" data-idx="${i}" checked></td>
                   <td>${Utils.esc(l.lrn || '—')}</td>
                   <td>${Utils.esc(Utils.fullName(l))}${l._duplicate ? ' <span class="badge badge-warning">Update</span>' : ''}</td>
                   <td>${Utils.esc(l.sex || '—')}</td>
@@ -14372,31 +15188,108 @@ async autoNudgeLowAttendance(cls) {
         </div>`;
 
       const selAll = preview.querySelector('#imp-sel-all');
-      selAll.onchange = () => preview.querySelectorAll('.imp-row-cb').forEach(cb => { cb.checked = selAll.checked; });
-      preview.querySelectorAll('.imp-row-cb').forEach(cb => cb.onchange = () => {
-        runBtn.disabled = preview.querySelectorAll('.imp-row-cb:checked').length === 0;
+      const allCbs  = preview.querySelectorAll('.imp-row-cb');
+
+      selAll.onchange = () => allCbs.forEach(cb => { cb.checked = selAll.checked; });
+      allCbs.forEach(cb => {
+        cb.onchange = () => {
+          // Keep the header checkbox in sync
+          const allChecked = Array.from(allCbs).every(x => x.checked);
+          selAll.checked = allChecked;
+          runBtn.disabled = preview.querySelectorAll('.imp-row-cb:checked').length === 0;
+        };
       });
+
+      // Safety net: if the class just got created and something upstream
+      // left every row unchecked, force-check them so the import can proceed.
+      if (allCbs.length > 0 && !Array.from(allCbs).some(cb => cb.checked)) {
+        allCbs.forEach(cb => { cb.checked = true; });
+      }
+
       runBtn.disabled = preview.querySelectorAll('.imp-row-cb:checked').length === 0;
     };
 
-    const parseAndPreview = (rows, source) => {
+    const parseAndPreview = async (rows, source) => {
       try {
-        setStatus('Parsing…');
-        const result = SF1Parser.parse(rows, { classId: activeClass.id, existing: State.learners, mode });
-        if (!result.learners.length) {
-          setStatus(`No learner rows found.${result.diagnostics ? ' ' + Utils.esc(result.diagnostics) : ''}`, 'danger');
+        setStatus('Reading SF1 header…');
+
+        // ---- 1. Detect the class this SF1 belongs to ----
+        // We pass the header row index so detectClassInfo can safely
+        // scan the full metadata block on SHS SF1s (which is twice as
+        // tall as the K-10 block) without ever reading learner rows.
+        const headerRowIdx = SF1Parser.findHeaderRow(rows);
+        const classInfo  = SF1Parser.detectClassInfo(rows, headerRowIdx);
+        const comparison = SF1Parser.compareClassInfo(classInfo);
+
+        if (comparison.status === 'no-active-class') {
+          setStatus('Create or select a class first.', 'danger');
           resetPreview();
           return;
         }
+
+        // ---- 2. Gate on mismatch ----
+        if (comparison.status === 'mismatch') {
+          setStatus('Grade / Section mismatch — waiting for your decision…', 'warning');
+          const resolved = await Pages._showClassMismatchDialog(comparison, classInfo);
+          if (!resolved) {
+            setStatus('Import cancelled — the SF1 did not match the active class.', 'danger');
+            resetPreview();
+            return;
+          }
+          // State.activeClass may have been replaced by the create-class action
+        }
+
+        // ---- 3. Parse using the (possibly updated) active class ----
+        setStatus('Parsing learner rows…');
+        const resolvedClassId = State.activeClass.id;
+        const existingLearners = await DB.getAllByIndex('learners', 'classId', resolvedClassId);
+
+        const result = SF1Parser.parse(rows, {
+          classId: resolvedClassId,
+          existing: existingLearners,
+          mode
+        });
+
+        if (!result.learners.length) {
+          setStatus(
+            `No learner rows found.${result.diagnostics ? ' ' + Utils.esc(result.diagnostics) : ''}`,
+            'danger'
+          );
+          resetPreview();
+          return;
+        }
+
+        // ---- 4. Deduplicate against existing learners in the target class ----
         const existingByLRN = {};
-        State.learners.forEach(l => { if (l.lrn) existingByLRN[String(l.lrn).trim()] = l.id; });
+        existingLearners.forEach(l => {
+          if (l.lrn) existingByLRN[String(l.lrn).trim()] = l.id;
+        });
         result.learners.forEach(l => {
           l._issues = l._issues || [];
           l._duplicate = !!(l.lrn && existingByLRN[l.lrn]);
           if (l._duplicate) l._existingId = existingByLRN[l.lrn];
         });
+
         parsed = result;
-        setStatus(`Detected <strong>${Utils.esc(result.format)}</strong> · ${result.learners.length} row${result.learners.length === 1 ? '' : 's'} · source: ${Utils.esc(source)}`, 'success');
+
+        // ---- 5. Compose the status line ----
+        let statusMsg =
+          `Detected <strong>${Utils.esc(result.format)}</strong> · ` +
+          `${result.learners.length} row${result.learners.length === 1 ? '' : 's'}`;
+
+        if (classInfo.gradeLevel || classInfo.section) {
+          statusMsg +=
+            ` · SF1 header: <strong>${Utils.esc(classInfo.gradeLevel || '?')} — ` +
+            `${Utils.esc(classInfo.section || '?')}</strong>`;
+        }
+        if (comparison.status === 'match') {
+          statusMsg += ' · <span style="color:var(--success);">✓ matches active class</span>';
+        } else if (comparison.status === 'no-info') {
+          statusMsg += ' · <span style="color:var(--warning);">⚠ SF1 header had no grade/section — proceed with care</span>';
+        }
+        statusMsg += ` · source: ${Utils.esc(source)}`;
+
+        setStatus(statusMsg, comparison.status === 'match' ? 'success' : 'info');
         rebuildPreview();
       } catch (err) {
         console.error('Import parse error:', err);
@@ -14409,44 +15302,51 @@ async autoNudgeLowAttendance(cls) {
     m.overlay.querySelector('#imp-file').addEventListener('change', async (ev) => {
       const file = ev.target.files[0];
       if (!file) return;
+
       resetPreview();
       setStatus('Reading file…');
+
       const name = (file.name || '').toLowerCase();
+
       try {
+        // ---- Peek at magic bytes to pick the right parser ----
         const headBuf = await file.slice(0, 8).arrayBuffer();
         const head = new Uint8Array(headBuf);
         const isZip = head[0] === 0x50 && head[1] === 0x4B;
         const isOLE = head[0] === 0xD0 && head[1] === 0xCF && head[2] === 0x11 && head[3] === 0xE0;
 
-        if (isOLE || name.endsWith('.xls')) {
-          setStatus(`
-            <strong>Legacy .xls format detected.</strong><br>
-            KlazAssist cannot decode the old binary .xls format in-browser. Please choose one of these:
-            <ol style="margin:8px 0 0 18px;line-height:1.7;">
-              <li>Open the file in Excel or Google Sheets → <em>Save As</em> <strong>.xlsx</strong> or <strong>.csv</strong>, then upload it here again.</li>
-              <li>Or select the data range in the original file, copy, and paste into the <em>Paste from Excel</em> tab — this works instantly.</li>
-            </ol>`, 'danger');
-          return;
-        }
-
-        if (isZip || name.endsWith('.xlsx')) {
-          if (typeof DecompressionStream === 'undefined') {
-            setStatus('This browser cannot read .xlsx files. Please save the SF1 as .csv, or use the Paste from Excel tab.', 'danger');
-            return;
+        // ---- Spreadsheet (.xlsx / .xls) ----
+        if (isZip || isOLE || name.endsWith('.xlsx') || name.endsWith('.xls')) {
+          // Show a friendly status while SheetJS downloads (first .xls only)
+          if (isOLE && !window.XLSX) {
+            setStatus('Loading .xls reader… (one-time, ~900 KB)');
+          } else {
+            setStatus('Reading spreadsheet…');
           }
-          const rows = await XlsxReader.read(file);
-          parseAndPreview(rows, 'uploaded ' + (name.endsWith('.xlsx') ? '.xlsx' : 'workbook'));
+
+          const rows = await SpreadsheetReader.read(file);
+
+          const srcLabel =
+            isOLE              ? 'LIS .xls upload' :
+            name.endsWith('.xlsx') ? '.xlsx upload' :
+                                    'workbook upload';
+
+          parseAndPreview(rows, srcLabel);
           return;
         }
 
+        // ---- Plain text / CSV ----
         const text = await Utils.readFile(file);
         const rows = Utils.parseCSV(text);
         parseAndPreview(rows, 'uploaded text file');
+
       } catch (err) {
-        console.error(err);
+        console.error('Import file read failed:', err);
         setStatus('Failed to read file: ' + Utils.esc(err.message || String(err)), 'danger');
       }
     });
+
+    
 
     /* ---------------- Paste ---------------- */
     m.overlay.querySelector('#imp-paste-sample').onclick = () => {
@@ -14505,7 +15405,7 @@ async autoNudgeLowAttendance(cls) {
             }
             delete l._issues; delete l._duplicate; delete l._existingId;
             l.id = l.id || Utils.uid('l-');
-            l.classId = activeClass.id;
+            l.classId = State.activeClass.id;
             l.createdAt = new Date().toISOString();
             await DB.put('learners', l);
             created++;
@@ -14854,7 +15754,7 @@ async autoNudgeLowAttendance(cls) {
         <div><h2>Gradebook</h2><p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · ${Utils.esc(cls.subject||'')} · SY ${Utils.esc(cls.schoolYear||State.schoolYear)}</p></div>
         <div class="page-actions">
           <button class="btn btn-outline" onclick="Pages.openColumnModal()">${icon('edit')} Add Assessment</button>
-          <button class="btn btn-outline" onclick="Pages.exportGrades()">${icon('download')} Export CSV</button>
+          <button class="btn btn-outline" onclick="Pages.exportGrades()">${icon('upload')} Export CSV</button>
           <button class="btn btn-primary" onclick="Pages.finalizeTermGrades()">${icon('check')} ${finalized ? 'Re-finalize' : 'Finalize'} Term Grades</button>
         </div>
       </div>
@@ -15134,7 +16034,7 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te) {
         <div><h2>Gradebook</h2><p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · ${Utils.esc(cls.subject||'')}</p></div>
         <div class="page-actions">
           <button class="btn btn-outline" onclick="Pages.openColumnModal()">${icon('edit')} Add Column</button>
-          <button class="btn btn-primary" onclick="Pages.exportGrades()">${icon('download')} Export</button>
+          <button class="btn btn-primary" onclick="Pages.exportGrades()">${icon('upload')} Export</button>
         </div>
       </div>
       <div class="card mb-16">
@@ -16297,7 +17197,7 @@ async tosGenerator(root) {
           <option value="legal" ${s.paperSize === 'legal' ? 'selected' : ''}>Legal (8.5 × 14 in)</option>
         </select>
         <button class="btn btn-outline" id="tos-print-exam">${icon('printer')} Print</button>
-        <button class="btn btn-outline" id="tos-export-word">${icon('download')} Export to Word</button>
+        <button class="btn btn-outline" id="tos-export-word">${icon('upload')} Export to Word</button>
         <button class="btn btn-primary" id="tos-save-assessment">${icon('save')} Save to Assessment Builder</button>
       </div>
     </div>  
@@ -16356,7 +17256,7 @@ async tosGenerator(root) {
       <div class="card mb-16">
         <div class="card-head">
           <h3>4 · Generated TOS</h3>
-          <button class="btn btn-sm btn-outline" id="tos-export-csv">${icon('download')} Export CSV</button>
+          <button class="btn btn-sm btn-outline" id="tos-export-csv">${icon('upload')} Export CSV</button>
         </div>
         <div id="tos-result-table"></div>
       </div>
@@ -16390,7 +17290,7 @@ async tosGenerator(root) {
               <option value="legal" ${s.paperSize === 'legal' ? 'selected' : ''}>Legal (8.5 × 14 in)</option>
             </select>
             <button class="btn btn-outline" id="tos-print-exam">${icon('printer')} Print</button>
-            <button class="btn btn-outline" id="tos-export-word">${icon('download')} Export to Word</button>
+            <button class="btn btn-outline" id="tos-export-word">${icon('upload')} Export to Word</button>
             <button class="btn btn-primary" id="tos-save-assessment">${icon('save')} Save to Assessment Builder</button>
           </div>
         </div>
@@ -22099,69 +22999,594 @@ async exportGroupingSetCSV(id) {
     Pages._bindPresenterButtons(root);
   },
 
-  async randomizer(root) {
-    const presenterActive = () => Presenter.isOpen() && Presenter._toolId === 'randomizer';
-    const push = (label, display) => {
-      if (presenterActive()) Presenter.send({ label, display: String(display) });
-    };
+    async randomizer(root) {
+      // ── Audio helper ─────────────────────────────────────────────────
+      const tone = (freq, dur, type = 'sine', gain = 0.14) => {
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return;
+          if (!Pages._rzAudio) Pages._rzAudio = new Ctx();
+          const ctx = Pages._rzAudio;
+          if (ctx.state === 'suspended') ctx.resume();
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = type;
+          o.frequency.value = freq;
+          o.connect(g); g.connect(ctx.destination);
+          const t = ctx.currentTime;
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(gain, t + 0.008);
+          g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+          o.start(t);
+          o.stop(t + dur + 0.04);
+        } catch (e) { /* silent */ }
+      };
+      const tick   = () => tone(820, 0.025, 'square', 0.05);
+      const clack  = () => tone(260, 0.05,  'square', 0.07);
+      const chime  = () => {
+        tone(659, 0.12, 'sine', 0.12);
+        setTimeout(() => tone(880, 0.16, 'sine', 0.10), 80);
+        setTimeout(() => tone(1174, 0.20, 'sine', 0.08), 160);
+      };
 
-    root.innerHTML = `
-      <div class="page-head">
-        <div><h2>Randomizer</h2><p>Random classroom tools</p></div>
-        <div class="page-actions">
-          ${presenterButtonHTML('randomizer')}
-        </div>
-      </div>
-      <div class="grid grid-2">
-        <div class="card"><div class="card-head"><h3>Random Number</h3></div>
-          <div class="form-row">
-            <div class="form-group"><label>Min</label><input type="number" class="form-control" id="rn-min" value="1"></div>
-            <div class="form-group"><label>Max</label><input type="number" class="form-control" id="rn-max" value="100"></div>
+      // ── Persistent state (survives page switches) ─────────────────────
+      const st = Pages._rzState = Pages._rzState || {
+        number: { min: 1, max: 100, noRepeat: false, used: [], last: null, history: [] },
+        dice:   { count: 2, sides: 6, values: [], history: [] },
+        coin:   { heads: 0, tails: 0, streak: 0, streakSide: null, last: null, history: [], rotation: 0 },
+        yn:     { yesLabel: 'Yes', noLabel: 'No', last: null, history: [] },
+        lastDisplay: { label: 'Randomizer', display: '—' }
+      };
+
+      // ── Presenter bridge ──────────────────────────────────────────────
+      const presenterActive = () => Presenter.isOpen() && Presenter._toolId === 'randomizer';
+      const push = (label, display) => {
+        st.lastDisplay = { label, display: String(display) };
+        if (presenterActive()) Presenter.send({ label, display: String(display) });
+      };
+
+      // ── SVG helpers ───────────────────────────────────────────────────
+      const dieFaceSVG = (value) => {
+        const pipMap = {
+          1: [[50,50]],
+          2: [[32,32],[68,68]],
+          3: [[32,32],[50,50],[68,68]],
+          4: [[32,32],[68,32],[32,68],[68,68]],
+          5: [[32,32],[68,32],[50,50],[32,68],[68,68]],
+          6: [[32,32],[68,32],[32,50],[68,50],[32,68],[68,68]]
+        };
+        const pips = pipMap[value] || [];
+        return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <rect x="5" y="5" width="90" height="90" rx="16" fill="#fff" stroke="currentColor" stroke-width="3"/>
+          ${pips.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="8.5" fill="currentColor"/>`).join('')}
+        </svg>`;
+      };
+
+      const renderDiceRow = (rowEl, values, sides, extraClass = '') => {
+        rowEl.innerHTML = values.map(v => {
+          if (sides === 6) return `<div class="rz-die ${extraClass}">${dieFaceSVG(v)}</div>`;
+          return `<div class="rz-poly-die ${extraClass}"><div class="num">${v}</div><div class="sides">D${sides}</div></div>`;
+        }).join('');
+      };
+
+      const historyChips = (arr, max = 12) => {
+        if (!arr.length) return '<span class="rz-history-empty">No rolls yet — click the button to begin.</span>';
+        const show = arr.slice(-max).reverse();
+        return show.map((v, i) =>
+          `<span class="rz-history-chip ${i === 0 ? 'latest' : ''}">${Utils.esc(String(v))}</span>`
+        ).join('');
+      };
+
+      // ── Render the page ───────────────────────────────────────────────
+      root.innerHTML = `
+        <div class="page-head">
+          <div>
+            <h2>Randomizer</h2>
+            <p>Random classroom tools — tap, roll, flip, decide</p>
           </div>
-          <div class="big-timer" id="rn-display" style="font-size:48px;">—</div>
-          <button class="btn btn-primary btn-block mt-12" id="rn-go">Roll Number</button>
+          <div class="page-actions">
+            ${presenterButtonHTML('randomizer')}
+          </div>
         </div>
-        <div class="card"><div class="card-head"><h3>Dice</h3></div>
-          <div class="big-timer" id="dice-display" style="font-size:48px;">🎲</div>
-          <button class="btn btn-primary btn-block" id="dice-go">Roll Dice</button>
-        </div>
-        <div class="card"><div class="card-head"><h3>Coin Flip</h3></div>
-          <div class="big-timer" id="coin-display" style="font-size:48px;">—</div>
-          <button class="btn btn-primary btn-block" id="coin-go">Flip Coin</button>
-        </div>
-        <div class="card"><div class="card-head"><h3>Yes / No</h3></div>
-          <div class="big-timer" id="yn-display" style="font-size:48px;">—</div>
-          <button class="btn btn-primary btn-block" id="yn-go">Decide</button>
-        </div>
-      </div>`;
 
-    root.querySelector('#rn-go').onclick = () => {
-      const min = Number(document.getElementById('rn-min').value) || 0;
-      const max = Number(document.getElementById('rn-max').value) || 100;
-      const val = Math.floor(Math.random() * (max - min + 1)) + min;
-      document.getElementById('rn-display').textContent = val;
-      push('Random Number', val);
-    };
-    root.querySelector('#dice-go').onclick = () => {
-      const n = Math.floor(Math.random() * 6) + 1;
-      const faces = ['⚀','⚁','⚂','⚃','⚄','⚅'];
-      const display = faces[n-1] + ' ' + n;
-      document.getElementById('dice-display').textContent = display;
-      push('Dice Roll', display);
-    };
-    root.querySelector('#coin-go').onclick = () => {
-      const val = Math.random() < 0.5 ? 'Heads' : 'Tails';
-      document.getElementById('coin-display').textContent = val;
-      push('Coin Flip', val);
-    };
-    root.querySelector('#yn-go').onclick = () => {
-      const val = Math.random() < 0.5 ? 'Yes' : 'No';
-      document.getElementById('yn-display').textContent = val;
-      push('Yes or No', val);
-    };
+        <div class="rz-grid">
 
-    Pages._bindPresenterButtons(root);
-  },
+          <!-- ============ 1 · RANDOM NUMBER ============ -->
+          <div class="rz-card">
+            <div class="rz-card-head">
+              <h3>${icon('shuffle')} Random Number</h3>
+              <div class="rz-segment" role="tablist" aria-label="Number mode">
+                <button type="button" data-rn-mode="free" class="${!st.number.noRepeat ? 'active' : ''}">Free</button>
+                <button type="button" data-rn-mode="bingo" class="${st.number.noRepeat ? 'active' : ''}" title="Never repeats a number until reset">No repeat</button>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-bottom:12px;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:11px;">Min</label>
+                <input type="number" class="form-control" id="rz-rn-min" value="${st.number.min}">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:11px;">Max</label>
+                <input type="number" class="form-control" id="rz-rn-max" value="${st.number.max}">
+              </div>
+            </div>
+
+            <div class="rz-stage">
+              <div class="rz-number" id="rz-rn-display">${st.number.last !== null ? st.number.last : '—'}</div>
+            </div>
+
+            <div class="rz-controls">
+              <button class="btn btn-primary" id="rz-rn-go">${icon('shuffle')} Roll Number</button>
+              <button class="btn btn-outline" id="rz-rn-clear" title="Clear history and used numbers">${icon('history')} Reset</button>
+            </div>
+
+            <div class="rz-history" id="rz-rn-history">${historyChips(st.number.history)}</div>
+          </div>
+
+          <!-- ============ 2 · DICE ============ -->
+          <div class="rz-card">
+            <div class="rz-card-head">
+              <h3>${icon('dice')} Dice</h3>
+              <div class="rz-segment" role="tablist" aria-label="Die sides">
+                ${[4,6,8,10,12,20].map(s =>
+                  `<button type="button" data-rz-sides="${s}" class="${st.dice.sides === s ? 'active' : ''}">D${s}</button>`
+                ).join('')}
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom:10px;">
+              <label style="font-size:11px;">Number of dice</label>
+              <div class="rz-segment" role="tablist" aria-label="Dice count">
+                ${[1,2,3,4].map(n =>
+                  `<button type="button" data-rz-count="${n}" class="${st.dice.count === n ? 'active' : ''}">${n}</button>`
+                ).join('')}
+              </div>
+            </div>
+
+            <div class="rz-stage">
+              <div style="width:100%;">
+                <div class="rz-dice-row" id="rz-dice-row"></div>
+                <div class="rz-sum ${st.dice.values.length > 1 ? 'show' : ''}" id="rz-dice-sum">
+                  ${st.dice.values.length > 1
+                    ? `Total <span class="value">${st.dice.values.reduce((a,b) => a+b, 0)}</span>`
+                    : ''}
+                </div>
+              </div>
+            </div>
+
+            <div class="rz-controls">
+              <button class="btn btn-primary" id="rz-dice-go">${icon('dice')} Roll Dice</button>
+              <button class="btn btn-outline" id="rz-dice-clear" title="Clear history">${icon('history')} Reset</button>
+            </div>
+
+            <div class="rz-history" id="rz-dice-history">${historyChips(st.dice.history)}</div>
+          </div>
+
+          <!-- ============ 3 · COIN FLIP ============ -->
+          <div class="rz-card">
+            <div class="rz-card-head">
+              <h3>${icon('star')} Coin Flip</h3>
+            </div>
+
+            <div class="rz-stage" style="padding:8px;">
+              <div class="rz-coin-scene">
+                <div class="rz-coin" id="rz-coin" style="transform:rotateX(${st.coin.rotation}deg);">
+                  <div class="rz-coin-face rz-coin-heads"><span class="glyph">H</span></div>
+                  <div class="rz-coin-face rz-coin-tails"><span class="glyph">T</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rz-coin-stats">
+              <div class="stat heads">
+                <span class="lbl">Heads</span>
+                <span class="val" id="rz-coin-heads">${st.coin.heads}</span>
+              </div>
+              <div class="stat tails">
+                <span class="lbl">Tails</span>
+                <span class="val" id="rz-coin-tails">${st.coin.tails}</span>
+              </div>
+              <div class="stat streak">
+                <span class="lbl">Streak</span>
+                <span class="val" id="rz-coin-streak">${st.coin.streak ? st.coin.streak + '×' + (st.coin.streakSide || '').charAt(0) : '—'}</span>
+              </div>
+            </div>
+
+            <div class="rz-controls" style="margin-top:14px;">
+              <button class="btn btn-primary" id="rz-coin-go">${icon('star')} Flip Coin</button>
+              <button class="btn btn-outline" id="rz-coin-clear" title="Reset counters">${icon('history')} Reset</button>
+            </div>
+
+            <div class="rz-history" id="rz-coin-history">${historyChips(st.coin.history)}</div>
+          </div>
+
+          <!-- ============ 4 · YES / NO ============ -->
+          <div class="rz-card">
+            <div class="rz-card-head">
+              <h3>${icon('check')} Yes / No</h3>
+              <div class="rz-segment" role="tablist" aria-label="Preset labels">
+                <button type="button" data-rz-yn-preset="Yes,No"            class="${st.yn.yesLabel==='Yes'    && st.yn.noLabel==='No'   ? 'active' : ''}">Yes/No</button>
+                <button type="button" data-rz-yn-preset="Correct,Wrong"     class="${st.yn.yesLabel==='Correct' && st.yn.noLabel==='Wrong' ? 'active' : ''}">✓/✗</button>
+                <button type="button" data-rz-yn-preset="True,False"        class="${st.yn.yesLabel==='True'   && st.yn.noLabel==='False' ? 'active' : ''}">T/F</button>
+                <button type="button" data-rz-yn-preset="Go,Stop"           class="${st.yn.yesLabel==='Go'     && st.yn.noLabel==='Stop'  ? 'active' : ''}">Go/Stop</button>
+              </div>
+            </div>
+
+            <div class="form-row" style="margin-bottom:12px;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:11px;">Positive option</label>
+                <input type="text" class="form-control" id="rz-yn-yes" value="${Utils.attr(st.yn.yesLabel)}">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:11px;">Negative option</label>
+                <input type="text" class="form-control" id="rz-yn-no" value="${Utils.attr(st.yn.noLabel)}">
+              </div>
+            </div>
+
+            <div class="rz-yn-stage ${st.yn.last === st.yn.yesLabel ? 'yes' : st.yn.last === st.yn.noLabel ? 'no' : ''}"
+                id="rz-yn-stage">
+              <div class="rz-yn-value" id="rz-yn-value">${st.yn.last || '—'}</div>
+            </div>
+
+            <div class="rz-controls">
+              <button class="btn btn-primary" id="rz-yn-go">${icon('shuffle')} Decide</button>
+              <button class="btn btn-outline" id="rz-yn-clear" title="Clear history">${icon('history')} Reset</button>
+            </div>
+
+            <div class="rz-history" id="rz-yn-history">${historyChips(st.yn.history)}</div>
+          </div>
+
+        </div>
+      `;
+
+      // ─────────────────────────────────────────────────────────────────
+      // TOOL 1 · RANDOM NUMBER
+      // ─────────────────────────────────────────────────────────────────
+      {
+        const display = root.querySelector('#rz-rn-display');
+        const minIn   = root.querySelector('#rz-rn-min');
+        const maxIn   = root.querySelector('#rz-rn-max');
+        const historyEl = root.querySelector('#rz-rn-history');
+
+        minIn.addEventListener('change', () => { st.number.min = Number(minIn.value) || 0; st.number.used = []; });
+        maxIn.addEventListener('change', () => { st.number.max = Number(maxIn.value) || 100; st.number.used = []; });
+
+        root.querySelectorAll('[data-rn-mode]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            root.querySelectorAll('[data-rn-mode]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            st.number.noRepeat = btn.dataset.rnMode === 'bingo';
+            st.number.used = [];       // reset the pool when switching modes
+            UI.toast(st.number.noRepeat ? 'Bingo mode: numbers will not repeat until reset.' : 'Free mode.', 'info', 2200);
+          });
+        });
+
+        const pickRange = () => {
+          const lo = Math.min(Number(minIn.value) || 0, Number(maxIn.value) || 100);
+          const hi = Math.max(Number(minIn.value) || 0, Number(maxIn.value) || 100);
+          return [lo, hi];
+        };
+
+        root.querySelector('#rz-rn-go').onclick = async () => {
+          const btn = root.querySelector('#rz-rn-go');
+          if (btn.disabled) return;
+          btn.disabled = true;
+
+          const [lo, hi] = pickRange();
+
+          // Bingo mode: pick from the pool of unused numbers
+          let final;
+          if (st.number.noRepeat) {
+            const remaining = [];
+            for (let n = lo; n <= hi; n++) if (!st.number.used.includes(n)) remaining.push(n);
+            if (!remaining.length) {
+              UI.toast('All numbers have been called. Reset to start a new round.', 'warning', 3500);
+              btn.disabled = false;
+              return;
+            }
+            final = remaining[Math.floor(Math.random() * remaining.length)];
+          } else {
+            final = Math.floor(Math.random() * (hi - lo + 1)) + lo;
+          }
+
+          // Animate a rolling counter
+          display.classList.remove('settled');
+          display.classList.add('rolling');
+          const duration = 1100;
+          const start = Date.now();
+          let lastTickAt = 0;
+          while (Date.now() - start < duration) {
+            const flash = Math.floor(Math.random() * (hi - lo + 1)) + lo;
+            display.textContent = flash;
+            const now = Date.now();
+            if (now - lastTickAt > 55) { tick(); lastTickAt = now; }
+            await new Promise(r => setTimeout(r, 32));
+          }
+
+          // Settle
+          display.classList.remove('rolling');
+          display.textContent = final;
+          void display.offsetWidth;
+          display.classList.add('settled');
+          chime();
+
+          // Persist
+          st.number.last = final;
+          if (st.number.noRepeat) st.number.used.push(final);
+          st.number.history.push(final);
+          if (st.number.history.length > 60) st.number.history.shift();
+          historyEl.innerHTML = historyChips(st.number.history);
+          push('Random Number', final);
+
+          btn.disabled = false;
+        };
+
+        root.querySelector('#rz-rn-clear').onclick = () => {
+          st.number.history = [];
+          st.number.used = [];
+          st.number.last = null;
+          display.textContent = '—';
+          display.classList.remove('rolling','settled');
+          historyEl.innerHTML = historyChips([]);
+          push('Random Number', '—');
+        };
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // TOOL 2 · DICE
+      // ─────────────────────────────────────────────────────────────────
+      {
+        const rowEl = root.querySelector('#rz-dice-row');
+        const sumEl = root.querySelector('#rz-dice-sum');
+        const historyEl = root.querySelector('#rz-dice-history');
+
+        // Paint the current dice immediately
+        const initialValues = st.dice.values.length === st.dice.count
+          ? st.dice.values
+          : Array.from({ length: st.dice.count }, () => 1);
+        renderDiceRow(rowEl, initialValues, st.dice.sides);
+        if (st.dice.values.length > 1) {
+          sumEl.classList.add('show');
+          sumEl.innerHTML = `Total <span class="value">${st.dice.values.reduce((a,b)=>a+b,0)}</span>`;
+        }
+
+        root.querySelectorAll('[data-rz-sides]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            root.querySelectorAll('[data-rz-sides]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            st.dice.sides = Number(btn.dataset.rzSides);
+            st.dice.values = [];
+            renderDiceRow(rowEl, Array.from({ length: st.dice.count }, () => 1), st.dice.sides);
+            sumEl.classList.remove('show');
+          });
+        });
+
+        root.querySelectorAll('[data-rz-count]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            root.querySelectorAll('[data-rz-count]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            st.dice.count = Number(btn.dataset.rzCount);
+            st.dice.values = [];
+            renderDiceRow(rowEl, Array.from({ length: st.dice.count }, () => 1), st.dice.sides);
+            sumEl.classList.remove('show');
+          });
+        });
+
+        root.querySelector('#rz-dice-go').onclick = async () => {
+          const btn = root.querySelector('#rz-dice-go');
+          if (btn.disabled) return;
+          btn.disabled = true;
+
+          const { count, sides } = st.dice;
+
+          // Build the dice once, in rolling state
+          renderDiceRow(rowEl, Array.from({ length: count }, () => 1), sides, 'rolling');
+          sumEl.classList.remove('show');
+
+          // Flash random faces for ~900 ms
+          const duration = 900;
+          const start = Date.now();
+          let lastClackAt = 0;
+          while (Date.now() - start < duration) {
+            const diceEls = rowEl.querySelectorAll('.rz-die, .rz-poly-die');
+            diceEls.forEach(el => {
+              const v = Math.floor(Math.random() * sides) + 1;
+              if (sides === 6) el.innerHTML = dieFaceSVG(v);
+              else el.querySelector('.num').textContent = v;
+            });
+            const now = Date.now();
+            if (now - lastClackAt > 80) { clack(); lastClackAt = now; }
+            await new Promise(r => setTimeout(r, 65));
+          }
+
+          // Settle
+          const finalValues = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+          const diceEls = rowEl.querySelectorAll('.rz-die, .rz-poly-die');
+          diceEls.forEach((el, i) => {
+            el.classList.remove('rolling');
+            el.classList.add('settled');
+            const v = finalValues[i];
+            if (sides === 6) el.innerHTML = dieFaceSVG(v);
+            else el.querySelector('.num').textContent = v;
+          });
+          chime();
+
+          // Show the total for multi-dice rolls
+          if (count > 1) {
+            sumEl.innerHTML = `Total <span class="value">${finalValues.reduce((a,b)=>a+b,0)}</span>`;
+            requestAnimationFrame(() => sumEl.classList.add('show'));
+          }
+
+          // Persist
+          st.dice.values = finalValues;
+          const label = count > 1
+            ? `D${sides} × ${count}: ${finalValues.join(' + ')} = ${finalValues.reduce((a,b)=>a+b,0)}`
+            : `D${sides}: ${finalValues[0]}`;
+          st.dice.history.push(label);
+          if (st.dice.history.length > 20) st.dice.history.shift();
+          historyEl.innerHTML = historyChips(st.dice.history);
+          push('Dice', label);
+
+          btn.disabled = false;
+        };
+
+        root.querySelector('#rz-dice-clear').onclick = () => {
+          st.dice.history = [];
+          st.dice.values = [];
+          sumEl.classList.remove('show');
+          historyEl.innerHTML = historyChips([]);
+          renderDiceRow(rowEl, Array.from({ length: st.dice.count }, () => 1), st.dice.sides);
+          push('Dice', '—');
+        };
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // TOOL 3 · COIN FLIP
+      // ─────────────────────────────────────────────────────────────────
+      {
+        const coinEl = root.querySelector('#rz-coin');
+        const headsEl = root.querySelector('#rz-coin-heads');
+        const tailsEl = root.querySelector('#rz-coin-tails');
+        const streakEl = root.querySelector('#rz-coin-streak');
+        const historyEl = root.querySelector('#rz-coin-history');
+
+        root.querySelector('#rz-coin-go').onclick = async () => {
+          const btn = root.querySelector('#rz-coin-go');
+          if (btn.disabled) return;
+          btn.disabled = true;
+
+          const isHeads = Math.random() < 0.5;
+          const spins = 4 + Math.floor(Math.random() * 3);   // 4–6 spins
+          const targetRotation = st.coin.rotation + spins * 360 + (isHeads ? 0 : 180);
+
+          coinEl.style.transition = 'transform 1.5s cubic-bezier(.3,.85,.35,1)';
+          coinEl.style.transform = `rotateX(${targetRotation}deg)`;
+
+          // Soft whoosh during the flip
+          tone(420, 0.55, 'sine', 0.05);
+
+          await new Promise(r => setTimeout(r, 1520));
+
+          st.coin.rotation = targetRotation;
+          const result = isHeads ? 'Heads' : 'Tails';
+
+          coinEl.classList.add('settled');
+          setTimeout(() => coinEl.classList.remove('settled'), 800);
+
+          if (isHeads) st.coin.heads++; else st.coin.tails++;
+          if (st.coin.streakSide === result) st.coin.streak++;
+          else { st.coin.streakSide = result; st.coin.streak = 1; }
+          st.coin.last = result;
+
+          headsEl.textContent = st.coin.heads;
+          tailsEl.textContent = st.coin.tails;
+          streakEl.textContent = st.coin.streak > 1
+            ? `${st.coin.streak}×${result.charAt(0)}`
+            : '—';
+
+          chime();
+
+          st.coin.history.push(result);
+          if (st.coin.history.length > 30) st.coin.history.shift();
+          historyEl.innerHTML = historyChips(st.coin.history);
+          push('Coin Flip', result);
+
+          btn.disabled = false;
+        };
+
+        root.querySelector('#rz-coin-clear').onclick = () => {
+          st.coin = { heads: 0, tails: 0, streak: 0, streakSide: null, last: null, history: [], rotation: st.coin.rotation };
+          headsEl.textContent = '0';
+          tailsEl.textContent = '0';
+          streakEl.textContent = '—';
+          historyEl.innerHTML = historyChips([]);
+          push('Coin Flip', '—');
+        };
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // TOOL 4 · YES / NO
+      // ─────────────────────────────────────────────────────────────────
+      {
+        const stage = root.querySelector('#rz-yn-stage');
+        const valueEl = root.querySelector('#rz-yn-value');
+        const yesIn  = root.querySelector('#rz-yn-yes');
+        const noIn   = root.querySelector('#rz-yn-no');
+        const historyEl = root.querySelector('#rz-yn-history');
+
+        const syncLabels = () => {
+          st.yn.yesLabel = yesIn.value.trim() || 'Yes';
+          st.yn.noLabel  = noIn.value.trim()  || 'No';
+        };
+        yesIn.addEventListener('change', syncLabels);
+        noIn.addEventListener('change', syncLabels);
+
+        root.querySelectorAll('[data-rz-yn-preset]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const [yes, no] = btn.dataset.rzYnPreset.split(',');
+            yesIn.value = yes;
+            noIn.value  = no;
+            syncLabels();
+            root.querySelectorAll('[data-rz-yn-preset]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+          });
+        });
+
+        root.querySelector('#rz-yn-go').onclick = async () => {
+          const btn = root.querySelector('#rz-yn-go');
+          if (btn.disabled) return;
+          btn.disabled = true;
+          syncLabels();
+
+          const Y = st.yn.yesLabel;
+          const N = st.yn.noLabel;
+
+          stage.classList.remove('yes','no');
+          stage.classList.add('rolling');
+
+          const duration = 850;
+          const start = Date.now();
+          let lastTickAt = 0;
+          while (Date.now() - start < duration) {
+            valueEl.textContent = Math.random() < 0.5 ? Y : N;
+            const now = Date.now();
+            if (now - lastTickAt > 55) { tick(); lastTickAt = now; }
+            await new Promise(r => setTimeout(r, 60));
+          }
+
+          const isYes = Math.random() < 0.5;
+          const winner = isYes ? Y : N;
+
+          stage.classList.remove('rolling');
+          valueEl.textContent = winner;
+          // Force re-trigger of the pop animation
+          void stage.offsetWidth;
+          stage.classList.add(isYes ? 'yes' : 'no');
+          chime();
+
+          st.yn.last = winner;
+          st.yn.history.push(winner);
+          if (st.yn.history.length > 30) st.yn.history.shift();
+          historyEl.innerHTML = historyChips(st.yn.history);
+          push('Yes / No', winner);
+
+          btn.disabled = false;
+        };
+
+        root.querySelector('#rz-yn-clear').onclick = () => {
+          st.yn.history = [];
+          st.yn.last = null;
+          stage.classList.remove('yes','no','rolling');
+          valueEl.textContent = '—';
+          historyEl.innerHTML = historyChips([]);
+          push('Yes / No', '—');
+        };
+      }
+
+      // ── Presenter bridge ──────────────────────────────────────────────
+      Pages._bindPresenterButtons(root);
+    },
 
   async wheel(root) {
     const learners = State.learners;
@@ -23817,7 +25242,7 @@ if (State.gradeSummaryMode === 'sheet') {
           <button class="btn btn-outline" id="gs-mode-toggle">
             ${icon('list')} Term Summary Sheet
           </button>
-        <button class="btn btn-outline" id="gs-export-csv">${icon('download')} Export CSV</button>
+        <button class="btn btn-outline" id="gs-export-csv">${icon('upload')} Export CSV</button>
         <button class="btn btn-outline" id="gs-refresh">${icon('history')} Refresh</button>
         <button class="btn btn-primary" id="gs-print">${icon('printer')} Print</button>
       </div>
@@ -26851,13 +28276,13 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
           <button class="btn btn-primary btn-block" onclick="Pages.backupAll()">${icon('download')} Backup All</button></div>
         <div class="card"><h3 style="font-size:15px;margin-bottom:8px;">Learners</h3>
           <p class="text-sm text-muted mb-12">Export the active class as CSV or SF1 (.xlsx).</p>
-          <button class="btn btn-primary btn-block" onclick="Pages.exportLearners()">${icon('download')} Export Learners</button></div>
+          <button class="btn btn-primary btn-block" onclick="Pages.exportLearners()">${icon('upload')} Export Learners</button></div>
         <div class="card"><h3 style="font-size:15px;margin-bottom:8px;">Grades CSV</h3>
           <p class="text-sm text-muted mb-12">Export gradebook data.</p>
-          <button class="btn btn-primary btn-block" onclick="Pages.exportGrades()">${icon('download')} Export CSV</button></div>
+          <button class="btn btn-primary btn-block" onclick="Pages.exportGrades()">${icon('upload')} Export CSV</button></div>
         <div class="card"><h3 style="font-size:15px;margin-bottom:8px;">Attendance JSON</h3>
           <p class="text-sm text-muted mb-12">Export attendance records.</p>
-          <button class="btn btn-primary btn-block" onclick="Pages.exportAttendanceJSON()">${icon('download')} Export JSON</button></div>
+          <button class="btn btn-primary btn-block" onclick="Pages.exportAttendanceJSON()">${icon('upload')} Export JSON</button></div>
         <div class="card"><h3 style="font-size:15px;margin-bottom:8px;">Restore from JSON</h3>
           <p class="text-sm text-muted mb-12">Restore data from a backup file.</p>
           <button class="btn btn-outline btn-block" onclick="Pages.restoreFromJSON()">${icon('download')} Restore</button></div>
@@ -32094,8 +33519,10 @@ Pages._buildPresenterState = function(tool) {
       const t = Pages._timerState || { remaining: 300, total: 300, running: false };
       return { remaining: t.remaining, total: t.total, running: t.running };
     }
-    case 'randomizer':
-      return { label: 'Randomizer', display: '—' };
+    case 'randomizer': {
+      const rz = Pages._rzState && Pages._rzState.lastDisplay;
+      return rz ? { label: rz.label, display: rz.display } : { label: 'Randomizer', display: '—' };
+    }
     case 'noise-meter':
       return { level: 0, label: 'Silent', color: '#198754' };
     case 'signal': {
