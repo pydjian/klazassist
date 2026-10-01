@@ -9264,6 +9264,8 @@ const Presenter = {
       this._lastInboundAt = Date.now();
       if (data.type === 'state') {
         this._handleState(parsed.toolId, data.payload);
+      } else if (data.type === 'quiz-timer') {
+        this._updateQuizTimer(data.remaining);
       } else if (data.type === 'close') {
         window.close();
       }
@@ -9377,6 +9379,7 @@ const Presenter = {
       case 'randomizer':   this._renderRandomizer(body, payload); break;
       case 'noise-meter':  this._renderNoise(body, payload); break;
       case 'signal':       this._renderSignal(body, payload); break;
+      case 'quiz':         this._renderQuiz(body, payload); break;
     }
   },
 
@@ -9700,7 +9703,164 @@ const Presenter = {
           ${Utils.esc(p.desc || '')}
         </div>
       </div>`;
-  }
+  },
+  /* ---------- Quiz · Learner-facing renderer ---------- */
+_renderQuiz(body, p) {
+  if (!p) return;
+
+  const hasChoices = Array.isArray(p.choices) && p.choices.length > 0;
+  const hasTimer   = !!p.hasTimer;
+  const rem        = Math.max(0, Math.floor(p.timeRemaining || 0));
+  const timeStr    = String(Math.floor(rem / 60)).padStart(2, '0') + ':' +
+                     String(rem % 60).padStart(2, '0');
+  const timerColor =
+    rem === 0    ? '#EF4444' :
+    rem <= 10    ? '#EF4444' :
+    rem <= 60    ? '#F59E0B' : '#10B981';
+
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const type    = (p.questionType || '').toLowerCase();
+
+  // For True/False with no explicit choices, render dedicated TRUE / FALSE buttons
+  const isTrueFalse = !hasChoices && /true\s*\/?\s*false/i.test(p.questionType);
+
+  const choicesHTML = hasChoices
+    ? `<div style="display:grid;grid-template-columns:${p.choices.length <= 4 ? 'repeat(2, 1fr)' : '1fr'};gap:14px;width:100%;max-width:1050px;margin:0 auto;">
+        ${p.choices.map((c, i) => `
+          <div style="display:flex;align-items:center;gap:16px;padding:18px 22px;
+                      background:rgba(255,255,255,0.07);
+                      border:2px solid rgba(255,255,255,0.14);
+                      border-radius:14px;transition:background .15s;">
+            <div style="width:42px;height:42px;border-radius:50%;
+                        background:rgba(255,255,255,0.14);color:#fff;
+                        display:flex;align-items:center;justify-content:center;
+                        font-weight:800;font-size:17px;flex-shrink:0;">
+              ${letters[i] || (i + 1)}
+            </div>
+            <div style="flex:1;font-size:clamp(16px,1.5vw,22px);
+                        color:#fff;font-weight:500;line-height:1.35;">
+              ${Utils.esc(c)}
+            </div>
+          </div>`).join('')}
+      </div>`
+    : isTrueFalse
+      ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;width:100%;max-width:760px;margin:0 auto;">
+          <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:28px;
+                      background:rgba(16,185,129,0.14);
+                      border:2px solid rgba(16,185,129,0.4);border-radius:16px;">
+            <span style="font-size:28px;">✓</span>
+            <span style="font-size:clamp(22px,2vw,32px);font-weight:800;color:#10B981;">TRUE</span>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:28px;
+                      background:rgba(239,68,68,0.14);
+                      border:2px solid rgba(239,68,68,0.4);border-radius:16px;">
+            <span style="font-size:28px;">✗</span>
+            <span style="font-size:clamp(22px,2vw,32px);font-weight:800;color:#EF4444;">FALSE</span>
+          </div>
+        </div>`
+      : `<div style="text-align:center;padding:36px 20px;color:rgba(255,255,255,0.55);
+                     font-size:clamp(16px,1.4vw,20px);font-style:italic;">
+          ${ type === 'essay'          ? 'Write your answer on your paper.'
+           : type === 'identification' ? 'Write your answer.'
+           : type === 'short answer'   ? 'Answer briefly.'
+           : 'Answer the question.' }
+        </div>`;
+
+  body.innerHTML = `
+    <div style="width:100%;max-width:1300px;display:flex;flex-direction:column;gap:32px;padding:20px;">
+
+      <!-- Header: item number + timer -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:16px;min-width:0;">
+          <div style="width:68px;height:68px;border-radius:18px;
+                      background:rgba(255,255,255,0.09);
+                      border:2px solid rgba(255,255,255,0.2);
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:26px;font-weight:800;color:#fff;flex-shrink:0;">
+            ${p.questionNumber}
+          </div>
+          <div style="min-width:0;">
+            <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;
+                        color:rgba(255,255,255,0.55);font-weight:700;">
+              Item ${p.questionNumber} of ${p.totalQuestions}
+            </div>
+            <div style="font-size:14px;color:rgba(255,255,255,0.75);margin-top:3px;
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${Utils.esc(p.quizTitle || '')}
+            </div>
+          </div>
+        </div>
+
+        ${hasTimer ? `
+          <div id="pq-timer-wrap"
+               style="display:flex;align-items:center;gap:14px;padding:10px 22px;
+                      background:rgba(255,255,255,0.06);
+                      border:2px solid ${timerColor}55;border-radius:16px;">
+            <svg id="pq-timer-icon" width="22" height="22" viewBox="0 0 24 24"
+                 fill="none" stroke="${timerColor}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            <div id="pq-timer-value"
+                 style="font-size:clamp(28px,3vw,42px);font-weight:800;
+                        font-variant-numeric:tabular-nums;color:${timerColor};
+                        letter-spacing:-1px;line-height:1;">
+              ${timeStr}
+            </div>
+          </div>` : ''}
+      </div>
+
+      <!-- Question -->
+      <div style="font-size:clamp(24px,3vw,42px);font-weight:700;color:#fff;
+                  line-height:1.3;letter-spacing:-0.5px;text-align:center;padding:0 20px;">
+        ${Utils.esc(p.questionText || '')}
+      </div>
+
+      <!-- Choices / instructions -->
+      ${choicesHTML}
+
+      <!-- Progress dots -->
+      <div style="display:flex;justify-content:center;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        ${Array.from({ length: p.totalQuestions }, (_, i) => `
+          <span style="width:${i === (p.questionNumber - 1) ? '22px' : '8px'};
+                       height:8px;border-radius:4px;
+                       background:${i === (p.questionNumber - 1) ? '#F7C948' : 'rgba(255,255,255,0.2)'};
+                       transition:all .25s;"></span>`).join('')}
+      </div>
+
+    </div>`;
+},
+
+/** Lightweight in-place timer update — never re-renders the whole slide. */
+_updateQuizTimer(remaining) {
+  const el = document.getElementById('pq-timer-value');
+  if (!el) return;
+  const rem = Math.max(0, Math.floor(remaining || 0));
+  const timeStr = String(Math.floor(rem / 60)).padStart(2, '0') + ':' +
+                  String(rem % 60).padStart(2, '0');
+  const color =
+    rem === 0    ? '#EF4444' :
+    rem <= 10    ? '#EF4444' :
+    rem <= 60    ? '#F59E0B' : '#10B981';
+  el.textContent = timeStr;
+  el.style.color = color;
+  const wrap = document.getElementById('pq-timer-wrap');
+  if (wrap) wrap.style.borderColor = color + '55';
+  const icon = document.getElementById('pq-timer-icon');
+  if (icon) icon.setAttribute('stroke', color);
+},
+
+/** Send only the countdown value — used on every tick. */
+sendTimer(remaining) {
+  if (!this._window || this._window.closed) return;
+  try {
+    this._window.postMessage({
+      [this.MESSAGE_TAG]: true,
+      type: 'quiz-timer',
+      remaining
+    }, '*');
+  } catch (e) { /* ignore */ }
+},
+
 };
 /* ============================================================================
    buildWheelSVG — pure function that returns the wheel's SVG inner HTML.
@@ -15467,6 +15627,272 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te) {
     };
     render();
   },
+
+  /* ============================================================================
+   QUIZ — LEARNERS VIEW (presenter pipeline)
+   ──────────────────────────────────────────────────────────────────────────
+   Opens a clean, chrome-free window that shows only:
+     • Item number (X of N)
+     • The question text
+     • The choices (letters A, B, C…)
+     • A live countdown timer, if the quiz has a timeLimit
+   The correct answer is NEVER sent to the learner window.
+   ============================================================================ */
+
+async openQuizPresenter(id) {
+  const quiz = await DB.get('assessments', id);
+  if (!quiz) { UI.toast('Quiz not found', 'error'); return; }
+  if (!quiz.questions || !quiz.questions.length) {
+    UI.toast('This assessment has no questions.', 'warning');
+    return;
+  }
+
+  // End any existing quiz presenter session first
+  if (State.quizPresenter) {
+    if (State.quizPresenter.timerInterval) clearInterval(State.quizPresenter.timerInterval);
+    State.quizPresenter = null;
+  }
+
+  const timeLimit = Number(quiz.timeLimit) || 0;
+
+  State.quizPresenter = {
+    quizId: quiz.id,
+    quiz: JSON.parse(JSON.stringify(quiz)), // snapshot — do not mutate source
+    currentIndex: 0,
+    timerRemaining: timeLimit * 60,
+    timerRunning: false,
+    timerInterval: null
+  };
+
+  Presenter.open('quiz', {
+    getInitialState: () => Pages._buildQuizPresenterState()
+  });
+
+  // Auto-start the countdown when a time limit is set
+  if (timeLimit > 0) {
+    setTimeout(() => {
+      if (State.quizPresenter && State.quizPresenter.quizId === quiz.id) {
+        Pages._startQuizTimer();
+      }
+    }, 900);
+  }
+
+  App.logActivity(`Quiz Learners View opened: ${quiz.title}`, 'Assessments');
+  App.navigate('quiz-manager');
+},
+
+endQuizPresenter() {
+  const p = State.quizPresenter;
+  if (p && p.timerInterval) clearInterval(p.timerInterval);
+  State.quizPresenter = null;
+  Presenter.close();
+  App.navigate('quiz-manager');
+},
+
+/** Snapshot the current question for the learner window. NO answers are sent. */
+_buildQuizPresenterState() {
+  const p = State.quizPresenter;
+  if (!p || !p.quiz) return null;
+  const q = p.quiz.questions[p.currentIndex];
+  if (!q) return null;
+
+  return {
+    quizTitle:        p.quiz.title || 'Quiz',
+    questionNumber:   p.currentIndex + 1,
+    totalQuestions:   p.quiz.questions.length,
+    questionText:     q.text || '',
+    questionType:     q.type || 'Short Answer',
+    choices:          Array.isArray(q.choices) ? q.choices.slice() : [],
+    isLast:           p.currentIndex === p.quiz.questions.length - 1,
+    hasTimer:         !!p.quiz.timeLimit && p.quiz.timeLimit > 0,
+    timeRemaining:    Math.max(0, p.timerRemaining | 0),
+    timerRunning:     !!p.timerRunning
+  };
+},
+
+_sendQuizPresenterState() {
+  if (!(Presenter.isOpen() && Presenter._toolId === 'quiz')) return;
+  const state = Pages._buildQuizPresenterState();
+  if (state) Presenter.send(state);
+},
+
+/** Teacher-side sticky control panel shown while the learner view is live. */
+_renderQuizPresenterPanel() {
+  const p = State.quizPresenter;
+  if (!p) return '';
+  const q = p.quiz.questions[p.currentIndex];
+  if (!q) return '';
+  const total = p.quiz.questions.length;
+  const hasTimer = !!(p.quiz.timeLimit && p.quiz.timeLimit > 0);
+  const timeStr = Pages._formatQuizTime(p.timerRemaining);
+  const expired = hasTimer && p.timerRemaining <= 0;
+
+  return `
+    <div class="card mb-16" style="background:linear-gradient(135deg, var(--deped-blue) 0%, var(--secondary-blue) 55%, var(--accent-cyan) 130%);color:#fff;border:none;overflow:hidden;position:relative;">
+      <div style="position:absolute;top:-60px;right:-60px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle, rgba(247,201,72,0.22) 0%, transparent 70%);pointer-events:none;"></div>
+      <div class="flex-between" style="flex-wrap:wrap;gap:16px;position:relative;z-index:1;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;opacity:0.75;font-weight:700;">
+            Now Presenting to Learners
+          </div>
+          <div style="font-size:17px;font-weight:800;margin-top:4px;letter-spacing:-0.2px;">
+            ${Utils.esc(p.quiz.title || 'Quiz')}
+          </div>
+          <div style="font-size:12px;opacity:0.9;margin-top:3px;">
+            Item <strong>${p.currentIndex + 1}</strong> of ${total}
+            · <span style="opacity:.85;">${Utils.esc((q.type || 'Question'))}</span>
+          </div>
+        </div>
+
+        ${hasTimer ? `
+          <div style="text-align:center;min-width:110px;">
+            <div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;opacity:0.75;font-weight:700;">
+              ${expired ? "Time's Up" : (p.timerRunning ? 'Time Remaining' : 'Time Paused')}
+            </div>
+            <div id="qp-timer"
+                 style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;margin-top:4px;
+                        color:${expired ? '#FCA5A5' : (p.timerRemaining <= 60 ? '#FDE68A' : '#fff')};">
+              ${timeStr}
+            </div>
+          </div>` : ''}
+
+        <div class="flex gap-6" style="flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-sm" id="qp-prev" ${p.currentIndex === 0 ? 'disabled' : ''}
+                  style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);font-weight:600;${p.currentIndex === 0 ? 'opacity:.45;' : ''}">
+            ← Prev
+          </button>
+          <button class="btn btn-sm" id="qp-next" ${p.currentIndex === total - 1 ? 'disabled' : ''}
+                  style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);font-weight:600;${p.currentIndex === total - 1 ? 'opacity:.45;' : ''}">
+            Next →
+          </button>
+          ${hasTimer ? `
+            <button class="btn btn-sm" id="qp-timer-toggle"
+                    style="background:rgba(247,201,72,.95);color:var(--dark-navy);border:none;font-weight:700;">
+              ${p.timerRunning ? '⏸ Pause' : (expired ? '↻ Restart' : '▶ Start')}
+            </button>
+            <button class="btn btn-sm" id="qp-timer-reset"
+                    style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.3);font-weight:600;">
+              Reset
+            </button>` : ''}
+        </div>
+      </div>
+    </div>`;
+},
+
+_bindQuizPresenterControls(root) {
+  const p = State.quizPresenter;
+  if (!p) return;
+
+  const prev = root.querySelector('#qp-prev');
+  if (prev) prev.onclick = () => {
+    if (p.currentIndex > 0) {
+      p.currentIndex--;
+      Pages._sendQuizPresenterState();
+      App.navigate('quiz-manager');
+    }
+  };
+
+  const next = root.querySelector('#qp-next');
+  if (next) next.onclick = () => {
+    if (p.currentIndex < p.quiz.questions.length - 1) {
+      p.currentIndex++;
+      Pages._sendQuizPresenterState();
+      App.navigate('quiz-manager');
+    }
+  };
+
+  const toggle = root.querySelector('#qp-timer-toggle');
+  if (toggle) toggle.onclick = () => {
+    if (p.timerRunning) {
+      Pages._pauseQuizTimer();
+    } else if (p.timerRemaining <= 0) {
+      Pages._resetQuizTimer();
+      Pages._startQuizTimer();
+    } else {
+      Pages._startQuizTimer();
+    }
+    App.navigate('quiz-manager');
+  };
+
+  const reset = root.querySelector('#qp-timer-reset');
+  if (reset) reset.onclick = () => {
+    Pages._resetQuizTimer();
+    App.navigate('quiz-manager');
+  };
+},
+
+_startQuizTimer() {
+  const p = State.quizPresenter;
+  if (!p) return;
+  if (p.timerInterval) clearInterval(p.timerInterval);
+  p.timerRunning = true;
+
+  p.timerInterval = setInterval(() => {
+    const cur = State.quizPresenter;
+    if (!cur || !cur.timerRunning) return;
+
+    // Abort if the learner window was closed
+    if (!(Presenter.isOpen() && Presenter._toolId === 'quiz')) {
+      cur.timerRunning = false;
+      clearInterval(cur.timerInterval);
+      cur.timerInterval = null;
+      return;
+    }
+
+    cur.timerRemaining = Math.max(0, cur.timerRemaining - 1);
+
+    // Teacher-side DOM refresh (in place; do not re-render the page)
+    const timerEl = document.getElementById('qp-timer');
+    if (timerEl) {
+      timerEl.textContent = Pages._formatQuizTime(cur.timerRemaining);
+      timerEl.style.color =
+        cur.timerRemaining <= 0  ? '#FCA5A5' :
+        cur.timerRemaining <= 60 ? '#FDE68A' : '#fff';
+    }
+
+    // Push lightweight tick to the learner window
+    if (typeof Presenter.sendTimer === 'function') {
+      Presenter.sendTimer(cur.timerRemaining);
+    } else {
+      Pages._sendQuizPresenterState();
+    }
+
+    if (cur.timerRemaining <= 0) {
+      cur.timerRunning = false;
+      clearInterval(cur.timerInterval);
+      cur.timerInterval = null;
+      UI.toast("Time's up!", 'warning', 5000);
+      try { Pages._playWheelTimeUpSound && Pages._playWheelTimeUpSound(); } catch (e) {}
+      App.navigate('quiz-manager');
+    }
+  }, 1000);
+
+  Pages._sendQuizPresenterState();
+},
+
+_pauseQuizTimer() {
+  const p = State.quizPresenter;
+  if (!p) return;
+  p.timerRunning = false;
+  if (p.timerInterval) { clearInterval(p.timerInterval); p.timerInterval = null; }
+  Pages._sendQuizPresenterState();
+},
+
+_resetQuizTimer() {
+  const p = State.quizPresenter;
+  if (!p) return;
+  p.timerRunning = false;
+  if (p.timerInterval) { clearInterval(p.timerInterval); p.timerInterval = null; }
+  p.timerRemaining = (p.quiz.timeLimit || 0) * 60;
+  Pages._sendQuizPresenterState();
+},
+
+_formatQuizTime(sec) {
+  sec = Math.max(0, sec | 0);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+},
 
   async itemAnalysis(root) {
     const assessments = (await DB.getAll('assessments')).filter(a => a.classId === (State.activeClass ? State.activeClass.id : ''));
@@ -22908,22 +23334,110 @@ async noiseMeter(root) {
     Pages._bindPresenterButtons(root);
   },
 
-  async quizManager(root) {
-    const assessments = (await DB.getAll('assessments')).filter(a => a.classId === (State.activeClass ? State.activeClass.id : ''));
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Quiz Manager</h2><p>Launch quizzes from your assessments</p></div></div>
-      <div class="card">
-        ${assessments.length === 0 ? UI.emptyState({icon:'play', title:'No quizzes available', message:'Create an assessment first.', actionLabel:'+ New Assessment', actionFn:'Pages.openAssessmentModal()'}) :
-          `<div class="grid grid-auto">${assessments.map(a => `
-            <div class="card">
-              <h3 style="font-size:15px;margin-bottom:6px;">${Utils.esc(a.title)}</h3>
-              <p class="text-sm text-muted">${(a.questions||[]).length} questions · ${a.maxScore||100} pts</p>
-              <button class="btn btn-primary btn-block mt-12" data-quiz-launch="${Utils.attr(a.id)}">${icon('play')} Launch Quiz</button>
-            </div>`).join('')}</div>`}
-      </div>`;
-    root.querySelectorAll('[data-quiz-launch]').forEach(b => b.addEventListener('click', () => this.startQuiz(b.dataset.quizLaunch)));
-  },
+async quizManager(root) {
+  const cls = State.activeClass;
+  const assessments = (await DB.getAll('assessments'))
+    .filter(a => a.classId === (cls ? cls.id : ''));
 
+  // Clean up stale presenter state (e.g. learner window was closed externally)
+  if (State.quizPresenter && !(Presenter.isOpen() && Presenter._toolId === 'quiz')) {
+    if (State.quizPresenter.timerInterval) clearInterval(State.quizPresenter.timerInterval);
+    State.quizPresenter = null;
+  }
+  const presenter = State.quizPresenter;
+  const presenterActive = !!presenter;
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Quiz Manager</h2>
+        <p>Launch quizzes from your assessments</p>
+      </div>
+      ${presenterActive ? `
+        <div class="page-actions">
+          <button class="btn btn-danger" id="qp-end">${icon('xCircle')} End Learners View</button>
+        </div>` : ''}
+    </div>
+
+    ${presenterActive ? Pages._renderQuizPresenterPanel() : ''}
+
+    ${presenterActive ? `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          The learner window is live. Learners see <strong>only the item number, the question, and the choices</strong> — the correct answer is never shown.
+          ${presenter.quiz.timeLimit ? `A <strong>${presenter.quiz.timeLimit}-minute</strong> countdown runs automatically.` : 'No time limit set on this quiz.'}
+          Use <strong>Prev</strong> / <strong>Next</strong> above to move through items.
+        </div>
+      </div>` : ''}
+
+    <div class="card">
+      ${assessments.length === 0
+        ? UI.emptyState({
+            icon: 'play',
+            title: 'No quizzes available',
+            message: 'Create an assessment first.',
+            actionLabel: '+ New Assessment',
+            actionFn: 'Pages.openAssessmentModal()'
+          })
+        : `<div class="grid grid-auto">
+            ${assessments.map(a => {
+              const qCount = (a.questions || []).length;
+              const hasTime = a.timeLimit && a.timeLimit > 0;
+              const isLive = presenterActive && presenter.quizId === a.id;
+              return `
+                <div class="card" style="${isLive ? 'border-color:var(--deped-blue);box-shadow:0 0 0 2px rgba(0,56,168,.15);' : ''}">
+                  <div class="flex-between mb-8" style="gap:8px;">
+                    <h3 style="font-size:15px;margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;">
+                      ${Utils.esc(a.title)}
+                    </h3>
+                    ${isLive ? '<span class="badge badge-blue" style="font-size:10px;flex-shrink:0;">Live</span>' : ''}
+                  </div>
+                  <p class="text-sm text-muted">
+                    ${qCount} question${qCount === 1 ? '' : 's'} · ${a.maxScore || 100} pts
+                    ${hasTime ? ` · ${a.timeLimit} min limit` : ''}
+                  </p>
+                  <div class="flex gap-8 mt-12" style="flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" data-quiz-launch="${Utils.attr(a.id)}">
+                      ${icon('play')} Practice
+                    </button>
+                    <button class="btn ${isLive ? 'btn-primary' : 'btn-outline'} btn-sm"
+                            data-quiz-presenter="${Utils.attr(a.id)}"
+                            ${qCount ? '' : 'disabled'}
+                            title="${qCount ? 'Open the learner-facing view (only item number, question, and choices)' : 'Add questions first'}">
+                      ${icon('signal')} ${isLive ? 'Learners View (Live)' : 'Learners View'}
+                    </button>
+                  </div>
+                </div>`;
+            }).join('')}
+          </div>`}
+    </div>`;
+
+    root.querySelectorAll('[data-quiz-launch]').forEach(b => {
+      b.addEventListener('click', () => Pages.startQuiz(b.dataset.quizLaunch));
+    });
+    root.querySelectorAll('[data-quiz-presenter]').forEach(b => {
+      b.addEventListener('click', () => Pages.openQuizPresenter(b.dataset.quizPresenter));
+    });
+
+    // ▼▼▼ End Learners View button ▼▼▼
+    const endBtn = root.querySelector('#qp-end');
+    if (endBtn) {
+      endBtn.addEventListener('click', () => {
+        UI.confirm({
+          title: 'End Learners View?',
+          message: 'The learner window will close and the countdown timer will stop.',
+          confirmText: 'End Session',
+          confirmClass: 'btn-danger',
+          onConfirm: () => Pages.endQuizPresenter()
+        });
+      });
+    }
+
+    if (presenterActive) {
+      Pages._bindQuizPresenterControls(root);
+    }
+  },
   async classList(root) {
     if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'list', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
     root.innerHTML = `
@@ -31595,6 +32109,8 @@ Pages._buildPresenterState = function(tool) {
       const m = modes[State.signalMode || 'normal'] || modes.normal;
       return { mode: State.signalMode || 'normal', ...m };
     }
+      case 'quiz':
+      return Pages._buildQuizPresenterState();
   }
   return null;
 };
