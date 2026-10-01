@@ -5794,6 +5794,72 @@ const DB = {
     if (!navigator.storage || !navigator.storage.estimate) return null;
     try { return await navigator.storage.estimate(); } catch (e) { return null; }
   },
+  async restoreSnapshot(snapshot, options = {}) {
+    const replace = options.replace !== false;
+    const stores = CONFIG.STORES.slice();
+    const data = snapshot && snapshot.data;
+    if (!data || typeof data !== 'object') throw new Error('Invalid backup data.');
+
+    // Validate the complete payload before opening a write transaction.
+    for (const store of stores) {
+      if (data[store] === undefined) {
+        throw new Error(`Backup is incomplete: missing data for \"${store}\".`);
+      }
+      if (!Array.isArray(data[store])) {
+        throw new Error(`Invalid backup data for \"${store}\".`);
+      }
+      for (const item of data[store]) {
+        if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
+          throw new Error(`Invalid record found in \"${store}\".`);
+        }
+      }
+    }
+
+    await this.open();
+    this._invalidate();
+
+    return new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = this.db.transaction(stores, 'readwrite');
+      } catch (e) {
+        reject(e);
+        return;
+      }
+
+      let written = 0;
+      let failed = null;
+
+      tx.oncomplete = () => {
+        this._invalidate();
+        resolve(written);
+      };
+      tx.onerror = () => {
+        failed = tx.error || new Error('Restore transaction failed.');
+      };
+      tx.onabort = () => {
+        this._invalidate();
+        reject(failed || tx.error || new Error('Restore was aborted. No changes were applied.'));
+      };
+
+      try {
+        for (const store of stores) {
+          const os = tx.objectStore(store);
+          // A true restore reproduces the backup instead of silently merging
+          // stale records that are no longer present in the backup.
+          if (replace) os.clear();
+          for (const item of data[store]) {
+            os.put(item);
+            written++;
+          }
+        }
+      } catch (e) {
+        failed = e;
+        try { tx.abort(); } catch (_) {}
+      }
+    });
+  },
+
   async reset() {
     try {
       if (this.db) this.db.close();
@@ -28297,114 +28363,205 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
     const data = {
       application: CONFIG.APP_NAME,
       version: CONFIG.VERSION,
+      formatVersion: 2,
       exportDate: new Date().toISOString(),
+      database: {
+        name: CONFIG.DB_NAME,
+        version: CONFIG.DB_VERSION,
+        stores: CONFIG.STORES.slice()
+      },
       preferences: {
         theme: (() => { try { return localStorage.getItem('klazassist.theme') || 'light'; } catch (e) { return 'light'; } })(),
         schoolYear: (() => { try { return localStorage.getItem('klazassist.schoolYear') || CONFIG.DEFAULT_SCHOOL_YEAR; } catch (e) { return CONFIG.DEFAULT_SCHOOL_YEAR; } })()
       },
-      data: {}
+      data: {},
+      counts: {}
     };
 
-    for (const store of CONFIG.STORES) {
-      try {
+    await DB.open();
+
+    try {
+      // Do not silently turn a failed store read into an empty store.
+      // That was the main cause of apparently successful but incomplete backups.
+      for (const store of CONFIG.STORES) {
         let rows = await DB.getAll(store);
-        // Skip image cache — regeneratable, and bloats backup by tens of MB
+        if (!Array.isArray(rows)) throw new Error(`Could not read store: ${store}`);
+
+        // Image cache is derived data and can make a backup unnecessarily huge.
         if (store === 'settings') {
-          rows = rows.filter(r => !r.id.startsWith('imgCache.'));
+          rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
         }
         data.data[store] = rows;
-      } catch (e) {
-        data.data[store] = [];
+        data.counts[store] = rows.length;
       }
-    }
 
-    Utils.download('klazassist-backup-' + Utils.todayISO() + '.json', JSON.stringify(data, null, 2));
-    App.logActivity('Backup exported', 'Security');
-    UI.toast('Backup downloaded', 'success');
+      const json = JSON.stringify(data, null, 2);
+      const bytes = new Blob([json]).size;
+      if (!json || bytes < 2) throw new Error('Backup produced no data.');
+
+      Utils.download(
+        'klazassist-backup-' + Utils.todayISO() + '.json',
+        json,
+        'application/json;charset=utf-8'
+      );
+
+      App.logActivity('Backup exported (' + bytes.toLocaleString() + ' bytes)', 'Security');
+      UI.toast(`Backup completed — ${bytes.toLocaleString()} bytes`, 'success');
+      return true;
+    } catch (e) {
+      console.error('Backup failed:', e);
+      UI.toast('Backup failed: ' + (e.message || 'Could not read the database.'), 'error');
+      return false;
+    }
   },
+
   async exportAttendanceJSON() {
-    const att = await DB.getAll('attendance');
-    Utils.download('attendance-' + Utils.todayISO() + '.json', JSON.stringify(att, null, 2), 'application/json');
+    try {
+      const att = await DB.getAll('attendance');
+      Utils.download(
+        'attendance-' + Utils.todayISO() + '.json',
+        JSON.stringify(att, null, 2),
+        'application/json;charset=utf-8'
+      );
+    } catch (e) {
+      console.error('Attendance export failed:', e);
+      UI.toast('Attendance export failed: ' + (e.message || 'Unknown error'), 'error');
+    }
   },
+
   restoreFromJSON() {
-    UI.modal({
+    const modal = UI.modal({
       title: 'Restore from Backup',
       body: `
-        <div class="alert alert-warning">${icon('alert')}<div><strong>Warning:</strong> Restoring will merge data from the backup with existing data. Duplicates may be created. Create a backup first.</div></div>
-        <div class="form-group"><label>Select JSON backup file</label><input type="file" accept=".json,application/json" class="form-control" id="restore-file"></div>
+        <div class="alert alert-warning">${icon('alert')}<div>
+          <strong>Important:</strong> Restore replaces the current application database with the selected KlazAssist backup.
+          A backup of your current data should be created first.
+        </div></div>
+        <div class="form-group">
+          <label>Select JSON backup file</label>
+          <input type="file" accept=".json,application/json" class="form-control" id="restore-file">
+        </div>
         <div id="restore-preview"></div>`,
-      footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="restore-run" disabled>Restore</button>`
+      footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="restore-run" disabled>Restore Database</button>`
     });
-    const m = document.querySelector('.modal-overlay:last-child');
+
+    const m = modal.overlay;
+    if (!m) return;
     const fileInput = m.querySelector('#restore-file');
     const preview = m.querySelector('#restore-preview');
+    const restoreBtn = m.querySelector('#restore-run');
     let parsed = null;
+
+    const failPreview = (message) => {
+      preview.innerHTML = `<p class="text-sm" style="color:var(--danger);">${Utils.esc(message)}</p>`;
+      parsed = null;
+      restoreBtn.disabled = true;
+    };
+
     fileInput.onchange = async () => {
-      const f = fileInput.files[0]; if (!f) return;
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) { failPreview('No backup file selected.'); return; }
+
+      // Keep the existing 25 MB safety limit, but make the error explicit.
       if (f.size > 25 * 1024 * 1024) {
-        preview.innerHTML = '<p class="text-sm" style="color:var(--danger);">File too large (max 25 MB).</p>';
-        m.querySelector('#restore-run').disabled = true;
+        failPreview('File is too large. Maximum supported backup size is 25 MB.');
         return;
       }
+
       try {
         const txt = await Utils.readFile(f);
-        parsed = JSON.parse(txt);
-        if (!parsed || typeof parsed !== 'object' || !parsed.application || !parsed.data || typeof parsed.data !== 'object') throw new Error('Invalid backup format');
+        if (!txt || !txt.trim()) throw new Error('The selected file is empty.');
+
+        const candidate = JSON.parse(txt);
+        if (!candidate || typeof candidate !== 'object' ||
+            candidate.application !== CONFIG.APP_NAME ||
+            !candidate.data || typeof candidate.data !== 'object') {
+          throw new Error('This is not a valid KlazAssist database backup.');
+        }
+
         const allowedStores = new Set(CONFIG.STORES);
         const summary = [];
         let total = 0;
-        for (const k in parsed.data) {
-          if (!allowedStores.has(k)) continue;
-          const arr = parsed.data[k];
-          if (!Array.isArray(arr)) continue;
+
+        // A complete backup must contain every configured store. This prevents
+        // an old/partial file from wiping only part of the current database.
+        for (const store of CONFIG.STORES) {
+          const arr = candidate.data[store];
+          if (!Array.isArray(arr)) throw new Error(`Backup is incomplete: missing "${store}" data.`);
+
+          for (const item of arr) {
+            if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
+              throw new Error(`Backup contains an invalid record in "${store}".`);
+            }
+          }
           total += arr.length;
-          summary.push(`${arr.length} ${k}`);
+          summary.push(`${arr.length} ${store}`);
         }
+
+        // Ignore unknown future stores instead of importing arbitrary objects.
+        candidate.data = Object.fromEntries(
+          CONFIG.STORES.map(store => [store, candidate.data[store]])
+        );
+        parsed = candidate;
+
         preview.innerHTML = `
-          <p class="text-sm mt-8"><strong>Valid backup</strong> · ${Utils.formatDate(parsed.exportDate)}</p>
-          <p class="text-xs text-muted">Total records: ${total}</p>
-          <p class="text-xs text-muted" style="max-height:120px;overflow-y:auto;">${summary.slice(0,12).join(' · ')}</p>`;
-        m.querySelector('#restore-run').disabled = false;
+          <div class="alert alert-success mt-8">${icon('check')}<div><strong>Valid KlazAssist backup</strong></div></div>
+          <p class="text-sm">Backup date: ${Utils.esc(Utils.formatDate(candidate.exportDate))}</p>
+          <p class="text-xs text-muted">Total records: <strong>${total.toLocaleString()}</strong></p>
+          <p class="text-xs text-muted" style="max-height:120px;overflow-y:auto;">${summary.join(' · ')}</p>
+          <p class="text-xs text-muted mt-8">Restore will replace the current database only after every record passes validation.</p>`;
+        restoreBtn.disabled = false;
       } catch (e) {
-        console.error('Restore parse error:', e);
-        preview.innerHTML = `<p class="text-sm" style="color:var(--danger);">Invalid backup file. Only KlazAssist JSON backups are accepted.</p>`;
-        parsed = null;
-        m.querySelector('#restore-run').disabled = true;
+        console.error('Restore validation error:', e);
+        failPreview(e.message || 'Invalid backup file.');
       }
     };
-    m.querySelector('[data-cancel]').onclick = m.close;
-    m.querySelector('#restore-run').onclick = async () => {
-      if (!parsed) return;
-      let imported = 0;
-      const allowedStores = new Set(CONFIG.STORES);
-      for (const store of CONFIG.STORES) {
-        const arr = parsed.data[store];
-        if (!Array.isArray(arr)) continue;
-        for (const item of arr) {
-          if (!item || typeof item !== 'object') continue;
-          if (!allowedStores.has(store)) continue;
-          if (!item.id) item.id = Utils.uid('r-');
-          try { await DB.put(store, item); imported++; } catch (e) {}
+
+    m.querySelector('[data-cancel]').onclick = modal.close;
+
+    restoreBtn.onclick = async () => {
+      if (!parsed || restoreBtn.disabled) return;
+
+      restoreBtn.disabled = true;
+      fileInput.disabled = true;
+      const originalText = restoreBtn.textContent;
+      restoreBtn.textContent = 'Restoring…';
+
+      try {
+        // One IndexedDB read/write transaction across ALL stores.
+        // If any record fails, IndexedDB aborts the transaction and rolls back
+        // the entire restore instead of leaving a partially restored database.
+        const imported = await DB.restoreSnapshot(parsed, { replace: true });
+
+        if (parsed.preferences) {
+          try {
+            if (parsed.preferences.theme) {
+              localStorage.setItem('klazassist.theme', parsed.preferences.theme);
+              State.theme = parsed.preferences.theme;
+            }
+            if (parsed.preferences.schoolYear) {
+              localStorage.setItem('klazassist.schoolYear', parsed.preferences.schoolYear);
+              State.schoolYear = parsed.preferences.schoolYear;
+            }
+          } catch (e) {
+            console.warn('Could not restore preferences:', e);
+          }
         }
+
+        modal.close();
+        App.logActivity('Database restored (' + imported + ' records)', 'Security');
+        UI.toast(`Database restored successfully — ${imported.toLocaleString()} records`, 'success');
+
+        // Re-read every application state from the restored database.
+        await App.loadState();
+        App.navigate('dashboard');
+      } catch (e) {
+        console.error('Database restore failed:', e);
+        restoreBtn.disabled = false;
+        fileInput.disabled = false;
+        restoreBtn.textContent = originalText;
+        UI.toast('Restore failed. No database changes were applied. ' + (e.message || ''), 'error');
       }
-      // Restore preferences
-      if (parsed.preferences) {
-        try {
-          if (parsed.preferences.theme) {
-            localStorage.setItem('klazassist.theme', parsed.preferences.theme);
-            State.theme = parsed.preferences.theme;
-          }
-          if (parsed.preferences.schoolYear) {
-            localStorage.setItem('klazassist.schoolYear', parsed.preferences.schoolYear);
-            State.schoolYear = parsed.preferences.schoolYear;
-          }
-        } catch (e) { console.warn('Could not restore preferences:', e); }
-      }
-      m.close();
-      App.logActivity('Backup restored (' + imported + ' records)', 'Security');
-      UI.toast(`Restored ${imported} records`, 'success');
-      await App.loadState();
-      App.navigate('dashboard');
     };
   },
 
@@ -32504,15 +32661,6 @@ function deleteSlide(idx) {
               <option value="illustration" ${S.imageStyle === 'illustration' ? 'selected' : ''}>Illustration</option>
               <option value="photo" ${S.imageStyle === 'photo' ? 'selected' : ''}>Photographic</option>
               <option value="diagram" ${S.imageStyle === 'diagram' ? 'selected' : ''}>Diagram / Line art</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label>Image aspect ratio</label>
-            <select class="form-control" id="pg-image-aspect">
-              <option value="16:9" ${S.imageAspect === '16:9' ? 'selected' : ''}>16:9 · Widescreen (recommended)</option>
-              <option value="4:3"  ${S.imageAspect === '4:3'  ? 'selected' : ''}>4:3 · Classic</option>
-              <option value="1:1"  ${S.imageAspect === '1:1'  ? 'selected' : ''}>1:1 · Square</option>
             </select>
           </div>
 
