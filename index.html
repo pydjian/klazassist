@@ -2828,12 +2828,21 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 .cal-event[data-cat="Activity"]   { background: rgba(25,135,84,0.14);  color: #166534; border-left-color: #198754; }
 .cal-event[data-cat="Holiday"]    { background: rgba(245,158,11,0.16); color: #B45309; border-left-color: #F59E0B; }
 .cal-event[data-cat="Personal"]   { background: rgba(8,145,178,0.14);  color: #0E7490; border-left-color: #0891B2; }
+
 .cal-event.auto {
   font-style: italic;
   opacity: 0.9;
   background: rgba(98,125,152,0.14);
   color: var(--text-muted);
   border-left-color: var(--text-muted);
+
+.cal-event.deped {
+  border-left-style: dashed;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+}
+[data-theme="dark"] .cal-event.deped { opacity: 0.92; }
+
 }
 .cal-event.auto[data-cat="Assignment"] {
   background: rgba(0,87,184,0.10);
@@ -4262,6 +4271,83 @@ const GradingEngine = {
     if (sy >= '2026-2027') return GRADING_POLICIES['DO015-2026'];
     return GRADING_POLICIES['LEGACY-DO8-2015'];
   },
+    /** In-memory cache of policy-level overrides, loaded from IndexedDB at boot.
+   *  Shape: { [policyVersion]: { weights?, transmutation? } } */
+  _overrides: {},
+
+  /** Load overrides from DB. Called once during App.loadState(). */
+  async loadOverrides() {
+    try {
+      const saved = await DB.getSetting('gradingPolicyOverrides', {});
+      this._overrides = (saved && typeof saved === 'object') ? saved : {};
+    } catch (e) {
+      console.warn('[GradingEngine] Could not load overrides:', e);
+      this._overrides = {};
+    }
+  },
+
+  /** Save / clear an override for one policy version. Pass null to clear. */
+  async saveOverride(policyVersion, override) {
+    if (!this._overrides) this._overrides = {};
+    if (override) {
+      this._overrides[policyVersion] = override;
+    } else {
+      delete this._overrides[policyVersion];
+    }
+    try {
+      await DB.setSetting('gradingPolicyOverrides', this._overrides);
+    } catch (e) {
+      console.warn('[GradingEngine] Could not persist override:', e);
+    }
+  },
+
+  /** Returns true if this policy has any active override. */
+  hasOverride(policyVersion) {
+    return !!(this._overrides && this._overrides[policyVersion]);
+  },
+
+  /** Existing resolvePolicy — MODIFY the return value to merge overrides. */
+  resolvePolicy(context = {}) {
+    const sy = context.schoolYear
+      || (typeof State !== 'undefined' ? State.schoolYear : null)
+      || CONFIG.DEFAULT_SCHOOL_YEAR;
+    let base;
+    if (sy >= '2027-2028')      base = GRADING_POLICIES['ZERO-BASED-2027'];
+    else if (sy >= '2026-2027') base = GRADING_POLICIES['DO015-2026'];
+    else                        base = GRADING_POLICIES['LEGACY-DO8-2015'];
+
+    const override = this._overrides && this._overrides[base.version];
+    if (!override) return base;
+
+    // Shallow-clone so we never mutate the master GRADING_POLICIES object
+    const merged = Object.assign({}, base);
+
+    // Merge weight overrides key by key
+    if (override.weights && typeof override.weights === 'object') {
+      merged.weights = Object.assign({}, base.weights || {});
+      Object.keys(override.weights).forEach(key => {
+        if (override.weights[key]) {
+          merged.weights[key] = Object.assign({}, override.weights[key]);
+        }
+      });
+    }
+
+    // Replace the transmutation table or disable it entirely
+    if (override.transmutation === null) {
+      merged.transmutation = null;
+    } else if (override.transmutation && typeof override.transmutation === 'object') {
+      merged.transmutation = {
+        version: (base.transmutation && base.transmutation.version || base.version) + '-OVERRIDE',
+        label:   override.transmutation.label || 'Custom Transmutation Table',
+        table:   Array.isArray(override.transmutation.table)
+                   ? override.transmutation.table.map(b => ({ min: +b.min, max: +b.max, reported: +b.reported }))
+                   : (base.transmutation ? base.transmutation.table : [])
+      };
+    }
+
+    return merged;
+  },
+
   /** Determine which key-stage/subject weight key applies. */
   resolveWeightKey(gradeLevel, subject, subjectClassification) {
     const g = (gradeLevel || '').toLowerCase();
@@ -6606,9 +6692,12 @@ const App = {
     this.savePreferences();
   },
   async loadState() {
-    const [teachers, schools, classes] = await Promise.all([
-      DB.getAll('teachers'), DB.getAll('schools'), DB.getAll('classes')
-    ]);
+  // Load any persisted grading-policy customizations BEFORE anything reads policy
+  await GradingEngine.loadOverrides();
+
+  const [teachers, schools, classes] = await Promise.all([
+    DB.getAll('teachers'), DB.getAll('schools'), DB.getAll('classes')
+  ]);
     State.teachers = teachers || [];
     State.schools = schools || [];
     State.classes = (classes || []).filter(c => !c.archived);
@@ -16225,9 +16314,9 @@ _tosPersist: Utils.debounce(async function() {
       const hidden = events.length - visible.length;
 
       const eventsHTML = visible.map(e => `
-        <div class="cal-event ${e.auto ? 'auto' : ''}" data-cat="${Utils.attr(e.category || 'Other')}"
-             data-event-id="${Utils.attr(e.id)}" data-auto="${e.auto ? '1' : '0'}"
-             title="${Utils.attr((e.title || '') + (e.auto ? ' (auto from ' + e.refType + ')' : ''))}">
+        <div class="cal-event ${e.auto ? 'auto' : ''} ${e.source === 'deped' ? 'deped' : ''}" data-cat="${Utils.attr(e.category || 'Other')}"
+            data-event-id="${Utils.attr(e.id)}" data-auto="${e.auto ? '1' : '0'}"
+            title="${Utils.attr((e.title || '') + (e.auto ? ' (auto from ' + e.refType + ')' : '') + (e.source === 'deped' ? ' · DepEd Calendar' : ''))}">
           ${Utils.esc(e.title || 'Untitled')}
         </div>`).join('');
 
@@ -16249,6 +16338,7 @@ _tosPersist: Utils.debounce(async function() {
         </div>
         <div class="page-actions">
           ${cls ? `<button class="btn btn-outline" id="cal-filter-class">${icon('users')} ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</button>` : ''}
+          <button class="btn btn-outline" id="cal-import-deped">${icon('download')} Import DepEd Calendar</button>
           <button class="btn btn-primary" id="cal-add">${icon('calendar')} Add Event</button>
         </div>
       </div>
@@ -16285,7 +16375,7 @@ _tosPersist: Utils.debounce(async function() {
             <span class="cl-item"><span class="cl-dot" data-cat="Activity"></span> Activity</span>
             <span class="cl-item"><span class="cl-dot" data-cat="Holiday"></span> Holiday</span>
             <span class="cl-item"><span class="cl-dot" data-cat="Personal"></span> Personal</span>
-            <span class="cl-item" style="margin-left:auto;font-style:italic;">Italic entries = auto from assignments</span>
+            <span class="cl-item" style="margin-left:auto;font-style:italic;">Italic = auto from assignments · Dashed border = DepEd Calendar</span>    
           </div>
         </div>
 
@@ -16304,6 +16394,8 @@ _tosPersist: Utils.debounce(async function() {
     root.querySelector('#cal-next').onclick = () => { State.calendarMonthOffset = offset + 1; App.navigate('calendar'); };
     root.querySelector('#cal-today').onclick = () => { State.calendarMonthOffset = 0; App.navigate('calendar'); };
     root.querySelector('#cal-add').onclick = () => Pages.openCalendarEventModal();
+    const importDepedBtn = root.querySelector('#cal-import-deped');
+    if (importDepedBtn) importDepedBtn.onclick = () => Pages.openDepEdCalendarImport();
     const fc = root.querySelector('#cal-filter-class');
     if (fc) fc.onclick = () => App.openClassSelector();
 
@@ -23252,6 +23344,384 @@ _tsPrintSheet(rowData, areas, term, cls, policy) {
   }, 800);
 },
 
+/* ============================================================================
+   DEPED SCHOOL CALENDAR IMPORT
+   ──────────────────────────────────────────────────────────────────────────
+   Parses the official DepEd calendar CSV (Date, Name of Event) and writes
+   each day to `calendarEvents` with source: 'deped'. Handles:
+     • Single dates          2026-06-12
+     • Ranges                2026-04-13 to 2026-04-17
+     • Quoted multi-date     "2027-03-24, 2027-03-29 to 2027-03-30"
+     • Header row skip
+     • BOM stripping
+     • Duplicate detection (date + title)
+   ============================================================================ */
+
+openDepEdCalendarImport() {
+  let parsed = [];
+
+  const m = UI.modal({
+    title: 'Import DepEd School Calendar',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16">${icon('info')}<div>
+        Upload the official DepEd School Calendar CSV or paste its contents below.
+        Events are auto-categorized (<strong>Holiday · Exam · Meeting · Activity</strong>) and added to your calendar.
+        Ranges like <code>2026-04-13 to 2026-04-17</code> become one event per day.
+        Duplicate date+title combinations are skipped automatically.
+      </div></div>
+
+      <div class="tabs mb-16">
+        <button class="tab active" data-dep-tab="file" type="button">Upload File</button>
+        <button class="tab" data-dep-tab="paste" type="button">Paste CSV</button>
+      </div>
+
+      <div id="dep-file-panel">
+        <div class="form-group">
+          <label>Select CSV file</label>
+          <input type="file" class="form-control" id="dep-file" accept=".csv,text/csv,text/plain">
+          <p class="text-xs text-muted mt-8">
+            Expected columns: <code>Date</code>, <code>Name of Event</code>.
+            Works with files saved from Excel, Google Sheets, or the official DepEd spreadsheet export.
+          </p>
+        </div>
+      </div>
+
+      <div id="dep-paste-panel" style="display:none;">
+        <div class="form-group">
+          <label>Paste CSV contents</label>
+          <textarea class="form-control" id="dep-paste" rows="10"
+            placeholder="Date,Name of Event
+2026-04-01,Start of 30-day Teachers' EOSY Break
+2026-06-12,Independence Day (Regular Holiday)
+2026-06-08 to 2026-06-11,Opening Block: Start of Term 1"></textarea>
+          <button class="btn btn-sm btn-primary mt-8" id="dep-paste-parse" type="button">
+            ${icon('check')} Parse Pasted Data
+          </button>
+        </div>
+      </div>
+
+      <div id="dep-status"></div>
+      <div id="dep-preview"></div>
+
+      <div class="divider"></div>
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+        <div class="text-xs text-muted">
+          Need to remove previously-imported DepEd events?
+        </div>
+        <button class="btn btn-sm btn-ghost" id="dep-clear" style="color:var(--danger);">
+          ${icon('trash')} Remove all imported DepEd events
+        </button>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-primary" id="dep-import" disabled>
+        ${icon('download')} Import <span id="dep-import-count"></span>
+      </button>`
+  });
+
+  /* ---------- Tab switching ---------- */
+  const fileTab  = m.overlay.querySelector('[data-dep-tab="file"]');
+  const pasteTab = m.overlay.querySelector('[data-dep-tab="paste"]');
+  const filePanel  = m.overlay.querySelector('#dep-file-panel');
+  const pastePanel = m.overlay.querySelector('#dep-paste-panel');
+  fileTab.onclick = () => {
+    fileTab.classList.add('active');
+    pasteTab.classList.remove('active');
+    filePanel.style.display = '';
+    pastePanel.style.display = 'none';
+  };
+  pasteTab.onclick = () => {
+    pasteTab.classList.add('active');
+    fileTab.classList.remove('active');
+    pastePanel.style.display = '';
+    filePanel.style.display = 'none';
+  };
+
+  const statusEl      = m.overlay.querySelector('#dep-status');
+  const previewEl     = m.overlay.querySelector('#dep-preview');
+  const importBtn     = m.overlay.querySelector('#dep-import');
+  const importCountEl = m.overlay.querySelector('#dep-import-count');
+
+  /* ---------- Preview renderer ---------- */
+  const renderPreview = () => {
+    if (!parsed.length) {
+      previewEl.innerHTML = '';
+      importBtn.disabled = true;
+      importCountEl.textContent = '';
+      return;
+    }
+    const byCat = {};
+    parsed.forEach(e => { byCat[e.category] = (byCat[e.category] || 0) + 1; });
+    const dates = parsed.map(e => e.date).sort();
+    const minDate = dates[0];
+    const maxDate = dates[dates.length - 1];
+
+    previewEl.innerHTML = `
+      <div class="grid grid-4 mb-12">
+        <div class="stat-card"><div class="stat-label">Total Events</div><div class="stat-value">${parsed.length}</div></div>
+        ${Object.entries(byCat).map(([cat, count]) => `
+          <div class="stat-card"><div class="stat-label">${Utils.esc(cat)}</div><div class="stat-value">${count}</div></div>
+        `).join('')}
+      </div>
+      <p class="text-xs text-muted mb-12">
+        Date range: <strong>${Utils.formatDate(minDate)}</strong> → <strong>${Utils.formatDate(maxDate)}</strong>
+      </p>
+      <div class="table-wrap" style="max-height:260px;overflow-y:auto;">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr><th style="width:130px;">Date</th><th>Event</th><th style="width:90px;">Category</th></tr></thead>
+          <tbody>
+            ${parsed.slice(0, 40).map(e => `
+              <tr>
+                <td style="white-space:nowrap;">${Utils.formatDate(e.date, {month:'short', day:'numeric', year:'numeric'})}</td>
+                <td>${Utils.esc(e.title)}</td>
+                <td><span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(e.category)}</span></td>
+              </tr>
+            `).join('')}
+            ${parsed.length > 40
+              ? `<tr><td colspan="3" class="text-muted text-xs" style="text-align:center;padding:8px;">…and ${parsed.length - 40} more</td></tr>`
+              : ''}
+          </tbody>
+        </table>
+      </div>`;
+    importBtn.disabled = false;
+    importCountEl.textContent = `(${parsed.length})`;
+  };
+
+  /* ---------- Parse handler ---------- */
+  const handleParse = (text) => {
+    if (!text || !text.trim()) {
+      statusEl.innerHTML = `<div class="alert alert-warning">${icon('alert')}<div>No data to parse.</div></div>`;
+      parsed = [];
+      renderPreview();
+      return;
+    }
+    try {
+      const result = Pages._parseDepEdCalendar(text);
+      if (!result.events.length) {
+        statusEl.innerHTML = `<div class="alert alert-danger">${icon('alert')}<div>
+          Could not parse any events. Make sure the file has two columns: <code>Date</code> and <code>Name of Event</code>.
+        </div></div>`;
+        parsed = [];
+        renderPreview();
+        return;
+      }
+      parsed = result.events;
+      statusEl.innerHTML = `<div class="alert alert-success">${icon('check')}<div>
+        Parsed <strong>${result.events.length}</strong> event day${result.events.length === 1 ? '' : 's'}
+        from <strong>${result.rows}</strong> row${result.rows === 1 ? '' : 's'}
+        ${result.skipped ? ` · ${result.skipped} row${result.skipped === 1 ? '' : 's'} skipped` : ''}.
+      </div></div>`;
+      renderPreview();
+    } catch (e) {
+      console.error('[DepEd Calendar] Parse error:', e);
+      statusEl.innerHTML = `<div class="alert alert-danger">${icon('alert')}<div>Parse error: ${Utils.esc(e.message)}</div></div>`;
+      parsed = [];
+      renderPreview();
+    }
+  };
+
+  /* ---------- File input ---------- */
+  m.overlay.querySelector('#dep-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    statusEl.innerHTML = `<div class="alert alert-info">${icon('info')}<div>Reading ${Utils.esc(f.name)}…</div></div>`;
+    try {
+      const text = await Utils.readFile(f);
+      handleParse(text);
+    } catch (err) {
+      console.error(err);
+      statusEl.innerHTML = `<div class="alert alert-danger">${icon('alert')}<div>${Utils.esc(err.message)}</div></div>`;
+    }
+  });
+
+  /* ---------- Paste parse ---------- */
+  m.overlay.querySelector('#dep-paste-parse').onclick = () => {
+    handleParse(m.overlay.querySelector('#dep-paste').value);
+  };
+
+  /* ---------- Clear all DepEd events ---------- */
+  m.overlay.querySelector('#dep-clear').onclick = async () => {
+    const all = await DB.getAll('calendarEvents');
+    const deped = all.filter(e => e.source === 'deped');
+    if (!deped.length) {
+      UI.toast('No imported DepEd events to remove.', 'info');
+      return;
+    }
+    UI.confirm({
+      title: 'Remove imported DepEd events?',
+      message: `This will delete <strong>${deped.length}</strong> event${deped.length === 1 ? '' : 's'} previously imported from the DepEd calendar. Your own events are not affected.`,
+      confirmText: 'Remove',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        for (const e of deped) await DB.delete('calendarEvents', e.id);
+        App.logActivity(`Removed ${deped.length} imported DepEd calendar event${deped.length === 1 ? '' : 's'}`, 'Planning');
+        m.close();
+        UI.toast(`Removed ${deped.length} event${deped.length === 1 ? '' : 's'}`, 'success');
+        App.navigate('calendar');
+      }
+    });
+  };
+
+  /* ---------- Commit ---------- */
+  m.overlay.querySelector('[data-close]').onclick = m.close;
+  importBtn.onclick = async () => {
+    if (!parsed.length) return;
+    importBtn.disabled = true;
+    importBtn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Importing…';
+    try {
+      const result = await Pages._importDepEdCalendar(parsed);
+      m.close();
+      App.logActivity(
+        `DepEd School Calendar imported: ${result.added} new, ${result.skipped} duplicate${result.skipped === 1 ? '' : 's'} skipped`,
+        'Planning'
+      );
+      UI.toast(
+        `Imported ${result.added} event${result.added === 1 ? '' : 's'}` +
+        (result.skipped ? ` · ${result.skipped} duplicate${result.skipped === 1 ? '' : 's'} skipped` : ''),
+        'success', 4500
+      );
+      App.navigate('calendar');
+    } catch (e) {
+      console.error('[DepEd Calendar] Import failed:', e);
+      statusEl.innerHTML = `<div class="alert alert-danger">${icon('alert')}<div>Import failed: ${Utils.esc(e.message)}</div></div>`;
+      importBtn.disabled = false;
+      importBtn.innerHTML = icon('download') + ' Import';
+    }
+  };
+},
+
+/* -- Parser --------------------------------------------------------- */
+_parseDepEdCalendar(text) {
+  const clean = String(text || '').replace(/^\uFEFF/, '');
+  const rows = Utils.parseCSV(clean);
+
+  const events = [];
+  let skipped = 0;
+
+  rows.forEach((row, idx) => {
+    if (!row || !row.length) return;
+
+    // Skip header row
+    if (idx === 0) {
+      const firstCell = String(row[0] || '').trim().toLowerCase();
+      const secondCell = String(row[1] || '').trim().toLowerCase();
+      if (/^date$/.test(firstCell) && /(name|event)/.test(secondCell)) return;
+    }
+
+    const dateField = String(row[0] || '').trim();
+    const title = String(row[1] || '').trim();
+
+    if (!dateField || !title) { skipped++; return; }
+
+    const dates = Pages._expandDepEdDateField(dateField);
+    if (!dates.length) { skipped++; return; }
+
+    const category = Pages._categorizeDepEdEvent(title);
+
+    dates.forEach(d => {
+      events.push({ date: d, title, category, source: 'deped' });
+    });
+  });
+
+  return { events, rows: Math.max(0, rows.length - 1), skipped };
+},
+
+/* -- Date field expander -------------------------------------------- */
+_expandDepEdDateField(field) {
+  const dates = [];
+  const parts = String(field || '').split(',').map(s => s.trim()).filter(Boolean);
+
+  parts.forEach(part => {
+    // Range: "YYYY-MM-DD to YYYY-MM-DD"
+    const rangeMatch = part.match(/^(\d{4})-(\d{2})-(\d{2})\s+to\s+(\d{4})-(\d{2})-(\d{2})$/i);
+    if (rangeMatch) {
+      const start = new Date(+rangeMatch[1], +rangeMatch[2] - 1, +rangeMatch[3]);
+      const end   = new Date(+rangeMatch[4], +rangeMatch[5] - 1, +rangeMatch[6]);
+      if (isNaN(start) || isNaN(end) || end < start) return;
+
+      let d = new Date(start);
+      let guard = 0;
+      // Safety cap: 92 days max (longest legitimate range is ~30 days)
+      while (d <= end && guard < 92) {
+        dates.push(
+          d.getFullYear() + '-' +
+          String(d.getMonth() + 1).padStart(2, '0') + '-' +
+          String(d.getDate()).padStart(2, '0')
+        );
+        d.setDate(d.getDate() + 1);
+        guard++;
+      }
+      return;
+    }
+
+    // Single date: "YYYY-MM-DD"
+    const singleMatch = part.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (singleMatch) dates.push(part);
+  });
+
+  return dates;
+},
+
+/* -- Category classifier -------------------------------------------- */
+_categorizeDepEdEvent(name) {
+  const n = String(name || '').toLowerCase();
+  // Holidays first (highest precedence)
+  if (/\bholiday\b/.test(n)) return 'Holiday';
+  if (/\bbreak\b/.test(n) || /\bwellness\b/.test(n)) return 'Holiday';
+  // Examinations and standardized tests
+  if (/examination|summative test|\bnat\b|ncae|ellna|pept|mfat|testing window|assessment\b|\bphil-iri\b|\bcrla\b|\brma\b/.test(n)) return 'Exam';
+  // Meetings, PTA, orientations
+  if (/\bpta\b|meeting|orientation|conference|assembly/.test(n)) return 'Meeting';
+  // Everything else is an activity (enrollment, brigada, rites, etc.)
+  return 'Activity';
+},
+
+/* -- Commit to calendarEvents --------------------------------------- */
+async _importDepEdCalendar(events) {
+  const existing = await DB.getAll('calendarEvents');
+  const existingKeys = new Set();
+  existing.forEach(e => {
+    if (e.date && e.title) {
+      existingKeys.add(e.date + '|' + String(e.title).toLowerCase().trim());
+    }
+  });
+
+  let added = 0;
+  let skipped = 0;
+  const now = new Date().toISOString();
+
+  for (const ev of events) {
+    const key = ev.date + '|' + String(ev.title).toLowerCase().trim();
+    if (existingKeys.has(key)) { skipped++; continue; }
+
+    const rec = {
+      id: Utils.uid('ce-'),
+      classId: null,             // shared across all classes
+      title: ev.title,
+      date: ev.date,
+      time: '',
+      category: ev.category,
+      location: '',
+      notes: '',
+      source: 'deped',
+      createdAt: now,
+      updatedAt: now
+    };
+
+    try {
+      await DB.put('calendarEvents', rec);
+      existingKeys.add(key);
+      added++;
+    } catch (e) {
+      console.warn('[DepEd Calendar] Event insert failed:', e, rec);
+      skipped++;
+    }
+  }
+
+  return { added, skipped };
+},
 /* ─── Grade Summary: print the class-wide table ─── */
 printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, selectedSubject) {
   const cls = State.activeClass;
@@ -24986,33 +25456,592 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
     });
     content.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('click', () => App.navigate(el.dataset.goto)));
   },
-  viewPolicyDetails(policy) {
-    const transTable = policy.transmutation ? policy.transmutation.table.slice().sort((a,b)=>b.min-a.min).map(b =>
-      `<tr><td>${b.min}${b.max!==b.min ? ' – ' + b.max : ''}</td><td><strong>${b.reported}</strong></td></tr>`).join('') : '';
-    const descTable = (policy.descriptors||[]).map(d =>
-      `<tr><td>${d.min}–${d.max}</td><td><strong>${Utils.esc(d.label)}</strong></td><td class="text-xs">${Utils.esc(d.description||'')}</td></tr>`).join('');
-    UI.modal({
-      title: 'Policy Details — ' + policy.label, size: 'modal-lg',
-      body: `
-        <p class="text-sm text-muted mb-12">Effective School Year: ${Utils.esc(policy.effectiveSchoolYear)} · Term Structure: ${(policy.terms||[]).join(' · ')} · Passing Grade: ${policy.passingGrade}</p>
-        <h4 style="font-size:13px;margin-bottom:6px;">Component Weights by Classification</h4>
-        <div class="table-wrap mb-16"><table class="data-table" style="font-size:12px;">
-          <thead><tr><th>Weight Key</th><th>WW</th><th>PT</th><th>EX</th></tr></thead>
-          <tbody>${Object.entries(policy.weights||{}).map(([k,w]) => `<tr><td>${Utils.esc(k)}</td><td>${w.WW!==undefined?w.WW+'%':'—'}</td><td>${w.PT!==undefined?w.PT+'%':'—'}</td><td>${w.EX!==undefined?w.EX+'%':(w.QA!==undefined?w.QA+'% (QA)':'—')}</td></tr>`).join('')}</tbody>
-        </table></div>
-        ${policy.transmutation ? `<h4 style="font-size:13px;margin-bottom:6px;">${Utils.esc(policy.transmutation.label)}</h4>
-        <div class="table-wrap mb-16" style="max-height:260px;overflow-y:auto;"><table class="data-table" style="font-size:12px;">
-          <thead><tr><th>Initial Grade Range</th><th>Reported Grade</th></tr></thead>
-          <tbody>${transTable}</tbody>
-        </table></div>` : `<p class="text-sm text-muted mb-16">This policy reports the Initial Grade directly with no transmutation.</p>`}
-        <h4 style="font-size:13px;margin-bottom:6px;">Descriptors</h4>
-        <div class="table-wrap"><table class="data-table" style="font-size:12px;">
-          <thead><tr><th>Range</th><th>Descriptor</th><th>Description</th></tr></thead>
-          <tbody>${descTable}</tbody>
-        </table></div>`,
-      footer: `<button class="btn btn-primary" data-close>Close</button>`
+/* ============================================================================
+   POLICY DETAILS — editable weights + transmutation table
+   ──────────────────────────────────────────────────────────────────────────
+   Teachers can customize two things:
+     1. Component weights per key (policy-level override)
+     2. The transmutation table itself (policy-level override, or disable entirely
+        for zero-based grading)
+   Finalized term grades are NOT affected — they store reportedGrade at the
+   moment of finalization and never recompute.
+   ============================================================================ */
+viewPolicyDetails(policy) {
+  const cls = State.activeClass;
+  const activeVersion = policy.version;
+  const override = (GradingEngine._overrides && GradingEngine._overrides[activeVersion]) || null;
+  const isCustom = !!override;
+
+  // Working copies (edited in-place, saved on Apply)
+  const workingWeights = JSON.parse(JSON.stringify(policy.weights || {}));
+  const baseTable = (policy.transmutation && policy.transmutation.table) || [];
+  let workingTransmutation = override && override.transmutation
+    ? JSON.parse(JSON.stringify(override.transmutation))
+    : (baseTable.length ? { label: policy.transmutation.label, table: JSON.parse(JSON.stringify(baseTable)) } : null);
+  let transmutationDisabled = workingTransmutation === null;
+
+  // Fallback default table (so "Reset to default" works after disable)
+  const defaultTable = (GRADING_POLICIES[activeVersion].transmutation
+                     && GRADING_POLICIES[activeVersion].transmutation.table) || [];
+
+  // Which weight key does the active class use?
+  const activeWeightKey = cls
+    ? (cls.weightKey || (GRADING_POLICIES[activeVersion].version !== 'LEGACY-DO8-2015'
+        ? GradingEngine.resolveWeightKey(cls.gradeLevel, cls.subject, cls.subjectClassification)
+        : 'DEFAULT'))
+    : null;
+
+  /* ──────────────── Render: Weights table ──────────────── */
+  const weightsRowsHTML = Object.keys(workingWeights).map(key => {
+    const w = workingWeights[key];
+    const isActiveKey = key === activeWeightKey;
+    const hasWW = w.WW !== undefined;
+    const hasPT = w.PT !== undefined;
+    const hasEX = w.EX !== undefined;
+    const hasQA = w.QA !== undefined;   // legacy
+    return `<tr data-weight-row="${Utils.attr(key)}" style="${isActiveKey ? 'background:rgba(247,201,72,0.10);' : ''}">
+      <td style="padding:6px 8px;font-family:ui-monospace,monospace;font-size:11.5px;">
+        ${isActiveKey ? '<span title="This is the key used by the active class" style="color:#F59E0B;margin-right:4px;">●</span>' : ''}
+        ${Utils.esc(key)}
+      </td>
+      ${hasWW ? `<td style="text-align:center;"><input type="number" class="form-control wp-ww" data-key="${Utils.attr(key)}" min="0" max="100" value="${w.WW}" style="width:70px;text-align:center;padding:4px;"></td>` : '<td class="text-muted" style="text-align:center;">—</td>'}
+      ${hasPT ? `<td style="text-align:center;"><input type="number" class="form-control wp-pt" data-key="${Utils.attr(key)}" min="0" max="100" value="${w.PT}" style="width:70px;text-align:center;padding:4px;"></td>` : '<td class="text-muted" style="text-align:center;">—</td>'}
+      ${hasEX ? `<td style="text-align:center;"><input type="number" class="form-control wp-ex" data-key="${Utils.attr(key)}" min="0" max="100" value="${w.EX}" style="width:70px;text-align:center;padding:4px;"></td>` : '<td class="text-muted" style="text-align:center;">—</td>'}
+      ${hasQA ? `<td style="text-align:center;"><input type="number" class="form-control wp-qa" data-key="${Utils.attr(key)}" min="0" max="100" value="${w.QA}" style="width:70px;text-align:center;padding:4px;" title="Legacy Quarterly Assessment"></td>` : ''}
+    </tr>`;
+  }).join('');
+
+  /* ──────────────── Render: Transmutation rows ──────────────── */
+  const transmutationRowsHTML = () => {
+    const rows = (workingTransmutation && workingTransmutation.table) || [];
+    if (!rows.length) {
+      return `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-muted);font-size:12px;">No bands defined. Click <strong>+ Add band</strong> to start, or paste a table from a memo.</td></tr>`;
+    }
+    return rows.map((b, i) => `
+      <tr data-tt-row="${i}">
+        <td style="text-align:center;color:var(--text-muted);font-size:11px;">${i + 1}</td>
+        <td><input type="number" step="0.01" class="form-control tt-min" data-idx="${i}" value="${b.min}" style="width:100px;text-align:center;padding:4px;"></td>
+        <td><input type="number" step="0.01" class="form-control tt-max" data-idx="${i}" value="${b.max}" style="width:100px;text-align:center;padding:4px;"></td>
+        <td><input type="number" class="form-control tt-rep" data-idx="${i}" value="${b.reported}" style="width:80px;text-align:center;padding:4px;font-weight:700;"></td>
+        <td style="text-align:center;">
+          <button class="icon-btn tt-del" data-idx="${i}" title="Delete this band"
+                  style="color:var(--danger);width:24px;height:24px;">${icon('trash')}</button>
+        </td>
+      </tr>`).join('');
+  };
+
+  /* ──────────────── Compose modal ──────────────── */
+  const m = UI.modal({
+    title: 'Policy Details & Customization — ' + policy.label,
+    size: 'modal-xl',
+    body: `
+      <!-- Top status bar -->
+      <div class="flex-between mb-16" style="flex-wrap:wrap;gap:10px;padding:10px 14px;background:var(--bg);border-radius:10px;border:1px solid var(--border);">
+        <div>
+          <div class="text-xs text-muted">Effective SY: ${Utils.esc(policy.effectiveSchoolYear)} · Term Structure: ${(policy.terms||[]).join(' · ')} · Passing: ${policy.passingGrade}</div>
+          ${cls ? `<div class="text-xs text-muted" style="margin-top:2px;">Active class: <strong>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</strong>${activeWeightKey ? ' · weight key <code style="font-size:11px;">' + Utils.esc(activeWeightKey) + '</code>' : ''}</div>` : ''}
+        </div>
+        <div class="flex gap-8" style="align-items:center;">
+          ${isCustom
+            ? `<span class="badge badge-warning" style="font-size:11px;">${icon('alert')} Customized</span>`
+            : `<span class="badge badge-success" style="font-size:11px;">${icon('check')} Using default</span>`}
+          <button class="btn btn-sm btn-ghost" id="pd-reset-all" title="Remove all customizations for this policy">
+            ${icon('history')} Reset all to default
+          </button>
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="font-size:12px;">
+        ${icon('info')}<div>
+          <strong>Changes here apply to every class using this policy version.</strong>
+          Finalized term grades are safe — they store the reported grade at the moment of finalization and are never recomputed.
+          The Gradebook, SF9, and Class Profile all read the customization the next time they render.
+        </div>
+      </div>
+
+      <!-- ══════════════════ WEIGHTS ══════════════════ -->
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Component Weights</h3>
+          <span class="text-xs text-muted">Each column must total 100%</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12.5px;">
+            <thead>
+              <tr>
+                <th style="min-width:170px;">Weight Key</th>
+                <th style="text-align:center;">Written/Oral Works (%)</th>
+                <th style="text-align:center;">Product/Performance Tasks (%)</th>
+                <th style="text-align:center;">Examinations (%)</th>
+                ${Object.keys(workingWeights).some(k => workingWeights[k].QA !== undefined) ? '<th style="text-align:center;">Quarterly Assessment (legacy, %)</th>' : ''}
+              </tr>
+            </thead>
+            <tbody id="pd-weights-body">${weightsRowsHTML}</tbody>
+          </table>
+        </div>
+        <p class="text-xs text-muted mt-8">
+          <span style="color:#F59E0B;font-weight:800;">●</span> = the key used by the active class.
+          Modifying other keys is possible but only affects other grade levels or SHS classifications.
+        </p>
+      </div>
+
+      <!-- ══════════════════ TRANSMUTATION ══════════════════ -->
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Transmutation Table</h3>
+          <div class="flex gap-8" style="align-items:center;flex-wrap:wrap;">
+            <label class="auth-check" style="font-size:12px;">
+              <input type="radio" name="pd-tt-mode" value="table" ${!transmutationDisabled ? 'checked' : ''}>
+              <span>Use a transmutation table</span>
+            </label>
+            <label class="auth-check" style="font-size:12px;">
+              <input type="radio" name="pd-tt-mode" value="zero" ${transmutationDisabled ? 'checked' : ''}>
+              <span>Zero-based (no transmutation)</span>
+            </label>
+          </div>
+        </div>
+
+        <div id="pd-tt-table-area" style="${transmutationDisabled ? 'display:none;' : ''}">
+          <div class="alert alert-info" style="font-size:12px;margin-bottom:12px;">
+            ${icon('info')}<div>
+              Enter each band as <strong>min</strong>, <strong>max</strong>, and the <strong>reported grade</strong> it maps to.
+              Bands must be non-overlapping and cover the full 0–100 range. The resolver scans top-down and returns the first match.
+            </div></div>
+          <div class="table-wrap" style="max-height:340px;overflow-y:auto;">
+            <table class="data-table" style="font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="width:36px;">#</th>
+                  <th style="text-align:center;">Min (inclusive)</th>
+                  <th style="text-align:center;">Max (inclusive)</th>
+                  <th style="text-align:center;">Reported Grade</th>
+                  <th style="width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody id="pd-tt-body">${transmutationRowsHTML()}</tbody>
+            </table>
+          </div>
+          <div class="flex gap-8 mt-12" style="flex-wrap:wrap;">
+            <button class="btn btn-sm btn-outline" id="pd-tt-add">${icon('edit')} + Add band</button>
+            <button class="btn btn-sm btn-outline" id="pd-tt-paste">${icon('file')} Paste from memo</button>
+            <button class="btn btn-sm btn-ghost" id="pd-tt-restore-default">${icon('history')} Restore default table</button>
+          </div>
+        </div>
+
+        <div id="pd-tt-zero-area" style="${transmutationDisabled ? '' : 'display:none;'}">
+          <div class="alert alert-warning" style="font-size:12px;margin-bottom:0;">
+            ${icon('alert')}<div>
+              <strong>Zero-based grading mode.</strong> The Initial Grade is reported as-is with no transmutation.
+              This matches the format expected for SY 2027-2028 onward. Existing finalized term grades are unaffected.
+            </div></div>
+        </div>
+      </div>
+
+      <!-- ══════════════════ DESCRIPTORS (read-only) ══════════════════ -->
+      <div class="card">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Performance Descriptors</h3>
+          <span class="text-xs text-muted">Read-only (customization coming in a future update)</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12.5px;">
+            <thead><tr><th>Range</th><th>Label</th><th>Description</th></tr></thead>
+            <tbody>
+              ${(policy.descriptors || []).map(d => `
+                <tr>
+                  <td style="white-space:nowrap;">${d.min}–${d.max}</td>
+                  <td><strong>${Utils.esc(d.label)}</strong></td>
+                  <td class="text-xs text-muted">${Utils.esc(d.description || '')}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `,
+    footer: `
+      <div class="flex-between" style="width:100%;flex-wrap:wrap;gap:10px;">
+        <div id="pd-validation-msg" class="text-xs text-muted"></div>
+        <div class="flex gap-8">
+          <button class="btn btn-outline" data-close>Cancel</button>
+          <button class="btn btn-primary" id="pd-save">${icon('save')} Save Changes</button>
+        </div>
+      </div>
+    `
+  });
+
+  const overlay = m.overlay;
+  const body = overlay;
+
+  /* ════════════════ BIND: Transmutation mode radio ════════════════ */
+  overlay.querySelectorAll('[name="pd-tt-mode"]').forEach(r => {
+    r.addEventListener('change', () => {
+      transmutationDisabled = (r.value === 'zero');
+      overlay.querySelector('#pd-tt-table-area').style.display = transmutationDisabled ? 'none' : '';
+      overlay.querySelector('#pd-tt-zero-area').style.display  = transmutationDisabled ? '' : 'none';
     });
-  },
+  });
+
+  /* ════════════════ BIND: Weight inputs — validate on blur ════════════════ */
+  const validateWeights = () => {
+    let allValid = true;
+    const rows = overlay.querySelectorAll('#pd-weights-body tr');
+    rows.forEach(tr => {
+      const key = tr.dataset.weightRow;
+      const ww = tr.querySelector('.wp-ww');
+      const pt = tr.querySelector('.wp-pt');
+      const ex = tr.querySelector('.wp-ex');
+      const qa = tr.querySelector('.wp-qa');
+      const hasQA = !!qa;
+      const sum = (ww ? Number(ww.value) || 0 : 0)
+                + (pt ? Number(pt.value) || 0 : 0)
+                + (ex ? Number(ex.value) || 0 : 0)
+                + (hasQA && !ww && !pt && !ex ? Number(qa.value) || 0 : 0);
+      const isLegacy = hasQA && !ww && !pt && !ex;
+      const target = isLegacy ? (Number(qa.value) || 0) : sum;
+      const ok = target === 100;
+      // Visual cue
+      tr.style.background = key === activeWeightKey
+        ? (ok ? 'rgba(25,135,84,0.10)' : 'rgba(220,53,69,0.10)')
+        : (ok ? '' : 'rgba(220,53,69,0.06)');
+      if (!ok) allValid = false;
+    });
+    const msg = overlay.querySelector('#pd-validation-msg');
+    if (msg) {
+      msg.innerHTML = allValid
+        ? '<span style="color:var(--success);">✓ All weight rows valid</span>'
+        : '<span style="color:var(--danger);">⚠ Each row\'s weights must total 100%</span>';
+    }
+    return allValid;
+  };
+  overlay.querySelectorAll('#pd-weights-body input').forEach(inp => {
+    inp.addEventListener('input', validateWeights);
+    inp.addEventListener('blur', validateWeights);
+  });
+
+  /* ════════════════ BIND: Transmutation row edits ════════════════ */
+  const syncTransmutationFromDOM = () => {
+    if (transmutationDisabled) return;
+    const rows = overlay.querySelectorAll('#pd-tt-body tr[data-tt-row]');
+    const next = [];
+    rows.forEach(tr => {
+      const idx = Number(tr.dataset.ttRow);
+      const min = Number(tr.querySelector('.tt-min').value) || 0;
+      const max = Number(tr.querySelector('.tt-max').value) || 0;
+      const rep = Number(tr.querySelector('.tt-rep').value) || 0;
+      next[idx] = { min, max, reported: rep };
+    });
+    workingTransmutation = {
+      label: (workingTransmutation && workingTransmutation.label) || 'Custom Transmutation Table',
+      table: next
+    };
+  };
+
+  const rebindTransmutationRows = () => {
+    overlay.querySelectorAll('#pd-tt-body input').forEach(inp => {
+      inp.addEventListener('input', () => {
+        syncTransmutationFromDOM();
+        validateTransmutation();
+      });
+    });
+    overlay.querySelectorAll('.tt-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.idx);
+        workingTransmutation.table.splice(idx, 1);
+        overlay.querySelector('#pd-tt-body').innerHTML = transmutationRowsHTML();
+        rebindTransmutationRows();
+        validateTransmutation();
+      });
+    });
+  };
+  rebindTransmutationRows();
+
+  /* ════════════════ Add band ════════════════ */
+  overlay.querySelector('#pd-tt-add').addEventListener('click', () => {
+    if (!workingTransmutation || !Array.isArray(workingTransmutation.table)) {
+      workingTransmutation = { label: 'Custom Transmutation Table', table: [] };
+    }
+    workingTransmutation.table.push({ min: 0, max: 0, reported: 0 });
+    overlay.querySelector('#pd-tt-body').innerHTML = transmutationRowsHTML();
+    rebindTransmutationRows();
+  });
+
+  /* ════════════════ Paste from memo ════════════════ */
+  overlay.querySelector('#pd-tt-paste').addEventListener('click', () => {
+    Pages._pdOpenPasteModal((parsedRows) => {
+      workingTransmutation = { label: 'Custom Transmutation Table (pasted)', table: parsedRows };
+      transmutationDisabled = false;
+      overlay.querySelector('[name="pd-tt-mode"][value="table"]').checked = true;
+      overlay.querySelector('#pd-tt-table-area').style.display = '';
+      overlay.querySelector('#pd-tt-zero-area').style.display = 'none';
+      overlay.querySelector('#pd-tt-body').innerHTML = transmutationRowsHTML();
+      rebindTransmutationRows();
+      validateTransmutation();
+      UI.toast(`Imported ${parsedRows.length} band${parsedRows.length === 1 ? '' : 's'}`, 'success');
+    });
+  });
+
+  /* ════════════════ Restore default table ════════════════ */
+  overlay.querySelector('#pd-tt-restore-default').addEventListener('click', () => {
+    if (!defaultTable.length) {
+      UI.toast('This policy has no default table to restore.', 'warning');
+      return;
+    }
+    UI.confirm({
+      title: 'Restore default transmutation table?',
+      message: `This will replace the current table with the ${defaultTable.length} bands from ${Utils.esc((GRADING_POLICIES[activeVersion].transmutation || {}).label || activeVersion)}.`,
+      confirmText: 'Restore',
+      confirmClass: 'btn-warning',
+      onConfirm: () => {
+        workingTransmutation = {
+          label: (GRADING_POLICIES[activeVersion].transmutation || {}).label || 'Transmutation Table',
+          table: JSON.parse(JSON.stringify(defaultTable))
+        };
+        transmutationDisabled = false;
+        overlay.querySelector('[name="pd-tt-mode"][value="table"]').checked = true;
+        overlay.querySelector('#pd-tt-table-area').style.display = '';
+        overlay.querySelector('#pd-tt-zero-area').style.display = 'none';
+        overlay.querySelector('#pd-tt-body').innerHTML = transmutationRowsHTML();
+        rebindTransmutationRows();
+        validateTransmutation();
+      }
+    });
+  });
+
+  /* ════════════════ Validate transmutation ════════════════ */
+  const validateTransmutation = () => {
+    const msg = overlay.querySelector('#pd-validation-msg');
+    if (!msg) return true;
+    if (transmutationDisabled) return true;
+
+    syncTransmutationFromDOM();
+    const rows = workingTransmutation.table || [];
+    if (!rows.length) return true;
+
+    // Check ordering (bands should be non-overlapping and sorted)
+    const sorted = rows.slice().sort((a, b) => a.min - b.min);
+    let valid = true;
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i].min <= sorted[i - 1].max) { valid = false; break; }
+    }
+    if (!valid) {
+      msg.innerHTML = '<span style="color:var(--danger);">⚠ Bands overlap — adjust min/max so ranges do not intersect</span>';
+    }
+    return valid;
+  };
+
+  /* ════════════════ Reset all to default ════════════════ */
+  overlay.querySelector('#pd-reset-all').addEventListener('click', () => {
+    UI.confirm({
+      title: 'Reset all customizations?',
+      message: `Remove every weight and transmutation override for <strong>${Utils.esc(policy.label)}</strong>? The policy returns to its original DepEd-prescribed defaults.`,
+      confirmText: 'Reset',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        await GradingEngine.saveOverride(activeVersion, null);
+        App.logActivity(`Grading policy reset to default: ${policy.label}`, 'Grading');
+        m.close();
+        App.navigate(State.currentModule);
+        UI.toast('Policy reset to default', 'success');
+      }
+    });
+  });
+
+  /* ════════════════ Save changes ════════════════ */
+  overlay.querySelector('#pd-save').addEventListener('click', async () => {
+    // Weights validation
+    if (!validateWeights()) {
+      UI.toast('Fix the weight rows before saving — each must total 100%.', 'warning', 5000);
+      return;
+    }
+    // Transmutation validation
+    if (!transmutationDisabled) {
+      syncTransmutationFromDOM();
+      const rows = workingTransmutation.table || [];
+      const sorted = rows.slice().sort((a, b) => a.min - b.min);
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].min <= sorted[i - 1].max) {
+          UI.toast('Transmutation bands overlap. Adjust them before saving.', 'warning', 5000);
+          return;
+        }
+      }
+      if (!rows.length) {
+        UI.toast('Add at least one band, or switch to zero-based mode.', 'warning', 5000);
+        return;
+      }
+    }
+
+    // Build the override object
+    const overrideObj = {};
+
+    // Weights — only store rows that differ from the default
+    const defaultWeights = GRADING_POLICIES[activeVersion].weights || {};
+    const dirtyWeights = {};
+    let anyWeightChanged = false;
+    Object.keys(workingWeights).forEach(key => {
+      const w = workingWeights[key];
+      const dw = defaultWeights[key] || {};
+      const differs = ['WW','PT','EX','QA'].some(k =>
+        (w[k] === undefined) !== (dw[k] === undefined) ||
+        (w[k] !== undefined && Number(w[k]) !== Number(dw[k]))
+      );
+      if (differs) {
+        dirtyWeights[key] = { WW: Number(w.WW) || 0, PT: Number(w.PT) || 0, EX: Number(w.EX) || 0 };
+        if (w.QA !== undefined) dirtyWeights[key].QA = Number(w.QA) || 0;
+        anyWeightChanged = true;
+      }
+    });
+    if (anyWeightChanged) overrideObj.weights = dirtyWeights;
+
+    // Transmutation
+    if (transmutationDisabled) {
+      // Only store if the base policy HAS a table (i.e. we're disabling it)
+      if (GRADING_POLICIES[activeVersion].transmutation) {
+        overrideObj.transmutation = null;
+      }
+    } else {
+      // Compare to default
+      const base = (GRADING_POLICIES[activeVersion].transmutation || {}).table || [];
+      const working = workingTransmutation.table || [];
+      const same = base.length === working.length && base.every((b, i) =>
+        Number(b.min) === Number(working[i].min) &&
+        Number(b.max) === Number(working[i].max) &&
+        Number(b.reported) === Number(working[i].reported)
+      );
+      if (!same) {
+        overrideObj.transmutation = {
+          label: workingTransmutation.label || 'Custom Transmutation Table',
+          table: working.map(b => ({ min: Number(b.min), max: Number(b.max), reported: Number(b.reported) }))
+        };
+      }
+    }
+
+    // Persist
+    const isNowEmpty = Object.keys(overrideObj).length === 0;
+    try {
+      await GradingEngine.saveOverride(activeVersion, isNowEmpty ? null : overrideObj);
+
+      // Log
+      const bits = [];
+      if (overrideObj.weights)      bits.push('weights');
+      if (overrideObj.transmutation === null) bits.push('transmutation disabled');
+      else if (overrideObj.transmutation)     bits.push('transmutation table');
+      App.logActivity(
+        isNowEmpty
+          ? `Grading policy restored to default: ${policy.label}`
+          : `Grading policy customized: ${policy.label} — ${bits.join(', ')}`,
+        'Grading'
+      );
+
+      m.close();
+      App.navigate(State.currentModule);
+      UI.toast(
+        isNowEmpty ? 'Reverted to default' : 'Policy customization saved',
+        'success'
+      );
+    } catch (e) {
+      console.error('[Policy] Save failed:', e);
+      UI.toast('Could not save: ' + (e.message || 'unknown error'), 'error', 5000);
+    }
+  });
+},
+
+/* ──────────────── Paste-from-memo modal ──────────────── */
+_pdOpenPasteModal(onParsed) {
+  const m = UI.modal({
+    title: 'Paste Transmutation Table',
+    size: 'modal-lg',
+    body: `
+      <p class="text-sm text-muted mb-12">
+        Copy the table from your Division memo (Excel, Word, or PDF) and paste it below.
+        Each line should contain <strong>three numbers</strong>: min, max, reported. A header row is optional.
+        Tabs and multiple spaces are both accepted.
+      </p>
+      <textarea class="form-control" id="pd-paste-input" rows="12" placeholder="Example:
+99.50   100.00   100
+98.32   99.49    99
+97.14   98.31    98
+...
+0       4.67     60"></textarea>
+      <div id="pd-paste-preview" class="mt-12"></div>`,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="pd-paste-apply" disabled>Apply ${''}</button>`
+  });
+
+  const input = m.overlay.querySelector('#pd-paste-input');
+  const preview = m.overlay.querySelector('#pd-paste-preview');
+  const applyBtn = m.overlay.querySelector('#pd-paste-apply');
+
+  let parsed = [];
+
+  const parse = () => {
+    parsed = [];
+    const errors = [];
+    const lines = (input.value || '').split(/\r?\n/);
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      // Split on tabs or 2+ spaces
+      const parts = trimmed.split(/\t+|\s{2,}/).map(s => s.trim()).filter(Boolean);
+      // Also fall back to single-space split if we got fewer than 3
+      const final = parts.length >= 3 ? parts : trimmed.split(/\s+/);
+      if (final.length < 3) {
+        // Skip header lines silently
+        if (/[a-z]/i.test(trimmed) && !/\d/.test(trimmed)) return;
+        errors.push(`Line ${i + 1}: expected 3 numbers, got ${final.length}`);
+        return;
+      }
+      const min = Number(final[0]);
+      const max = Number(final[1]);
+      const rep = Number(final[2]);
+      if (isNaN(min) || isNaN(max) || isNaN(rep)) {
+        if (/[a-z]/i.test(trimmed)) return; // header row — skip silently
+        errors.push(`Line ${i + 1}: could not parse numbers`);
+        return;
+      }
+      parsed.push({ min, max, reported: rep });
+    });
+
+    // Sort ascending by min for consistent display
+    parsed.sort((a, b) => a.min - b.min);
+
+    // Preview
+    if (parsed.length) {
+      preview.innerHTML = `
+        <div class="alert alert-success" style="font-size:12px;">
+          ${icon('check')}<div>Parsed <strong>${parsed.length}</strong> bands${errors.length ? ` · ${errors.length} line${errors.length === 1 ? '' : 's'} skipped` : ''}.</div>
+        </div>
+        <div class="table-wrap" style="max-height:160px;overflow-y:auto;">
+          <table class="data-table" style="font-size:11.5px;">
+            <thead><tr><th>#</th><th style="text-align:center;">Min</th><th style="text-align:center;">Max</th><th style="text-align:center;">Reported</th></tr></thead>
+            <tbody>${parsed.slice(0, 20).map((b, i) => `
+              <tr><td>${i + 1}</td><td style="text-align:center;">${b.min}</td><td style="text-align:center;">${b.max}</td><td style="text-align:center;"><strong>${b.reported}</strong></td></tr>
+            `).join('')}</tbody>
+          </table>
+        </div>
+        ${parsed.length > 20 ? `<p class="text-xs text-muted mt-8">…and ${parsed.length - 20} more</p>` : ''}
+      `;
+      applyBtn.disabled = false;
+      applyBtn.textContent = `Apply ${parsed.length} bands`;
+    } else {
+      preview.innerHTML = errors.length
+        ? `<div class="alert alert-danger" style="font-size:12px;">${icon('alert')}<div>Could not parse any rows. First error: ${Utils.esc(errors[0])}</div></div>`
+        : '';
+      applyBtn.disabled = true;
+      applyBtn.textContent = 'Apply';
+    }
+  };
+
+  input.addEventListener('input', Utils.debounce(parse, 250));
+  input.addEventListener('paste', () => setTimeout(parse, 30));
+
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+  applyBtn.onclick = () => {
+    if (!parsed.length) return;
+    m.close();
+    onParsed(parsed);
+  };
+},
   saveGeneralSettings() {
     State.schoolYear = document.getElementById('st-sy').value.trim() || State.schoolYear;
     State.theme = document.getElementById('st-theme').value;
@@ -25197,38 +26226,8 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
           </div>
         </div>
       </div>
-      <!-- ▲▲▲ END EMAIL SENDING CARD ▲▲▲ -->
-        </div>
-
-        <div class="form-group">
-          <label for="sec-w3f-key">Web3Forms Access Key</label>
-          <div class="input-wrap">
-            <input type="password" class="form-control" id="sec-w3f-key"
-                   value="${Utils.attr(await DB.getSetting('web3formsKey', ''))}"
-                   placeholder="Paste your access key from web3forms.com"
-                   autocomplete="off" spellcheck="false">
-            <button type="button" class="pw-toggle" id="sec-w3f-toggle"
-                    aria-label="Show key" aria-pressed="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-            </button>
-          </div>
-          <small class="text-muted">
-            Free at
-            <a href="https://web3forms.com" target="_blank" rel="noopener">web3forms.com</a>
-            — 250 emails per month, no credit card.
-          </small>
-        </div>
-
-        <div class="flex gap-8" style="flex-wrap:wrap;">
-          <button class="btn btn-primary" id="sec-w3f-save">${icon('save')} Save Key</button>
-          <button class="btn btn-outline" id="sec-w3f-test">${icon('message')} Send Test Email</button>
-          <button class="btn btn-ghost" id="sec-w3f-clear">Clear Key</button>
-        </div>
-      </div>
       <!-- ▲▲▲ END EMAIL SENDING CARD ▲▲▲ -->`;
+
 
     root.querySelector('#sec-change-pw').addEventListener('click', () => Pages.openChangePasswordModal());
     root.querySelector('#sec-regenerate-recovery').addEventListener('click', () => Pages.openRegenerateRecoveryModal());
@@ -29514,7 +30513,10 @@ for (const k in aliases) {
  'securitySettings','openChangePasswordModal','openRegenerateRecoveryModal',
  'gradeSummary','_gsExportCSV','_gsOpenLearnerDetail','_gsPrintLearnerReport',
  '_renderTermSummarySheet','_tsLoadRecords','_tsBuildAutoIndex','_tsExportCSV','_tsPrintSheet',
- '_tsReflowStats','_tsOpenCopyFromTerm','_tsSubjectKey','_tsShortLabel'
+ '_tsReflowStats','_tsOpenCopyFromTerm','_tsSubjectKey','_tsShortLabel',
+ 'viewPolicyDetails','_pdOpenPasteModal',
+ 'openDepEdCalendarImport','_parseDepEdCalendar','_expandDepEdDateField',
+ '_categorizeDepEdEvent','_importDepEdCalendar'
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
 /* ============================================================================
    EXPORTS + BOOT
