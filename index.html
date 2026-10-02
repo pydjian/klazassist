@@ -2298,6 +2298,268 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     #16a34a 0%, #22c55e 22%, #eab308 50%,
     #f97316 72%, #dc2626 100%);
 }
+
+/* ============================================================
+   NOISE METER — Bouncy Balls layout (bouncyballs.org style)
+   ============================================================ */
+.noise-meter-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.noise-stage {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #0f172a;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.55), 0 6px 24px rgba(0, 0, 0, 0.25);
+  min-height: 460px;
+  display: flex;
+  flex-direction: column;
+}
+
+.noise-stage-canvas {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 460px;
+  touch-action: none;
+}
+
+.noise-stage-overlay {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  z-index: 2;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.noise-stage-overlay .nso-val {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -1px;
+}
+
+.noise-stage-overlay .nso-lbl {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Controls sidebar */
+.noise-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 16px;
+}
+
+.noise-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.noise-control-label {
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1.3px;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.noise-control-label .ncl-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--deped-blue);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.noise-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+.noise-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--deped-blue);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 56, 168, 0.35);
+  transition: transform .12s;
+}
+.noise-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
+.noise-slider::-moz-range-thumb {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--deped-blue);
+  cursor: pointer; border: none;
+  box-shadow: 0 2px 6px rgba(0, 56, 168, 0.35);
+}
+
+/* Theme radio list */
+.noise-theme-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.noise-theme-btn {
+  text-align: center;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all .15s;
+}
+.noise-theme-btn:hover {
+  background: var(--light-blue);
+  color: var(--deped-blue);
+}
+.noise-theme-btn.active {
+  background: var(--gradient-primary);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(0, 56, 168, 0.28);
+}
+
+/* Alert options list */
+.noise-alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.noise-alert-btn {
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  transition: all .12s;
+}
+.noise-alert-btn:hover { background: var(--light-blue); color: var(--deped-blue); }
+.noise-alert-btn.active {
+  background: var(--light-blue);
+  color: var(--deped-blue);
+  font-weight: 700;
+}
+
+/* Mic toggle */
+.noise-mic-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all .15s;
+}
+.noise-mic-toggle:hover { border-color: var(--deped-blue); background: var(--light-blue); }
+.noise-mic-toggle.active {
+  background: var(--gradient-success);
+  border-color: transparent;
+  color: #fff;
+}
+.noise-mic-toggle.active .nm-icon { color: #fff; }
+.noise-mic-toggle .nm-icon {
+  width: 32px; height: 32px;
+  color: var(--text-muted);
+  transition: color .15s;
+}
+.noise-mic-toggle .nm-status-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+/* Compact stats row */
+.noise-stats-mini {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.noise-stats-mini > div {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: center;
+}
+.noise-stats-mini .nsm-v {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.noise-stats-mini .nsm-l {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+@media (max-width: 820px) {
+  .noise-meter-layout { grid-template-columns: 1fr; }
+  .noise-stage { min-height: 340px; }
+  .noise-stage-canvas { min-height: 340px; }
+}
+
+.noise-balls-canvas {
+  width: 100%;
+  height: clamp(280px, 52vh, 520px);
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 50% 0%, #1e293b 0%, #0f172a 70%, #020617 100%);
+  display: block;
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.6);
+  touch-action: none;
+}
+#nm-ball-type-row {
+  justify-content: center;
+  align-items: center;
+}
+#nm-ball-type-row .btn {
+  min-width: 78px;
+}
 .noise-meter-mask {
   position: absolute;
   top: 0; right: 0; bottom: 0;
@@ -2390,8 +2652,9 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
    ============================================================ */
 .wheel-stage {
   position: relative;
-  width: min(560px, 88vw);
-  height: min(560px, 88vw);
+  width: min(560px, 100%);
+  aspect-ratio: 1 / 1;
+  height: auto;
   margin: 0 auto;
   filter: drop-shadow(0 16px 44px rgba(0,56,168,0.28));
 }
@@ -2407,7 +2670,7 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 
 .wheel-pointer {
   position: absolute;
-  top: 2.5%;
+  top: 8%;
   left: 50%;
   transform: translate(-50%, -100%);
   width: clamp(34px, 8%, 48px);
@@ -2510,13 +2773,19 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 [data-theme="dark"] .wheel-result-winner .winner-name { color: #6FA8FF; }
 
 @media (max-width: 768px) {
-  .wheel-stage { width: min(420px, 92vw); height: min(420px, 92vw); }
+  .wheel-stage {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+    max-width: 420px;
+  }
   .wheel-hub { width: 78px; height: 78px; font-size: 13px; }
-  .wheel-pointer { border-left-width: 14px; border-right-width: 14px; border-top-width: 24px; top: -10px; }
-  .wheel-pointer::before { width: 22px; height: 22px; top: -32px; left: -11px; }
+  .wheel-pointer { top: 25px; }
   .wheel-result-winner .winner-name { font-size: 20px; }
 }
-
+@media (max-width: 768px) {
+  .wheel-card { padding-left: 8px !important; padding-right: 8px !important; }
+}
 .quick-fab { position: fixed; bottom: 24px; right: 24px; z-index: 90; }
 .quick-fab-main { width: 52px; height: 52px; border-radius: 50%; background: var(--gradient-primary); color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-lg); transition: transform var(--transition); }
 .quick-fab-main:hover { transform: scale(1.06); }
@@ -4669,7 +4938,7 @@ const CONFIG = {
   APP_NAME: 'KlazAssist',
   VERSION: '2.0.0',
   DB_NAME: 'DepEdTeacherToolkitDB',
-  DB_VERSION: 5,   // bumped for 'sf9Records'
+  DB_VERSION: 7,   // bumped for classId indexes + compound indexes
   STORES: [
     'teachers','schools','classes','learners','attendance',
     'subjects','assessments','questions','assessmentResults',
@@ -4678,8 +4947,8 @@ const CONFIG = {
     'behaviorLogs','parentLogs','settings','activityLogs','groups',
     'termGrades','reportSnapshots',
     'calendarEvents',
-    'presentations',  
-    'sf9Records'   // ← NEW
+    'presentations','teachingLoad',  
+    'sf9Records'
   ],
   PAGE_SIZE: 20,
   PASSING_GRADE: 75,
@@ -4757,6 +5026,42 @@ const SF9_LEARNING_AREAS = {
     'Understanding Culture, Society and Politics', 'Contemporary Philippine Arts',
     'Physical Education and Health'
   ]
+};
+
+/* ============================================================================
+   NOISE METER — BALL THEME TABLE (shared between teacher page and presenter)
+   ============================================================================ */
+const NOISE_BALL_THEMES = {
+  plastic: {
+    label: 'Plastic', mode: 'solid',
+    bgTop: '#312e81', bgMid: '#1e1b4b', bgBot: '#050214',
+    floorTint: 'rgba(148,163,184,0.10)',
+    colors: ['#F7C948','#198754','#DC3545','#0057B8','#7C3AED','#0891B2','#F59E0B','#BE185D','#10B981','#6366F1','#EC4899','#F97316']
+  },
+  emoji: {
+    label: 'Emoji', mode: 'emoji',
+    bgTop: '#1e293b', bgMid: '#0f172a', bgBot: '#020617',
+    floorTint: 'rgba(148,163,184,0.10)',
+    glyphs: ['😀','🌟','⚽','🎈','🍎','🐶','🌈','🎵','🚀','💡','🐱','🍕','⚡','🎨','🌸','🦋']
+  },
+  numbers: {
+    label: 'Numbers', mode: 'number',
+    bgTop: '#4c1d95', bgMid: '#2e1065', bgBot: '#1e1b4b',
+    floorTint: 'rgba(167,139,250,0.12)',
+    colors: ['#A78BFA','#C4B5FD','#8B5CF6','#7C3AED','#DDD6FE']
+  },
+  bubbles: {
+    label: 'Bubbles', mode: 'bubble',
+    bgTop: '#3b82f6', bgMid: '#1e40af', bgBot: '#0a1628',
+    floorTint: 'rgba(96,165,250,0.10)',
+    colors: ['#60A5FA','#3B82F6','#2563EB','#1D4ED8','#93C5FD']
+  },
+  eyeballs: {
+    label: 'Eyeballs', mode: 'eyeball',
+    bgTop: '#7f1d1d', bgMid: '#5b0e0e', bgBot: '#2e0808',
+    floorTint: 'rgba(248,113,113,0.08)',
+    irisColors: ['#3B82F6','#10B981','#F59E0B','#8B4513','#7C3AED','#EC4899','#6B7280','#EF4444','#0891B2']
+  }
 };
 
 /** Which band does a grade-level string belong to? */
@@ -5287,6 +5592,23 @@ const Utils = {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
   },
+    /* Filename-safe timestamp: 2026-10-02_143722
+     • Colons are omitted — they break filenames on Windows.
+     • YYYY-MM-DD_HHMMSS sorts lexicographically = chronologically,
+       so backup folders list newest-last automatically. */
+  timestampForFilename(date = new Date()) {
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d)) return 'unknown';
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+      d.getFullYear() + '-' +
+      pad(d.getMonth() + 1) + '-' +
+      pad(d.getDate()) + '_' +
+      pad(d.getHours()) +
+      pad(d.getMinutes()) +
+      pad(d.getSeconds())
+    );
+  },
   formatDate(iso, opts = {}) {
     if (!iso) return '—';
     const d = new Date(iso); if (isNaN(d)) return '—';
@@ -5618,16 +5940,94 @@ const Security = {
     return true;
   }
 };
+/* ============================================================================
+   WRITE VALIDATORS
+   Cheap, per-store sanity checks that run before every DB.put().
+   Each validator either returns normally (record is fine) or throws with a
+   message the caller can surface to the user.
+   ============================================================================ */
+const WRITE_VALIDATORS = {
+  learners(l) {
+    if (!l) throw new Error('Learner record is empty.');
+    if (!String(l.firstName || '').trim() && !String(l.lastName || '').trim()) {
+      throw new Error('A learner needs at least a first or last name.');
+    }
+    if (l.lrn && !/^\d{3,14}$/.test(String(l.lrn))) {
+      throw new Error('LRN must be 3–14 digits.');
+    }
+    if (l.birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(l.birthDate)) {
+      throw new Error('Birth date must be in YYYY-MM-DD format.');
+    }
+  },
+
+  attendance(a) {
+    if (!a) throw new Error('Attendance record is empty.');
+    if (!a.date || !/^\d{4}-\d{2}-\d{2}$/.test(a.date)) {
+      throw new Error('Attendance date must be in YYYY-MM-DD format.');
+    }
+    if (!['Present', 'Absent', 'Late', 'Excused'].includes(a.status)) {
+      throw new Error('Invalid attendance status.');
+    }
+  },
+
+  assessmentResults(r) {
+    if (!r) throw new Error('Result record is empty.');
+    const score = Number(r.score) || 0;
+    const max   = Number(r.maxScore) || 0;
+    if (max > 0 && score > max) {
+      throw new Error(`Score (${score}) cannot exceed the maximum (${max}).`);
+    }
+    if (score < 0) {
+      throw new Error('Score cannot be negative.');
+    }
+  },
+
+  termGrades(g) {
+    if (!g) throw new Error('Term grade record is empty.');
+    const r = Number(g.reportedGrade);
+    if (g.reportedGrade !== '' && g.reportedGrade != null && !isNaN(r)) {
+      if (r < 0 || r > 100) throw new Error('Reported grade must be between 0 and 100.');
+    }
+  }
+};
 
 /* ============================================================================
    INDEXEDDB
    ============================================================================ */
 const DB = {
   db: null, initPromise: null, initFailed: false,
-    _cache: null,
-  beginCache() { this._cache = new Map(); },
-  endCache()   { this._cache = null; },
-  _invalidate(){ if (this._cache) this._cache.clear(); },
+    _caches: null,
+  _activeToken: null,
+
+  beginCache() {
+    if (!this._caches) this._caches = new Map();
+    const token = Symbol('render');
+    this._caches.set(token, new Map());
+    this._activeToken = token;
+    return token;
+  },
+
+  endCache(token) {
+    if (!this._caches) return;
+    const t = token || this._activeToken;
+    if (t) this._caches.delete(t);
+    if (t === this._activeToken) {
+      // Fall back to the most recently created cache that still exists.
+      const remaining = Array.from(this._caches.keys());
+      this._activeToken = remaining.length ? remaining[remaining.length - 1] : null;
+    }
+  },
+
+  _invalidate() {
+    if (this._caches) {
+      for (const c of this._caches.values()) c.clear();
+    }
+  },
+
+  _activeCache() {
+    if (!this._caches || !this._activeToken) return null;
+    return this._caches.get(this._activeToken) || null;
+  },
   open() {
     if (this.db) return Promise.resolve(this.db);
     if (this.initPromise) return this.initPromise;
@@ -5642,43 +6042,144 @@ const DB = {
           CONFIG.STORES.forEach(name => {
             if (!db.objectStoreNames.contains(name)) {
               const store = db.createObjectStore(name, { keyPath: 'id' });
-              try {
-                if (name === 'learners') {
-                  store.createIndex('lrn', 'lrn', { unique: false });
-                  store.createIndex('lastName', 'lastName', { unique: false });
-                  store.createIndex('classId', 'classId', { unique: false });
+              // ── Defensive index helper ──
+              // Never throw on "index already exists" — this upgrade runs on
+              // databases that already had some indexes from v6.
+              const safeIndex = (storeObj, indexName, keyPath, opts = {}) => {
+                try {
+                  if (!storeObj.indexNames.contains(indexName)) {
+                    storeObj.createIndex(indexName, keyPath, opts);
+                  }
+                } catch (e) {
+                  console.warn('[DB] Could not create index', indexName, 'on', storeObj.name, '—', e.message);
                 }
-                if (name === 'attendance') {
-                  store.createIndex('date', 'date', { unique: false });
-                  store.createIndex('classId', 'classId', { unique: false });
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                }
-                if (name === 'assessmentResults') {
-                  store.createIndex('assessmentId', 'assessmentId', { unique: false });
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                }
-                if (name === 'grades') {
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                  store.createIndex('classId', 'classId', { unique: false });
-                }
-                if (name === 'notes') store.createIndex('category', 'category', { unique: false });
-                if (name === 'activityLogs') store.createIndex('timestamp', 'timestamp', { unique: false });
-                if (name === 'termGrades') {
-                  store.createIndex('classId', 'classId', { unique: false });
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                  store.createIndex('classTerm', ['classId','term','schoolYear'], { unique: false });
-                }
-                if (name === 'reportSnapshots') {
-                  store.createIndex('classId', 'classId', { unique: false });
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                  store.createIndex('reportType', 'reportType', { unique: false });
-                }
-                if (name === 'sf9Records') {
-                  store.createIndex('classId', 'classId', { unique: false });
-                  store.createIndex('learnerId', 'learnerId', { unique: false });
-                  store.createIndex('classLearnerYear', ['classId','learnerId','schoolYear'], { unique: false });
-                }
-              } catch (idxErr) { console.warn('Index creation skipped:', idxErr); }
+              };
+
+              /* ── learners ── */
+              if (name === 'learners') {
+                safeIndex(store, 'lrn', 'lrn');
+                safeIndex(store, 'lastName', 'lastName');
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'classId_lastName', ['classId', 'lastName']);
+              }
+
+              /* ── attendance ── */
+              if (name === 'attendance') {
+                safeIndex(store, 'date', 'date');
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'classId_date', ['classId', 'date']);
+                safeIndex(store, 'learnerId_date', ['learnerId', 'date']);
+              }
+
+              /* ── assessmentResults ── */
+              if (name === 'assessmentResults') {
+                safeIndex(store, 'assessmentId', 'assessmentId');
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId_assessmentId', ['learnerId', 'assessmentId']);
+              }
+
+              /* ── grades ── */
+              if (name === 'grades') {
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'classId', 'classId');
+              }
+
+              /* ── notes ── */
+              if (name === 'notes') {
+                safeIndex(store, 'category', 'category');
+              }
+
+              /* ── activityLogs ── */
+              if (name === 'activityLogs') {
+                safeIndex(store, 'timestamp', 'timestamp');
+              }
+
+              /* ── termGrades ── */
+              if (name === 'termGrades') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'classTerm', ['classId', 'term', 'schoolYear']);
+                safeIndex(store, 'classId_term', ['classId', 'term']);
+              }
+
+              /* ── reportSnapshots ── */
+              if (name === 'reportSnapshots') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'reportType', 'reportType');
+              }
+
+              /* ── sf9Records ── */
+              if (name === 'sf9Records') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+                safeIndex(store, 'classLearnerYear', ['classId', 'learnerId', 'schoolYear']);
+              }
+
+              /* ── assessments ── */
+              if (name === 'assessments') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'classId_term', ['classId', 'term']);
+              }
+
+              /* ── assignments ── */
+              if (name === 'assignments') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'classId_status', ['classId', 'status']);
+              }
+
+              /* ── schedules ── */
+              if (name === 'schedules') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'classId_day', ['classId', 'day']);
+              }
+
+              /* ── behaviorLogs ── */
+              if (name === 'behaviorLogs') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+              }
+
+              /* ── parentLogs ── */
+              if (name === 'parentLogs') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'learnerId', 'learnerId');
+              }
+
+              /* ── groups ── */
+              if (name === 'groups') {
+                safeIndex(store, 'classId', 'classId');
+              }
+
+              /* ── weeklyPlans ── */
+              if (name === 'weeklyPlans') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'classId_date', ['classId', 'date']);
+              }
+
+              /* ── lessonPlans ── */
+              if (name === 'lessonPlans') {
+                safeIndex(store, 'classId', 'classId');
+              }
+
+              /* ── calendarEvents ── */
+              if (name === 'calendarEvents') {
+                safeIndex(store, 'classId', 'classId');
+                safeIndex(store, 'date', 'date');
+                safeIndex(store, 'source', 'source');
+              }
+
+              /* ── presentations ── */
+              if (name === 'presentations') {
+                safeIndex(store, 'classId', 'classId');
+              }
+
+              /* ── teachingLoad ── */
+              if (name === 'teachingLoad') {
+                safeIndex(store, 'subject', 'subject');
+              }
             }
           });
         } catch (err) { console.error('Migration error:', err); }
@@ -5728,23 +6229,31 @@ const DB = {
   },
 // --- NEW OPTIMIZED CODE (paste this over the original code) ---
 
-  _cache: null,
-  beginCache() { this._cache = new Map(); },
-  endCache()   { this._cache = null; },
-  _invalidate(){ if (this._cache) this._cache.clear(); },
-
-  add(store, obj)    { this._invalidate(); if (!obj.id) obj.id = Utils.uid(); return this.req(store, 'readwrite', os => os.add(obj)); },
-  put(store, obj)    { this._invalidate(); if (!obj.id) obj.id = Utils.uid(); return this.req(store, 'readwrite', os => os.put(obj)); },
+  add(store, obj) {
+    const v = WRITE_VALIDATORS[store];
+    if (v) v(obj);
+    this._invalidate();
+    if (!obj.id) obj.id = Utils.uid();
+    return this.req(store, 'readwrite', os => os.add(obj));
+  },
+  put(store, obj) {
+    const v = WRITE_VALIDATORS[store];
+    if (v) v(obj);   // throws on invalid input — caller's catch handles it
+    this._invalidate();
+    if (!obj.id) obj.id = Utils.uid();
+    return this.req(store, 'readwrite', os => os.put(obj));
+  },
   get(store, id)     { return this.req(store, 'readonly', os => os.get(id)); },
   delete(store, id)  { this._invalidate(); return this.req(store, 'readwrite', os => os.delete(id)); },
   clear(store)       { this._invalidate(); return this.req(store, 'readwrite', os => os.clear()); },
 
   async getAll(store) {
-    if (this._cache) {
+    const cache = this._activeCache();
+    if (cache) {
       const k = 'getAll|' + store;
-      if (this._cache.has(k)) return this._cache.get(k);
+      if (cache.has(k)) return cache.get(k);
       const v = await this.req(store, 'readonly', os => os.getAll());
-      this._cache.set(k, v);
+      cache.set(k, v);
       return v;
     }
     return this.req(store, 'readonly', os => os.getAll());
@@ -5761,23 +6270,25 @@ const DB = {
       } catch (e) { reject(e); }
     });
 
-    if (this._cache) {
-      const k = 'getAllByIndex|' + store + '|' + indexName + '|' + value;
-      if (this._cache.has(k)) return this._cache.get(k);
+    const cache = this._activeCache();
+    if (cache) {
+      const k = 'getAllByIndex|' + store + '|' + indexName + '|' + JSON.stringify(value);
+      if (cache.has(k)) return cache.get(k);
       const v = await run();
-      this._cache.set(k, v);
+      cache.set(k, v);
       return v;
     }
     return run();
   },
 
   async getSetting(key, def = null) {
-    if (this._cache) {
+    const cache = this._activeCache();
+    if (cache) {
       const k = 'getSetting|' + key;
-      if (this._cache.has(k)) return this._cache.get(k);
+      if (cache.has(k)) return cache.get(k);
       const s = await this.get('settings', key);
       const v = s ? s.value : def;
-      this._cache.set(k, v);
+      cache.set(k, v);
       return v;
     }
     const s = await this.get('settings', key);
@@ -5790,6 +6301,25 @@ const DB = {
     try { await this.open(); await this.getAll('settings'); return true; }
     catch (e) { return false; }
   },
+    /* ─────────────────────────────────────────────────────────────
+     PERSISTENT STORAGE
+     Browsers treat IndexedDB as "best-effort" by default and may
+     silently evict the entire database under disk pressure or after
+     a period of inactivity (Safari: 7 days). `persist()` asks the
+     browser to mark this origin's storage as durable.
+     ───────────────────────────────────────────────────────────── */
+  async requestPersistentStorage() {
+    if (!navigator.storage || !navigator.storage.persist) return null;
+    try {
+      const already = await navigator.storage.persisted();
+      if (already) return { granted: true, already: true };
+      const granted = await navigator.storage.persist();
+      return { granted, already: false };
+    } catch (e) {
+      return { granted: false, error: e.message };
+    }
+  },
+
   async estimateUsage() {
     if (!navigator.storage || !navigator.storage.estimate) return null;
     try { return await navigator.storage.estimate(); } catch (e) { return null; }
@@ -5859,6 +6389,49 @@ const DB = {
       }
     });
   },
+    /* ─────────────────────────────────────────────────────────────
+     ORPHAN CLEANUP
+     Removes records whose foreign key (classId / learnerId /
+     assessmentId) no longer points at an existing row. Runs on
+     startup when the "cleanupDone" flag is not yet set.
+     ───────────────────────────────────────────────────────────── */
+  async cleanupOrphans() {
+    const classIds      = new Set((await this.getAll('classes')).map(c => c.id));
+    const learnerIds    = new Set((await this.getAll('learners')).map(l => l.id));
+    const assessmentIds = new Set((await this.getAll('assessments')).map(a => a.id));
+
+    const rules = [
+      { store: 'learners',           test: r => r.classId && !classIds.has(r.classId) },
+      { store: 'attendance',         test: r => r.learnerId && !learnerIds.has(r.learnerId) },
+      { store: 'assessmentResults',  test: r => (r.learnerId && !learnerIds.has(r.learnerId)) ||
+                                                (r.assessmentId && !assessmentIds.has(r.assessmentId)) },
+      { store: 'termGrades',         test: r => r.learnerId && !learnerIds.has(r.learnerId) },
+      { store: 'sf9Records',         test: r => r.learnerId && !learnerIds.has(r.learnerId) },
+      { store: 'behaviorLogs',       test: r => r.learnerId && !learnerIds.has(r.learnerId) },
+      { store: 'parentLogs',         test: r => r.learnerId && !learnerIds.has(r.learnerId) },
+      { store: 'grades',             test: r => r.learnerId && !learnerIds.has(r.learnerId) }
+    ];
+
+    let removed = 0;
+    const details = {};
+
+    for (const rule of rules) {
+      let rows;
+      try { rows = await this.getAll(rule.store); }
+      catch (e) { continue; }
+
+      let count = 0;
+      for (const r of rows) {
+        if (!rule.test(r)) continue;
+        try { await this.delete(rule.store, r.id); count++; }
+        catch (e) { /* row may already be gone — keep going */ }
+      }
+      if (count) { details[rule.store] = count; removed += count; }
+    }
+
+    this._invalidate();
+    return { removed, details };
+  },
 
   async reset() {
     try {
@@ -5880,6 +6453,41 @@ const DB = {
    ============================================================================ */
 const Auth = {
   _account: null,
+    /* ─────────────────────────────────────────────────────────────
+     SHADOW BACKUP — mirror the account record into localStorage so
+     that even if IDB gets evicted or overwritten, we can detect the
+     change and offer to recover.
+     ───────────────────────────────────────────────────────────── */
+  SHADOW_KEY: 'klazassist.auth.shadow.v1',
+
+  _writeShadow(account) {
+    try {
+      if (!account || !account.username) return;
+      localStorage.setItem(this.SHADOW_KEY, JSON.stringify({
+        username: account.username,
+        usernameDisplay: account.usernameDisplay,
+        password: account.password,
+        recoveryHash: account.recoveryHash,
+        recoveryCreatedAt: account.recoveryCreatedAt,
+        createdAt: account.createdAt,
+        savedAt: new Date().toISOString()
+      }));
+    } catch (e) { /* localStorage may be disabled — non-fatal */ }
+  },
+
+  _readShadow() {
+    try {
+      const raw = localStorage.getItem(this.SHADOW_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.username || !parsed.password) return null;
+      return parsed;
+    } catch (e) { return null; }
+  },
+
+  _clearShadow() {
+    try { localStorage.removeItem(this.SHADOW_KEY); } catch (e) {}
+  },
   ACCOUNT_KEY: 'auth.account',
   async load() {
     const rec = await DB.get('settings', this.ACCOUNT_KEY);
@@ -5939,6 +6547,7 @@ const Auth = {
     };
     await DB.setSetting(this.ACCOUNT_KEY, account);
     this._account = account;
+    this._writeShadow(account);  
     return account;
   },
   async updateAccount(patch) {
@@ -5946,6 +6555,7 @@ const Auth = {
     const next = Object.assign({}, this._account, patch);
     await DB.setSetting(this.ACCOUNT_KEY, next);
     this._account = next;
+    this._writeShadow(next);
     return next;
   },
   async setRecoveryKey(recoveryKey) {
@@ -6844,7 +7454,10 @@ const NAV = [
     { id: 'printable-reports', label: 'Printable Reports', icon: 'printer' },
     { id: 'export-center', label: 'Export Center', icon: 'download' }
   ]},
-  { section: 'RESOURCES', items: [{ id: 'notes', label: 'Notes', icon: 'note' }] },
+{ section: 'RESOURCES', items: [
+    { id: 'notes', label: 'Notes', icon: 'note' },
+    { id: 'teaching-load', label: 'Teaching Load', icon: 'calendar' }
+]},
   { section: 'SECURITY & SETTINGS', items: [
     { id: 'settings', label: 'Settings', icon: 'settings' },
     { id: 'security-settings', label: 'Security', icon: 'shield' },
@@ -6966,7 +7579,121 @@ const AuthUI = {
   },
   hideSessionWarning() {
     document.getElementById('session-warning').classList.remove('show');
-  }
+  },
+    showAccountRecovery() {
+    this.hideAll();
+    document.getElementById('login-screen').classList.remove('hidden');
+    this._currentView = 'recovery';
+
+    const err = document.getElementById('login-error');
+    err.classList.remove('show');
+    err.textContent = '';
+
+    const shadow = Auth._readShadow();
+    const hint = shadow
+      ? `A previous account for <strong>${Utils.esc(shadow.usernameDisplay || shadow.username)}</strong> was found in this browser.`
+      : `Existing classroom data was found in this browser, but the account record is missing.`;
+
+    UI.modal({
+      title: 'Account recovery',
+      size: 'modal-lg',
+      body: `
+        <div class="alert alert-warning">${icon('alert')}<div>
+          ${hint}
+          <br><br>
+          <strong>Do not run the setup wizard</strong> — it will overwrite your existing data.
+          Choose one of the recovery options below.
+        </div></div>
+
+        ${shadow ? `
+          <div class="card mb-12">
+            <h4 style="font-size:14px;margin-bottom:6px;">1 · Restore the account from this browser's backup</h4>
+            <p class="text-sm text-muted mb-8">
+              A snapshot of the auth record was saved on
+              <strong>${Utils.formatDateTime(shadow.savedAt)}</strong>.
+              Restore it and sign in with the password you had at that time.
+            </p>
+            <button class="btn btn-primary" id="rec-restore-shadow">
+              ${icon('check')} Restore this account
+            </button>
+          </div>` : ''}
+
+        <div class="card mb-12">
+          <h4 style="font-size:14px;margin-bottom:6px;">2 · Restore from a JSON backup</h4>
+          <p class="text-sm text-muted mb-8">
+            If you have an exported KlazAssist backup file, restore it — it includes the
+            account record at the time of export.
+          </p>
+          <button class="btn btn-outline" id="rec-restore-file">
+            ${icon('download')} Restore from file
+          </button>
+        </div>
+
+        <div class="card">
+          <h4 style="font-size:14px;margin-bottom:6px;">3 · Start over</h4>
+          <p class="text-sm text-muted mb-8">
+            Wipe the existing database and set up a fresh account.
+            <strong>All current data will be deleted.</strong>
+          </p>
+          <button class="btn btn-danger" id="rec-start-over">
+            ${icon('trash')} Delete everything and start over
+          </button>
+        </div>`,
+      footer: false
+    });
+
+    const overlay = document.querySelector('.modal-overlay');
+    if (!overlay) return;
+
+    const restoreBtn = overlay.querySelector('#rec-restore-shadow');
+    if (restoreBtn) restoreBtn.onclick = async () => {
+      const s = Auth._readShadow();
+      if (!s) return;
+      const account = {
+        id: 'account',
+        name: s.usernameDisplay || s.username,
+        username: s.username,
+        usernameDisplay: s.usernameDisplay,
+        password: s.password,
+        recoveryHash: s.recoveryHash,
+        recoveryCreatedAt: s.recoveryCreatedAt,
+        createdAt: s.createdAt || new Date().toISOString(),
+        lastLoginAt: null,
+        lastFailedLoginAt: null,
+        failedAttempts: 0,
+        lockedUntil: null,
+        autoLockSec: CONFIG.IDLE_DEFAULT_SEC,
+        rememberDevice: true
+      };
+      await DB.setSetting(Auth.ACCOUNT_KEY, account);
+      Auth._account = account;
+      overlay.remove();
+      UI.toast('Account restored. Please sign in.', 'success');
+      AuthUI.showLogin();
+    };
+
+    const fileBtn = overlay.querySelector('#rec-restore-file');
+    if (fileBtn) fileBtn.onclick = () => {
+      overlay.remove();
+      Pages.restoreFromJSON();
+    };
+
+    const startOverBtn = overlay.querySelector('#rec-start-over');
+    if (startOverBtn) startOverBtn.onclick = () => {
+      UI.confirm({
+        title: 'Delete everything?',
+        message: 'This permanently deletes the local database, including all classroom records. Type <strong>DELETE</strong> to confirm.',
+        confirmText: 'Delete everything',
+        confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          await DB.reset();
+          Auth._clearShadow();
+          try { localStorage.clear(); } catch (e) {}
+          location.reload();
+        }
+      });
+    };
+  },
 };
 
 /* ============================================================================
@@ -7101,6 +7828,69 @@ server-side service. KlazAssist is offline-first and has no backend.
     btn.textContent = 'Creating account…';
     try {
       if (!Security.available()) throw new Error('Web Crypto is not available in this browser.');
+      
+      /* ─────────────────────────────────────────────────────────────
+         SAFETY GUARD — the setup wizard must never silently replace
+         an existing account. Doing so invalidates the previous
+         password AND recovery key, which is a common source of
+         "my credentials suddenly stopped working" reports.
+         ───────────────────────────────────────────────────────────── */
+      const existingAccountRec = await DB.get('settings', Auth.ACCOUNT_KEY);
+      const existingAccount = existingAccountRec ? existingAccountRec.value : null;
+
+      if (existingAccount && existingAccount.username) {
+        const confirmed = await new Promise(resolve => {
+          let settled = false;
+          const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+
+          UI.confirm({
+            title: 'An account already exists on this device',
+            message: `
+              The account <strong>${Utils.esc(existingAccount.usernameDisplay || existingAccount.username)}</strong>
+              is currently stored here.
+              <br><br>
+              Continuing will <strong>replace it</strong>. Your classroom data
+              (learners, grades, attendance) will <em>not</em> be deleted, but the
+              previous password and recovery key will <strong>stop working immediately</strong>.
+              <br><br>
+              If you reached this screen by accident, cancel now and use the
+              <strong>Account recovery</strong> link on the login screen instead.
+            `,
+            confirmText: 'Replace account',
+            confirmClass: 'btn-danger',
+            onConfirm: () => finish(true)
+          });
+
+          // If the user dismisses the modal (clicks outside / presses Esc),
+          // UI.confirm's onClose does not fire, so we poll for closure.
+          const poll = setInterval(() => {
+            if (!document.querySelector('.modal-overlay.show')) {
+              clearInterval(poll);
+              finish(false);
+            }
+          }, 200);
+        });
+
+        if (!confirmed) {
+          btn.disabled = false;
+          btn.textContent = 'Finish setup';
+          return;
+        }
+
+        // Belt-and-suspenders: keep a shadow copy of the record we are
+        // about to overwrite, so the user can be offered a rollback path
+        // if they immediately regret the decision.
+        try {
+          localStorage.setItem(
+            'klazassist.auth.previous.v1',
+            JSON.stringify({
+              savedAt: new Date().toISOString(),
+              account: existingAccount
+            })
+          );
+        } catch (e) { /* non-fatal */ }
+      }
+
       const account = await Auth.createAccount({
         name: this.data.name,
         username: this.data.username,
@@ -7342,6 +8132,16 @@ const App = {
       if (!healthy) throw new Error('Health check failed');
       State.databaseStatus = 'ready';
 
+      // ── Ask the browser to treat our storage as durable. ──
+      const persistResult = await DB.requestPersistentStorage();
+      State.storagePersistent = persistResult && persistResult.granted === true;
+      if (persistResult && persistResult.granted) {
+        console.info('[Storage] Persistent storage granted.');
+      } else {
+        console.warn('[Storage] Persistent storage NOT granted. Data may be evicted by the browser.');
+      }
+      
+
       if (!Security.available()) {
         console.warn('Web Crypto unavailable — authentication disabled.');
       }
@@ -7357,13 +8157,32 @@ const App = {
 
       document.getElementById('loading-screen').classList.add('hidden');
 
-      if (!(await Auth.exists())) {
-        AuthUI.showSetup();
-      } else if (await Session.tryResume()) {
-        await this.initApplication();
-        App.logActivity('Session resumed (remembered device)', 'Security');
+      const accountExists = await Auth.exists();
+      const shadow = Auth._readShadow();
+
+      // Were there ANY other user records already in the database?
+      // If yes, this DB is not "fresh" — we should NOT silently offer setup.
+      const hasExistingData = (
+        (await DB.getAll('teachers')).length > 0 ||
+        (await DB.getAll('classes')).length  > 0 ||
+        (await DB.getAll('learners')).length > 0 ||
+        (await DB.getAll('activityLogs')).length > 0
+      );
+
+      if (accountExists) {
+        if (await Session.tryResume()) {
+          await this.initApplication();
+          App.logActivity('Session resumed (remembered device)', 'Security');
+        } else {
+          AuthUI.showLogin();
+        }
+      } else if (hasExistingData || shadow) {
+        // The account is missing, but there IS data — the setup wizard
+        // would overwrite everything. Show a recovery prompt instead.
+        AuthUI.showAccountRecovery();
       } else {
-        AuthUI.showLogin();
+        // Truly fresh install.
+        AuthUI.showSetup();
       }
 
       this.startNotificationChecks();
@@ -7393,6 +8212,47 @@ const App = {
     this.bindActivityTracking();
     Session.updateUI();
     App.logActivity('Application started', 'System');
+
+    // ── Warn once per session if persistence was denied ──
+    if (State.storagePersistent === false) {
+      const alreadyWarned = await DB.getSetting('persistenceWarningShown', false);
+      if (!alreadyWarned) {
+        setTimeout(() => {
+          UI.modal({
+            title: 'Protect your data',
+            size: 'modal-lg',
+            body: `
+              <div class="alert alert-warning">${icon('alert')}<div>
+                Your browser did <strong>not</strong> grant KlazAssist persistent storage.
+                That means the browser can silently delete your classroom data at any time
+                if disk space runs low, or — on Safari — if you don't open this app for 7 days.
+              </div></div>
+
+              <h4 style="font-size:14px;margin-bottom:8px;">What you can do</h4>
+              <ul style="font-size:13px;line-height:1.8;padding-left:20px;color:var(--text-muted);">
+                <li>Add KlazAssist to your home screen / install it as a PWA — that usually upgrades storage to persistent.</li>
+                <li>Open this app at least once a week.</li>
+                <li>Export a JSON backup (Export Center → Backup All) after any important work.</li>
+              </ul>
+
+              <p class="text-sm text-muted mt-16">
+                This message is shown once per browser. You can re-check the status any time
+                from Settings → Data Management.
+              </p>`,
+            footer: `
+              <button class="btn btn-outline" data-close>Dismiss</button>
+              <button class="btn btn-primary" id="persist-goto-backup">Open Backup</button>
+            `,
+            onClose: () => DB.setSetting('persistenceWarningShown', true).catch(() => {})
+          });
+
+          document.querySelector('#persist-goto-backup')?.addEventListener('click', () => {
+            document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+            App.navigate('export-center');
+          });
+        }, 3500);
+      }
+    }
 
     // Run migrations in the background — do NOT await. The user is
     // already looking at their dashboard by the time these complete.
@@ -7498,12 +8358,28 @@ const App = {
       in the background. */
   async runDeferredMigrations() {
     try {
-      const MIGRATION_VERSION = 4;   // bump when a new migration is added
+      const MIGRATION_VERSION = 5;   // bumped from 4 → 5 for orphan cleanup
       const done = await DB.getSetting('migrationsVersion', 0);
+
+      // Orphan cleanup runs once per DB_VERSION, regardless of migration
+      // version — it's cheap when there's nothing to do and prevents
+      // stale references from piling up.
+      const cleanedForVersion = await DB.getSetting('cleanupForDBVersion', 0);
+      if (cleanedForVersion < CONFIG.DB_VERSION) {
+        try {
+          const result = await DB.cleanupOrphans();
+          if (result.removed > 0) {
+            this.logActivity(`Cleaned up ${result.removed} orphaned record${result.removed === 1 ? '' : 's'}`, 'System');
+            console.info('[DB] Orphan cleanup removed', result.removed, 'records:', result.details);
+          }
+          await DB.setSetting('cleanupForDBVersion', CONFIG.DB_VERSION);
+        } catch (e) {
+          console.warn('Orphan cleanup failed:', e);
+        }
+      }
+
       if (done >= MIGRATION_VERSION) return;
 
-      // These two migrations touch different stores and can safely run
-      // in parallel.
       await Promise.all([
         this.migrateGradingPolicies(),
         this.migrateLearnerSex()
@@ -7581,9 +8457,17 @@ const App = {
     const unread = State.notifications.filter(n => !n.read).length;
     dot.classList.toggle('hidden', unread === 0);
   },
+
   startNotificationChecks() {
+    // General notifications — every 5 minutes
     setTimeout(() => this.runNotificationChecks(), 2000);
     setInterval(() => this.runNotificationChecks(), 5 * 60 * 1000);
+
+    // Teaching Load period reminders — every minute (time-sensitive)
+    setTimeout(() => {
+      Pages.checkTeachingLoadNotifications();
+      setInterval(() => Pages.checkTeachingLoadNotifications(), 60 * 1000);
+    }, 3000);
   },
   async runNotificationChecks() {
     if (!Session.state.authenticated || !State.activeClass) return;
@@ -7731,33 +8615,29 @@ const App = {
 
     const renderFn = Pages[id] || Pages.notfound;
 
-    // ── Per-render read cache: any getAll/getAllByIndex/getSetting call
-    //    made during this page's render hits IndexedDB only once. Writes
-    //    (add/put/delete) invalidate the cache automatically.
-    DB.beginCache();
+    // ── Per-render read cache. Each render gets its OWN token so
+    //    overlapping renders cannot delete each other's cache.
+    const cacheToken = DB.beginCache();
 
     let asyncRender = false;
     try {
       const result = renderFn.call(Pages, page);
 
       if (result && typeof result.then === 'function') {
-        // Async page renderer (e.g. dashboard, classprofile, gradebook…).
-        // Keep the cache alive until the promise settles.
         asyncRender = true;
         result
           .catch(err => {
             console.error('Async render error in page:', id, err);
             page.innerHTML = `<div class="card"><div class="alert alert-danger">${icon('alert')}<div>An error occurred while rendering this page.<br><small class="text-muted">${Utils.esc(err && err.message ? err.message : 'Unknown error')}</small></div></div></div>`;
           })
-          .finally(() => { DB.endCache(); });
+          .finally(() => { DB.endCache(cacheToken); });
       }
     } catch (err) {
       console.error('Render error:', err);
       page.innerHTML = `<div class="card"><div class="alert alert-danger">${icon('alert')}<div>An error occurred while rendering this page.<br><small class="text-muted">${Utils.esc(err && err.message ? err.message : 'Unknown error')}</small></div></div></div>`;
     }
 
-    // Synchronous renderers finish here — close the cache immediately.
-    if (!asyncRender) DB.endCache();
+    if (!asyncRender) DB.endCache(cacheToken);
 
     Session.touch();
 
@@ -8678,7 +9558,7 @@ const App = {
         UI.toast(existing ? 'Learner updated' : 'Learner added', 'success');
       } catch (err) {
         console.error(err);
-        UI.toast('Failed to save learner', 'error');
+        UI.toast(err && err.message ? err.message : 'Failed to save learner', 'error', 5000);
       }
     };
   },
@@ -10070,27 +10950,536 @@ const Presenter = {
   },
 
   _renderNoise(body, p) {
-    const level = Utils.clamp(Number(p.level) || 0, 0, 100);
-    const label = p.label || 'Silent';
-    const color = p.color || '#198754';
-    body.innerHTML = `
-      <div style="width:min(1100px, 90vw);text-align:center;">
-        <div style="font-size:clamp(14px, 1.6vw, 22px);color:rgba(255,255,255,0.55);letter-spacing:3px;text-transform:uppercase;font-weight:700;margin-bottom:28px;">
+    const mode = p.mode || 'meter';
+    const theme = p.theme || 'bubbles';
+    const totalBalls = Utils.clamp(Number(p.totalBalls) || 40, 5, 120);
+
+    // The physics loop reads this — update it every frame regardless of mode.
+    this._noiseTarget = Number(p.level) || 0;
+    this._noiseLabel = p.label || 'Silent';
+    this._noiseColor = p.color || '#198754';
+
+    // Detect whether the canvas / DOM needs rebuilding.
+    const canvas = document.getElementById('presenter-noise-canvas');
+    const meterWrap = document.getElementById('presenter-noise-meter');
+    const needsRebuild =
+      mode !== this._noiseMode ||
+      theme !== this._noiseTheme ||
+      totalBalls !== this._noiseTotal ||
+      (mode === 'balls' && !canvas) ||
+      (mode === 'meter' && !meterWrap);
+
+    if (!needsRebuild) {
+      // Fast path — only the meter needs a DOM update.
+      if (mode === 'meter') this._updatePresentNoiseMeter();
+      return;
+    }
+
+    // ── Rebuild from scratch ──
+    this._noiseMode  = mode;
+    this._noiseTheme = theme;
+    this._noiseTotal = totalBalls;
+
+    // Tear down the old ball state so its RAF loop self-terminates.
+    if (this._noiseBallState) {
+      const c = this._noiseBallState.canvas;
+      if (c && c.parentNode) c.parentNode.removeChild(c);
+      this._noiseBallState = null;
+    }
+
+    if (mode === 'balls') {
+      body.innerHTML = `
+        <canvas id="presenter-noise-canvas"
+                style="width:100%;height:100%;display:block;touch-action:none;cursor:pointer;border-radius:0;"></canvas>`;
+      const cv = document.getElementById('presenter-noise-canvas');
+      this._initPresenterNoiseBalls(cv, theme, totalBalls);
+    } else {
+      body.innerHTML = this._renderPresentNoiseMeterHTML();
+      this._updatePresentNoiseMeter();
+    }
+  },
+
+  /* ---- Meter view for the learner window (matches the old look) ---- */
+  _renderPresentNoiseMeterHTML() {
+    const level = Math.max(0, Math.min(100, Number(this._noiseTarget) || 0));
+    const color = this._noiseColor || '#198754';
+    return `
+      <div id="presenter-noise-meter" style="width:min(1100px,90vw);text-align:center;">
+        <div style="font-size:clamp(14px,1.6vw,22px);color:rgba(255,255,255,0.55);
+                    letter-spacing:3px;text-transform:uppercase;font-weight:700;margin-bottom:28px;">
           Classroom Noise Level
         </div>
-        <div style="height:clamp(48px, 8vh, 90px);border-radius:14px;overflow:hidden;position:relative;background:linear-gradient(90deg,#16a34a 0%,#22c55e 22%,#eab308 50%,#f97316 72%,#dc2626 100%);box-shadow:0 12px 40px rgba(0,0,0,0.4);">
-          <div style="position:absolute;top:0;right:0;bottom:0;background:#0f172a;width:${100 - level}%;transition:width .1s linear;border-left:1px solid rgba(255,255,255,0.2);"></div>
-          <div style="position:absolute;top:0;bottom:0;left:${level}%;width:4px;background:#fff;box-shadow:0 0 14px rgba(255,255,255,0.7);transition:left .1s linear;transform:translateX(-2px);"></div>
+        <div style="height:clamp(48px,8vh,90px);border-radius:14px;overflow:hidden;position:relative;
+                    background:linear-gradient(90deg,#16a34a 0%,#22c55e 22%,#eab308 50%,#f97316 72%,#dc2626 100%);
+                    box-shadow:0 12px 40px rgba(0,0,0,0.4);">
+          <div id="pnm-mask" style="position:absolute;top:0;right:0;bottom:0;background:#0f172a;width:${100 - level}%;transition:width .1s linear;border-left:1px solid rgba(255,255,255,0.2);"></div>
+          <div id="pnm-marker" style="position:absolute;top:0;bottom:0;left:${level}%;width:4px;background:#fff;box-shadow:0 0 14px rgba(255,255,255,0.7);transition:left .1s linear;transform:translateX(-2px);"></div>
         </div>
-        <div style="font-size:clamp(64px, 12vw, 170px);font-weight:800;font-variant-numeric:tabular-nums;line-height:1;margin-top:36px;color:${color};">
+        <div id="pnm-value" style="font-size:clamp(64px,12vw,170px);font-weight:800;
+                    font-variant-numeric:tabular-nums;line-height:1;margin-top:36px;color:${color};">
           ${Math.round(level)}%
         </div>
-        <div style="font-size:clamp(20px, 2.2vw, 36px);font-weight:800;letter-spacing:5px;text-transform:uppercase;margin-top:14px;color:${color};">
-          ${Utils.esc(label)}
+        <div id="pnm-label" style="font-size:clamp(20px,2.2vw,36px);font-weight:800;
+                    letter-spacing:5px;text-transform:uppercase;margin-top:14px;color:${color};">
+          ${Utils.esc(this._noiseLabel || 'Silent')}
         </div>
       </div>`;
   },
 
+  _updatePresentNoiseMeter() {
+    const level = Math.max(0, Math.min(100, Number(this._noiseTarget) || 0));
+    const color = this._noiseColor || '#198754';
+    const mask   = document.getElementById('pnm-mask');
+    const marker = document.getElementById('pnm-marker');
+    const value  = document.getElementById('pnm-value');
+    const label  = document.getElementById('pnm-label');
+    if (mask)   mask.style.width  = (100 - level) + '%';
+    if (marker) marker.style.left = level + '%';
+    if (value)  { value.textContent = Math.round(level) + '%'; value.style.color = color; }
+    if (label)  { label.textContent = this._noiseLabel || 'Silent'; label.style.color = color; }
+  },
+    /* =========================================================================
+     LEARNER-SIDE BOUNCY BALLS
+     Physics and rendering mirror the teacher page so the two views match
+     pixel-for-pixel. Only the volume scalar is streamed from the parent.
+     ========================================================================= */
+  _noiseMode: null,
+  _noiseTheme: null,
+  _noiseTotal: null,
+  _noiseTarget: 0,
+  _noiseLabel: 'Silent',
+  _noiseColor: '#198754',
+  _noiseBallState: null,
+
+  _initPresenterNoiseBalls(canvas, theme, totalBalls) {
+    const self = this;
+    const state = {
+      canvas,
+      ctx: canvas.getContext('2d'),
+      W: 0, H: 0,
+      DPR: Math.min(2, window.devicePixelRatio || 1),
+      balls: [],
+      theme,
+      floorY: 0,
+      gravity: 0.62,
+      impulseMin: 0.6,
+      impulseMax: 14.5,
+      airFriction: 0.999,
+      floorFriction: 0.965,
+      bounceLoss: 0.58,
+      maxBalls: 120,
+      rafId: null,
+      lastFrame: 0,
+      shockwaves: [],
+      pointer: { x: -9999, y: -9999, lastAt: 0, inside: false }
+    };
+
+    /* ── Resize handling ── */
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      state.W = Math.max(200, rect.width);
+      state.H = Math.max(200, rect.height);
+      canvas.width  = Math.round(state.W * state.DPR);
+      canvas.height = Math.round(state.H * state.DPR);
+      state.ctx.setTransform(state.DPR, 0, 0, state.DPR, 0, 0);
+      state.floorY = state.H - 2;
+      state.balls.forEach(b => {
+        b.x = Utils.clamp(b.x, b.r + 2, state.W - b.r - 2);
+        b.y = Utils.clamp(b.y, b.r + 2, state.floorY - b.r);
+      });
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    /* ── Seed balls ── */
+    for (let i = 0; i < totalBalls; i++) state.balls.push(this._presMakeBall(state));
+
+    /* ── Click / tap → shockwave ── */
+    canvas.addEventListener('pointerdown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      self._presShockwave(state, e.clientX - rect.left, e.clientY - rect.top);
+    });
+    /* ── Pointer tracking (for eyeball gaze) ── */
+    canvas.addEventListener('pointermove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      state.pointer.x = e.clientX - rect.left;
+      state.pointer.y = e.clientY - rect.top;
+      state.pointer.lastAt = performance.now();
+      state.pointer.inside = true;
+    }, { passive: true });
+    canvas.addEventListener('pointerleave', () => {
+      state.pointer.inside = false;
+      state.pointer.x = -9999;
+      state.pointer.y = -9999;
+    });
+
+    this._noiseBallState = state;
+
+    /* ── Main RAF loop ── */
+    const loop = (ts) => {
+      // Self-terminate if the canvas is gone (mode switch, window close, ...)
+      if (!document.body.contains(canvas)) { state.rafId = null; return; }
+      state.rafId = requestAnimationFrame(loop);
+
+      const now = ts || performance.now();
+      if (now - state.lastFrame < 33) return;
+      state.lastFrame = now;
+
+      const vol = self._noiseTarget || 0;
+      self._presStep(state, vol, 0.5);
+      self._presStep(state, vol, 0.5);
+      self._presRender(state);
+    };
+    state.rafId = requestAnimationFrame(loop);
+  },
+
+  /* ------------------------------------------------------------------ */
+  _presMakeBall(state) {
+    const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
+    // Must match Pages.makeBall so the teacher and learner views look identical.
+    const r = 5 + Math.pow(Math.random(), 2.1) * 55;
+    const color = cfg.mode === 'eyeball'
+      ? '#ffffff'
+      : (cfg.colors[Math.floor(Math.random() * cfg.colors.length)]);
+    return {
+      x: r + Math.random() * Math.max(1, state.W - r * 2),
+      y: state.floorY - r - Math.random() * 200,
+      vx: (Math.random() - 0.5) * 1.6,
+      vy: Math.random() * 3,
+      r, color,
+      iris: cfg.mode === 'eyeball'
+        ? cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)] : null,
+      glyph: cfg.mode === 'emoji'
+        ? cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)] : null,
+      number: cfg.mode === 'number'
+        ? Math.floor(Math.random() * 99) + 1 : null,
+      squash: 0,
+      _gazeX: 0, _gazeY: 0,
+      _gazeTargetX: 0, _gazeTargetY: 0,
+      _gazeNextAt: 0
+    };
+  },
+
+  _presStep(state, vol, dt = 1) {
+    const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
+    const W = state.W, H = state.H, floorY = state.floorY;
+    const t = Utils.clamp(vol, 0, 100) / 100;
+    const impulse = state.impulseMin + Math.pow(t, 1.25) * (state.impulseMax - state.impulseMin);
+    const isBubble = cfg.mode === 'bubble';
+    const now = performance.now();
+
+    state.balls.forEach(b => {
+      /* Idle gaze target for eyeballs */
+      if (cfg.mode === 'eyeball') {
+        if (!b._gazeNextAt || now > b._gazeNextAt) {
+          b._gazeTargetX = (Math.random() - 0.5) * 2;
+          b._gazeTargetY = (Math.random() - 0.5) * 2;
+          b._gazeNextAt = now + 1800 + Math.random() * 3200;
+        }
+        b._gazeX += (b._gazeTargetX - b._gazeX) * 0.03 * dt;
+        b._gazeY += (b._gazeTargetY - b._gazeY) * 0.03 * dt;
+      }
+
+      /* Buoyancy vs gravity */
+      if (isBubble) {
+        b.vy -= state.gravity * 0.55 * dt;
+        if (vol > 10) b.vy -= impulse * 0.18 * dt;
+        b.vx += Math.sin((b.y + b.x) * 0.015) * 0.02 * dt;
+      } else {
+        b.vy += state.gravity * dt;
+      }
+
+      /* Volume impulse */
+      if (!isBubble && impulse > 1) {
+        const nearFloor = Utils.clamp(1 - (floorY - b.y) / H, 0, 1);
+        b.vy -= impulse * (0.45 + nearFloor * 1.05) * dt;
+      }
+      if (isBubble && impulse > 1) {
+        b.vy -= impulse * 0.25 * (b.y > H * 0.4 ? 1 : 0.35) * dt;
+      }
+
+      /* Integrate */
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vx *= state.airFriction;
+      b.vy *= 0.999;
+
+      /* Walls */
+      if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.7; }
+      if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
+
+      /* Ceiling */
+      if (b.y - b.r < 0) {
+        b.y = b.r;
+        if (isBubble) {
+          b.vy = Math.abs(b.vy) * 0.15;
+          b.vx += (Math.random() - 0.5) * 0.6;
+        } else {
+          b.vy = Math.abs(b.vy) * 0.5;
+        }
+      }
+
+      /* Floor */
+      if (b.y + b.r > floorY) {
+        b.y = floorY - b.r;
+        if (isBubble) {
+          b.x = b.r + Math.random() * (W - b.r * 2);
+          b.y = b.r + Math.random() * 40;
+          b.vy = 0;
+          b.vx = (Math.random() - 0.5) * 1.2;
+        } else {
+          if (b.vy > 0.6) {
+            b.vy = -b.vy * state.bounceLoss;
+            b.squash = Math.min(0.42, Math.abs(b.vy) * 0.05);
+          } else {
+            b.vy = 0;
+            b.squash *= 0.85;
+          }
+          b.vx *= state.floorFriction;
+          if (Math.abs(b.vx) < 0.06) b.vx += (Math.random() - 0.5) * 0.08;
+        }
+      }
+
+      b.vy = Utils.clamp(b.vy, -26, 26);
+      b.vx = Utils.clamp(b.vx, -5, 5);
+      b.squash *= 0.86;
+    });
+
+    /* Ball-to-ball soft collision */
+    const balls = state.balls;
+    const n = balls.length;
+    for (let i = 0; i < n; i++) {
+      const a = balls[i];
+      for (let j = i + 1; j < n; j++) {
+        const b = balls[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const distSq = dx * dx + dy * dy;
+        const minDist = a.r + b.r;
+        if (distSq >= minDist * minDist || distSq < 0.0001) continue;
+        const dist = Math.sqrt(distSq);
+        const overlap = minDist - dist;
+        const nx = dx / dist, ny = dy / dist;
+        const push = Math.min(overlap * 0.5, 2.4);
+        a.x -= nx * push; a.y -= ny * push;
+        b.x += nx * push; b.y += ny * push;
+        const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
+        const dot = dvx * nx + dvy * ny;
+        if (dot < 0) {
+          const k = dot * 0.55;
+          a.vx += k * nx; a.vy += k * ny;
+          b.vx -= k * nx; b.vy -= k * ny;
+        }
+      }
+    }
+  },
+
+  _presShockwave(state, cx, cy) {
+    if (!state.ctx) return;
+    if (state.shockwaves.length >= 4) state.shockwaves.shift();
+    state.shockwaves.push({
+      x: cx, y: cy,
+      bornAt: performance.now(),
+      maxR: Math.max(state.W, state.H) * 0.85
+    });
+
+    const reach = Math.max(280, Math.min(state.W, state.H) * 0.75);
+    state.balls.forEach(b => {
+      const dx = b.x - cx, dy = b.y - cy;
+      const d = Math.hypot(dx, dy) || 1;
+      const falloff = Math.max(0, 1 - d / reach);
+      if (falloff <= 0) return;
+      const power = falloff * falloff * 22;
+      b.vx += (dx / d) * power;
+      b.vy += (dy / d) * power - 5 * falloff;
+      b.squash = Math.max(b.squash, falloff * 0.28);
+    });
+  },
+
+  /* ------------------------------------------------------------------ */
+  _presRender(state) {
+    const ctx = state.ctx;
+    if (!ctx) return;
+    const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
+    const W = state.W, H = state.H;
+
+    /* Background */
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0,    cfg.bgTop);
+    grad.addColorStop(0.55, cfg.bgMid);
+    grad.addColorStop(1,    cfg.bgBot);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    const vignette = ctx.createLinearGradient(0, H - 60, 0, H);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, cfg.floorTint || 'rgba(0,0,0,0.3)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, H - 60, W, 60);
+
+    /* Underwater light for bubbles */
+    if (cfg.mode === 'bubble') this._presUnderwaterLight(ctx, W, H);
+
+    /* Balls */
+    state.balls.forEach(b => this._presDrawBall(ctx, b, cfg, state));
+
+    /* Shockwave ripples */
+    if (state.shockwaves.length) {
+      const now = performance.now();
+      for (let i = state.shockwaves.length - 1; i >= 0; i--) {
+        const sw = state.shockwaves[i];
+        const age = (now - sw.bornAt) / 1000;
+        const LIFE = 1.1;
+        if (age > LIFE) { state.shockwaves.splice(i, 1); continue; }
+        const p = age / LIFE;
+        const r = sw.maxR * p;
+        const alpha = (1 - p) * (1 - p) * 0.55;
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(sw.x, sw.y, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.5})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(sw.x, sw.y, r * 0.7, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  },
+
+  _presUnderwaterLight(ctx, W, H) {
+    const t = performance.now() / 1000;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const RAYS = 6;
+    for (let i = 0; i < RAYS; i++) {
+      const baseX = W * (0.08 + i * (0.86 / (RAYS - 1)));
+      const swayPhase = t * 0.35 + i * 1.4;
+      const x0 = baseX + Math.sin(swayPhase) * W * 0.06;
+      const topWidth = W * 0.045, botWidth = W * 0.24;
+      const tilt = Math.sin(swayPhase * 0.7) * 40;
+      const breath = 0.5 + 0.5 * Math.sin(t * 0.55 + i * 0.9);
+      const g = ctx.createLinearGradient(x0, 0, x0 + tilt, H);
+      g.addColorStop(0,    `rgba(191,219,254,${0.14 + breath * 0.09})`);
+      g.addColorStop(0.35, `rgba(147,197,253,${0.08 + breath * 0.05})`);
+      g.addColorStop(0.75, `rgba(96,165,250,${0.02 + breath * 0.02})`);
+      g.addColorStop(1,    'rgba(59,130,246,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(x0 - topWidth / 2, 0);
+      ctx.lineTo(x0 + topWidth / 2, 0);
+      ctx.lineTo(x0 + tilt + botWidth / 2, H);
+      ctx.lineTo(x0 + tilt - botWidth / 2, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  },
+
+  _presDrawBall(ctx, b, cfg, state) {
+    const sq = b.squash;
+    const rx = b.r * (1 + sq);
+    const ry = b.r * (1 - sq);
+    ctx.save();
+    ctx.translate(b.x, b.y);
+
+    /* Local colour helpers (no external deps) */
+    const hexToRgb = (hex) => {
+      const h = hex.replace('#','');
+      const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    };
+    const hexToRgba = (hex, a) => { const c = hexToRgb(hex); return `rgba(${c.r},${c.g},${c.b},${a})`; };
+    const lighten = (hex, amt) => { const c = hexToRgb(hex); const f = v => Math.round(v + (255-v)*amt); return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`; };
+    const darken  = (hex, amt) => { const c = hexToRgb(hex); const f = v => Math.round(v * (1-amt)); return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`; };
+
+    if (cfg.mode === 'eyeball') {
+      const now = performance.now();
+      const ptrActive = state.pointer.inside && (now - state.pointer.lastAt < 2400);
+      let gx, gy;
+      if (ptrActive && state.pointer.x > -9999) {
+        const dx = state.pointer.x - b.x, dy = state.pointer.y - b.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d > b.r * 0.3) { gx = dx / d; gy = dy / d; } else { gx = 0; gy = 0; }
+      } else {
+        gx = b._gazeX; gy = b._gazeY;
+      }
+
+      /* Sclera */
+      const sg = ctx.createRadialGradient(-b.r * 0.3, -b.r * 0.35, b.r * 0.1, 0, 0, b.r);
+      sg.addColorStop(0, '#ffffff');
+      sg.addColorStop(0.75, '#f3f4f6');
+      sg.addColorStop(1, '#cbd5e1');
+      ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = sg; ctx.fill();
+      ctx.strokeStyle = 'rgba(15,23,42,0.12)'; ctx.lineWidth = 1; ctx.stroke();
+
+      /* Iris with gaze offset */
+      const maxOff = b.r * 0.24;
+      const ox = gx * maxOff, oy = gy * maxOff;
+      const irisR = b.r * 0.5;
+      const ig = ctx.createRadialGradient(ox - irisR * 0.3, oy - irisR * 0.3, irisR * 0.2, ox, oy, irisR);
+      ig.addColorStop(0, lighten(b.iris, 0.35));
+      ig.addColorStop(0.7, b.iris);
+      ig.addColorStop(1, darken(b.iris, 0.4));
+      ctx.beginPath(); ctx.arc(ox, oy, irisR, 0, Math.PI * 2); ctx.fillStyle = ig; ctx.fill();
+
+      /* Pupil */
+      ctx.beginPath(); ctx.arc(ox, oy, irisR * 0.52, 0, Math.PI * 2); ctx.fillStyle = '#0b1220'; ctx.fill();
+
+      /* Catch-light */
+      ctx.beginPath(); ctx.arc(ox - irisR * 0.32, oy - irisR * 0.36, irisR * 0.2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
+
+    } else if (cfg.mode === 'bubble') {
+      const g = ctx.createRadialGradient(-b.r * 0.4, -b.r * 0.45, b.r * 0.05, 0, 0, b.r);
+      g.addColorStop(0,    'rgba(255,255,255,0.55)');
+      g.addColorStop(0.2,  'rgba(255,255,255,0.08)');
+      g.addColorStop(0.55, hexToRgba(b.color, 0.25));
+      g.addColorStop(1,    hexToRgba(b.color, 0.45));
+      ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fillStyle = g; ctx.fill();
+      ctx.strokeStyle = hexToRgba(lighten(b.color, 0.55), 0.85); ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(-b.r * 0.42, -b.r * 0.45, b.r * 0.28, b.r * 0.18, -0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
+      ctx.beginPath(); ctx.ellipse(b.r * 0.4, b.r * 0.42, b.r * 0.12, b.r * 0.08, -0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill();
+
+    } else if (cfg.mode === 'emoji') {
+      ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.font = `${Math.round(b.r * 1.65)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(b.glyph, 0, b.r * 0.06);
+
+    } else if (cfg.mode === 'number') {
+      const g = ctx.createRadialGradient(-b.r * 0.35, -b.r * 0.4, b.r * 0.1, 0, 0, b.r);
+      g.addColorStop(0, lighten(b.color, 0.5));
+      g.addColorStop(0.6, b.color);
+      g.addColorStop(1, darken(b.color, 0.35));
+      ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fillStyle = g; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.font = `800 ${Math.round(b.r * 0.95)}px Inter, "Segoe UI", Arial, sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#1e1b4b'; ctx.fillText(String(b.number), 0, 1);
+      ctx.beginPath(); ctx.ellipse(-b.r * 0.32, -b.r * 0.42, b.r * 0.22, b.r * 0.14, -0.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fill();
+
+    } else {
+      /* Plastic */
+      const g = ctx.createRadialGradient(-b.r * 0.42, -b.r * 0.45, b.r * 0.05, 0, 0, b.r * 1.05);
+      g.addColorStop(0,    lighten(b.color, 0.7));
+      g.addColorStop(0.18, lighten(b.color, 0.35));
+      g.addColorStop(0.6,  b.color);
+      g.addColorStop(1,    darken(b.color, 0.42));
+      ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2); ctx.fillStyle = g; ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(-b.r * 0.38, -b.r * 0.42, b.r * 0.32, b.r * 0.2, -0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.78)'; ctx.fill();
+      ctx.beginPath(); ctx.ellipse(b.r * 0.42, b.r * 0.38, b.r * 0.08, b.r * 0.06, -0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill();
+    }
+
+    ctx.restore();
+  },
   _renderSignal(body, p) {
     const color = p.color || '#0038A8';
     const iconName = p.icon || 'signal';
@@ -11295,10 +12684,41 @@ const XlsxWriter = {
 
 
 
-/* ============================================================================
+  /* ============================================================================
    PAGES
    ============================================================================ */
-const Pages = {
+  const Pages = {
+
+    /* ============================================================================
+    TEACHING LOAD — time helpers
+    ============================================================================ */
+  _tlTimeToMin(hhmm) {
+    if (!hhmm) return 0;
+    const [h, m] = String(hhmm).split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  },
+
+  _tlMinToTime(min) {
+    min = ((min % 1440) + 1440) % 1440;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+  },
+
+  _tlFormatTime(hhmm) {
+    if (!hhmm) return '';
+    const [h, m] = String(hhmm).split(':').map(Number);
+    const ampm = h < 12 ? 'AM' : 'PM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${String(m || 0).padStart(2, '0')} ${ampm}`;
+  },
+
+  _tlDuration(start, end) {
+    const s = Pages._tlTimeToMin(start);
+    let e = Pages._tlTimeToMin(end);
+    if (e <= s) e += 24 * 60;   // cross-midnight safety
+    return e - s;
+  },
 
   async dashboard(root) {
     const cls = State.activeClass;
@@ -14326,7 +15746,7 @@ async autoNudgeLowAttendance(cls) {
       Status: l.status || 'Active',
       Remarks: l.remarks || ''
     }));
-    Utils.download(`learners-selected-${Utils.todayISO()}.csv`, Utils.toCSV(rows), 'text/csv');
+    Utils.download(`learners-selected-${Utils.timestamp()}.csv`, Utils.toCSV(rows), 'text/csv');
     App.logActivity(`Exported ${learners.length} selected learner${learners.length === 1 ? '' : 's'} as CSV`, 'Learners');
     UI.toast(`Exported ${learners.length} learner${learners.length === 1 ? '' : 's'}`, 'success');
   },
@@ -14430,7 +15850,7 @@ async autoNudgeLowAttendance(cls) {
       'Medical Notes': l.medicalNotes||'',
       Status: l.status||'Active', Remarks: l.remarks||''
     }));
-    Utils.download('learners-' + Utils.todayISO() + '.csv', Utils.toCSV(rows), 'text/csv');
+    Utils.download('learners-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
     App.logActivity('Learners exported as CSV (' + State.learners.length + ')', 'Learners');
     UI.toast('CSV exported', 'success');
   },
@@ -14705,7 +16125,7 @@ async autoNudgeLowAttendance(cls) {
     const safeSy = String(sy || '').replace(/[^0-9A-Za-z]/g, '_');
     const safeGrade = String(cls.gradeLevel || '').replace(/[^0-9A-Za-z]+/g, '_');
     const safeSection = String(cls.section || '').replace(/[^0-9A-Za-z]+/g, '_');
-    const filename = `SF1_${safeSy}_${safeGrade}_${safeSection}_${Utils.todayISO()}.xlsx`;
+    const filename = `SF1_${safeSy}_${safeGrade}_${safeSection}_${Utils.timestamp()}.xlsx`;
 
     try {
       XlsxWriter.download(filename, [{
@@ -15632,17 +17052,24 @@ _showClassMismatchDialog(comparison, classInfo) {
       ? State.learners
       : State.learners.filter(Utils.isActiveLearner);
     let saved = 0;
-    for (const l of targets) {
-      const status = State.attendanceDraft[l.id];
-      if (status === undefined) continue;   // row wasn't shown → leave it alone
-      const noteEl = document.querySelector(`[data-note="${l.id}"]`);
-      const note = noteEl ? noteEl.value.trim() : '';
-      const rec = existingMap[l.id] || { id: Utils.uid('att-'), classId: State.activeClass.id, learnerId: l.id, date };
-      rec.status = status; rec.note = note;
-      rec.updatedAt = new Date().toISOString();
-      if (!rec.createdAt) rec.createdAt = new Date().toISOString();
-      await DB.put('attendance', rec);
-      saved++;
+    try {
+      for (const l of targets) {
+        const status = State.attendanceDraft[l.id];
+        if (status === undefined) continue;
+        const noteEl = document.querySelector(`[data-note="${l.id}"]`);
+        const note = noteEl ? noteEl.value.trim() : '';
+        const rec = existingMap[l.id] || { id: Utils.uid('att-'), classId: State.activeClass.id, learnerId: l.id, date };
+        rec.status = status; rec.note = note;
+        rec.updatedAt = new Date().toISOString();
+        if (!rec.createdAt) rec.createdAt = new Date().toISOString();
+        await DB.put('attendance', rec);
+        saved++;
+      }
+    } catch (err) {
+      console.error('Attendance save failed:', err);
+      App.showAutosave('unsaved', 'Save failed');
+      UI.toast(err && err.message ? err.message : 'Failed to save attendance', 'error', 5000);
+      return;
     }
     await App.logActivity('Attendance recorded for ' + date, 'Attendance');
     App.showAutosave('saved');
@@ -16239,7 +17666,7 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te) {
       });
       return o;
     });
-    Utils.download('grades-' + Utils.todayISO() + '.csv', Utils.toCSV(rows), 'text/csv');
+    Utils.download('grades-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
     UI.toast('Grades exported', 'success');
   },
 
@@ -18066,7 +19493,7 @@ _tosExportWord() {
     </body>
     </html>`;
 
-  const safeName = `Generated_Assessment_${label}_${Utils.todayISO()}.doc`;
+  const safeName = `Generated_Assessment_${label}_${Utils.timestamp()}.doc`;
   Utils.download(safeName, doc, 'application/msword');
   UI.toast(`Word document downloaded (${label}).`, 'success');
 },
@@ -19167,7 +20594,7 @@ openILAWMatrixFromGenerated(payload) {
       </style></head>
       <body><div class="WordSection1">${Pages.renderILAWMatrixHTML(header, state, finalTitle, true)}</div></body></html>`;
     const safe = finalTitle.replace(/[^0-9A-Za-z_-]+/g, '_').slice(0, 60);
-    Utils.download(`ILAW_${safe}_${Utils.todayISO()}.doc`, doc, 'application/msword');
+    Utils.download(`ILAW_${safe}_${Utils.timestamp()}.doc`, doc, 'application/msword');
     UI.toast('Word document downloaded', 'success');
   };
 
@@ -22848,7 +24275,7 @@ async exportGroupingSetCSV(id) {
   });
 
   const safe = (rec.name || 'grouping').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
-  Utils.download(`grouping_${safe}_${Utils.todayISO()}.csv`, Utils.toCSV(rows), 'text/csv');
+  Utils.download(`grouping_${safe}_${Utils.timestamp()}.csv`, Utils.toCSV(rows), 'text/csv');
   App.logActivity('Grouping exported as CSV: ' + rec.name, 'Groupings');
   UI.toast('CSV exported', 'success');
 },
@@ -23736,7 +25163,7 @@ async exportGroupingSetCSV(id) {
       }) + '</div>';
     } else {
       wheelCard =
-        '<div class="card" style="padding:70px 20px 28px;overflow:visible;">'
+        '<div class="card wheel-card" style="padding:70px 20px 28px;overflow:visible;">'
         + '<div class="wheel-stage">'
 
         +   '<div class="wheel-pointer" aria-hidden="true">'
@@ -24482,301 +25909,1262 @@ async exportGroupingSetCSV(id) {
       }
     }, 5150);
   },
-async noiseMeter(root) {
-  // Kill any previous mic session before rendering a fresh page.
-  if (Pages._noiseCleanup) { try { Pages._noiseCleanup(); } catch (e) {} Pages._noiseCleanup = null; }
+  async noiseMeter(root) {
+    /* ─────────────────────────────────────────────────────────────
+       Cleanup from any previous mount
+       ───────────────────────────────────────────────────────────── */
+    if (Pages._noiseCleanup) { try { Pages._noiseCleanup(); } catch (e) {} Pages._noiseCleanup = null; }
+    if (Pages._bouncyResizeHandler) {
+      window.removeEventListener('resize', Pages._bouncyResizeHandler);
+      Pages._bouncyResizeHandler = null;
+    }
 
-  root.innerHTML = `
+    /* ─────────────────────────────────────────────────────────────
+       Persistent preference state
+       ───────────────────────────────────────────────────────────── */
+    State._noiseDisplayMode  = State._noiseDisplayMode  || 'balls';
+    State._noiseBallTheme    = State._noiseBallTheme    || 'bubbles';
+    State._noiseTotalBalls   = State._noiseTotalBalls   || 40;
+    State._noiseAlertMode    = State._noiseAlertMode    || 'none';
+    State._noiseAlertThresh  = State._noiseAlertThresh  || 80;
+
+        /* Theme table lives at global scope so the learner presenter can reuse it. */
+    const BALL_THEMES = NOISE_BALL_THEMES;
+
+    const currentTheme = BALL_THEMES[State._noiseBallTheme] ? State._noiseBallTheme : 'bubbles';
+    State._noiseBallTheme = currentTheme;
+
+    /* ─────────────────────────────────────────────────────────────
+       RENDER PAGE
+       ───────────────────────────────────────────────────────────── */
+    root.innerHTML = `
       <div class="page-head">
-        <div><h2>Noise Meter</h2><p>Real-time classroom noise level from your device microphone</p></div>
+        <div>
+          <h2>Noise Meter</h2>
+          <p>Live classroom noise visualiser — mic-driven bouncy balls or classic meter</p>
+        </div>
         <div class="page-actions">
           ${presenterButtonHTML('noise-meter')}
         </div>
       </div>
 
-    <div class="card mb-16">
-      <div class="flex-between mb-16" style="flex-wrap:wrap;gap:8px;">
-        <div>
-          <strong>Microphone Input</strong>
-          <div class="text-xs text-muted" id="nm-status">Not started — click “Start Listening”.</div>
+      <div class="noise-meter-layout">
+
+        <!-- ══════════════════ MAIN STAGE ══════════════════ -->
+        <div class="noise-stage" id="nm-stage">
+          <canvas id="nm-canvas" class="noise-stage-canvas"></canvas>
+          <div class="noise-stage-overlay" id="nm-overlay">
+            <div class="nso-val" id="nm-overlay-val">0%</div>
+            <div class="nso-lbl" id="nm-overlay-lbl">Silent</div>
+          </div>
         </div>
-        <div class="flex gap-8">
-          <button class="btn btn-primary btn-sm" id="nm-start">${icon('volume')} Start Listening</button>
-          <button class="btn btn-outline btn-sm" id="nm-stop" disabled>Stop</button>
+
+        <!-- ══════════════════ SIDEBAR CONTROLS ══════════════════ -->
+        <div class="noise-controls">
+
+          <button type="button" class="noise-mic-toggle" id="nm-mic-toggle" aria-pressed="false">
+            <svg class="nm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            <span class="nm-status-lbl" id="nm-mic-status">Microphone Off</span>
+          </button>
+
+          <div class="noise-control-group">
+            <label class="noise-control-label">
+              <span>Sensitivity</span>
+              <span class="ncl-value" id="nm-sens-value">5</span>
+            </label>
+            <input type="range" min="1" max="10" step="1" value="5" class="noise-slider" id="nm-sensitivity">
+          </div>
+
+          <div class="noise-control-group">
+            <label class="noise-control-label">
+              <span>Total</span>
+              <span class="ncl-value" id="nm-total-value">${State._noiseTotalBalls}</span>
+            </label>
+            <input type="range" min="5" max="120" step="1" value="${State._noiseTotalBalls}" class="noise-slider" id="nm-total">
+          </div>
+
+          <div class="noise-control-group">
+            <label class="noise-control-label"><span>Theme</span></label>
+            <div class="noise-theme-list" id="nm-theme-list">
+              ${Object.entries(BALL_THEMES).map(([key, t]) => `
+                <button type="button" class="noise-theme-btn ${key === currentTheme ? 'active' : ''}" data-theme="${key}">
+                  ${Utils.esc(t.label)}
+                </button>`).join('')}
+            </div>
+          </div>
+
+          <div class="noise-control-group">
+            <label class="noise-control-label"><span>Noise Alert</span></label>
+            <div class="noise-alert-list" id="nm-alert-list">
+              <button type="button" class="noise-alert-btn ${State._noiseAlertMode === 'none'  ? 'active' : ''}" data-alert="none">No sound</button>
+              <button type="button" class="noise-alert-btn ${State._noiseAlertMode === 'beep'  ? 'active' : ''}" data-alert="beep">Beep</button>
+              <button type="button" class="noise-alert-btn ${State._noiseAlertMode === 'shush' ? 'active' : ''}" data-alert="shush">Shush</button>
+            </div>
+          </div>
+
+          <div class="noise-control-group" id="nm-alert-thresh-wrap" style="${State._noiseAlertMode === 'none' ? 'display:none;' : ''}">
+            <label class="noise-control-label">
+              <span>Alert Level</span>
+              <span class="ncl-value" id="nm-thresh-value">${State._noiseAlertThresh}%</span>
+            </label>
+            <input type="range" min="50" max="100" step="1" value="${State._noiseAlertThresh}" class="noise-slider" id="nm-alert-thresh">
+          </div>
+
+          <div class="noise-control-group">
+            <label class="noise-control-label"><span>View</span></label>
+            <div class="rz-segment" style="width:100%;justify-content:stretch;">
+              <button type="button" data-view="balls" class="${State._noiseDisplayMode === 'balls' ? 'active' : ''}" style="flex:1;">Bouncy Balls</button>
+              <button type="button" data-view="meter" class="${State._noiseDisplayMode === 'meter' ? 'active' : ''}" style="flex:1;">Meter</button>
+            </div>
+          </div>
+
+          <div class="noise-stats-mini">
+            <div>
+              <div class="nsm-v" id="nm-peak">0%</div>
+              <div class="nsm-l">Peak</div>
+            </div>
+            <div>
+              <div class="nsm-v" id="nm-avg">0%</div>
+              <div class="nsm-l">Avg</div>
+            </div>
+          </div>
+
         </div>
       </div>
 
-      <div class="noise-meter-live" id="nm-meter">
-        <div class="noise-meter-marker" id="nm-marker"></div>
-        <div class="noise-meter-mask" id="nm-mask"></div>
+      <div class="card mt-16">
+        <details id="nm-manual-wrap">
+          <summary style="cursor:pointer;font-weight:600;font-size:13px;">Manual fallback (no microphone)</summary>
+          <div class="form-group mt-12" style="margin-bottom:0;">
+            <input type="range" min="0" max="100" value="0" id="nm-slider" class="noise-slider">
+            <div class="text-xs text-muted mt-8">Drag to simulate a level when the mic is unavailable or blocked.</div>
+          </div>
+        </details>
       </div>
 
-      <div class="text-center mt-16" style="font-size:44px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;" id="nm-value">0%</div>
-      <div class="text-center mt-8 mb-16">
-        <span class="badge" id="nm-label" style="font-size:12px;padding:5px 14px;border:1px solid var(--border);">Silent</span>
-      </div>
-
-      <div class="grid grid-2 mb-16">
-        <div class="stat-card"><div class="stat-label">Peak (last 3 s)</div><div class="stat-value" id="nm-peak">0%</div></div>
-        <div class="stat-card"><div class="stat-label">Average (last 10 s)</div><div class="stat-value" id="nm-avg">0%</div></div>
-      </div>
-
-      <div class="divider"></div>
-
-      <h4 style="font-size:14px;margin-bottom:6px;">Sensitivity</h4>
-      <div class="form-group">
-        <input type="range" min="1" max="10" value="5" id="nm-sens" style="width:100%;">
-        <div class="flex-between text-xs text-muted mt-4">
-          <span>Less sensitive</span><span id="nm-sens-label">5</span><span>More sensitive</span>
-        </div>
-      </div>
-
-      <div class="alert alert-info" style="font-size:12px;margin-top:10px;">
+      <div class="alert alert-info mt-16" style="font-size:12px;">
         ${icon('info')}
-        <div>Audio is analysed <strong>locally in your browser in real time</strong>. Nothing is recorded, stored, or transmitted. Some browsers block microphone access on insecure origins (http://) or in Private Browsing — use the manual slider below if that happens.</div>
-      </div>
-    </div>
+        <div>Audio is analysed <strong>entirely in your browser</strong> in real time. Nothing is recorded, stored, or transmitted. Tap the canvas to make the balls jump.</div>
+      </div>`;
 
-    <div class="card">
-      <details id="nm-manual-wrap">
-        <summary style="cursor:pointer;font-weight:600;font-size:13px;">Manual fallback (no microphone)</summary>
-        <div class="form-group mt-12">
-          <input type="range" min="0" max="100" value="0" id="nm-slider" style="width:100%;">
-          <div class="text-xs text-muted mt-4">Drag to simulate a level when the mic is unavailable.</div>
-        </div>
-      </details>
-    </div>`;
+    /* ─────────────────────────────────────────────────────────────
+       DOM REFERENCES
+       ───────────────────────────────────────────────────────────── */
+    const canvasEl     = root.querySelector('#nm-canvas');
+    const overlayVal   = root.querySelector('#nm-overlay-val');
+    const overlayLbl   = root.querySelector('#nm-overlay-lbl');
+    const micToggle    = root.querySelector('#nm-mic-toggle');
+    const micStatus    = root.querySelector('#nm-mic-status');
+    const sensInp      = root.querySelector('#nm-sensitivity');
+    const sensValue    = root.querySelector('#nm-sens-value');
+    const totalInp     = root.querySelector('#nm-total');
+    const totalValue   = root.querySelector('#nm-total-value');
+    const themeList    = root.querySelector('#nm-theme-list');
+    const alertList    = root.querySelector('#nm-alert-list');
+    const alertThreshWrap  = root.querySelector('#nm-alert-thresh-wrap');
+    const alertThreshInp   = root.querySelector('#nm-alert-thresh');
+    const alertThreshValue = root.querySelector('#nm-thresh-value');
+    const peakEl       = root.querySelector('#nm-peak');
+    const avgEl        = root.querySelector('#nm-avg');
+    const manualWrap   = root.querySelector('#nm-manual-wrap');
+    const manualInp    = root.querySelector('#nm-slider');
 
-  const meterEl  = root.querySelector('#nm-meter');
-  const maskEl   = root.querySelector('#nm-mask');
-  const markerEl = root.querySelector('#nm-marker');
-  const valueEl  = root.querySelector('#nm-value');
-  const labelEl  = root.querySelector('#nm-label');
-  const statusEl = root.querySelector('#nm-status');
-  const peakEl   = root.querySelector('#nm-peak');
-  const avgEl    = root.querySelector('#nm-avg');
-  const startBtn = root.querySelector('#nm-start');
-  const stopBtn  = root.querySelector('#nm-stop');
-  const sensInp  = root.querySelector('#nm-sens');
-  const sensLbl  = root.querySelector('#nm-sens-label');
-  const manualWrap = root.querySelector('#nm-manual-wrap');
-  const manualInp  = root.querySelector('#nm-slider');
+    /* ─────────────────────────────────────────────────────────────
+       RUNTIME STATE
+       ───────────────────────────────────────────────────────────── */
+    let running       = false;
+    let audioCtx      = null;
+    let analyser      = null;
+    let sourceNode    = null;
+    let stream        = null;
+    let rafId         = null;
+    let lastFrame     = 0;
+    let lastStat      = 0;
+    let smoothed      = 0;
+    let sensitivity   = 5;
+    let totalBalls    = State._noiseTotalBalls;
+    let displayMode   = State._noiseDisplayMode;
+    let ballTheme     = currentTheme;
+    let alertMode     = State._noiseAlertMode;
+    let alertThresh   = State._noiseAlertThresh;
+    let lastAlertAt   = 0;
+    const history     = [];
+    const peakWin     = [];
 
-  /* ---------------- state ---------------- */
-  let running      = false;
-  let audioCtx     = null;
-  let analyser     = null;
-  let sourceNode   = null;
-  let stream       = null;
-  let rafId        = null;
-  let lastPaint    = 0;
-  let lastStat     = 0;
-  let smoothed     = 0;
-  let sensitivity  = 5;
-  const history    = [];   // { t, v } — last 10 s
-  const peakWin    = [];   // { t, v } — last 3 s
+    /* ─────────────────────────────────────────────────────────────
+       MOUSE / POINTER TRACKING  → eyeball gaze
+       ───────────────────────────────────────────────────────────── */
+    const pointer = {
+      x: -9999, y: -9999,
+      lastMoveAt: 0,
+      inside: false,
+      activeWindow: 2400   // gaze follows the pointer for this long after the last move
+    };
 
-  /* ---------------- helpers ---------------- */
-  const classify = (v) => {
-    if (v < 20) return { label: 'Silent',     color: '#198754' };
-    if (v < 45) return { label: 'Quiet',      color: '#0891B2' };
-    if (v < 70) return { label: 'Normal',     color: '#0038A8' };
-    if (v < 85) return { label: 'Discussion', color: '#F59E0B' };
-    return           { label: 'Too Loud',    color: '#DC3545' };
-  };
-
-  const paint = (v) => {
-    v = Utils.clamp(v, 0, 100);
-    maskEl.style.width   = (100 - v) + '%';
-    markerEl.style.left  = v + '%';
-    valueEl.textContent  = Math.round(v) + '%';
-    const c = classify(v);
-    labelEl.textContent  = c.label;
-    labelEl.style.background  = c.color + '20';
-    labelEl.style.color       = c.color;
-    labelEl.style.borderColor = c.color + '66';
-  };
-
-  const pushStats = (v) => {
-    const t = performance.now();
-    history.push({ t, v });
-    while (history.length && t - history[0].t > 10000) history.shift();
-    const avg = history.length ? history.reduce((s, h) => s + h.v, 0) / history.length : 0;
-    avgEl.textContent = Math.round(avg) + '%';
-
-    peakWin.push({ t, v });
-    while (peakWin.length && t - peakWin[0].t > 3000) peakWin.shift();
-    const peak = peakWin.reduce((m, p) => Math.max(m, p.v), 0);
-    peakEl.textContent = Math.round(peak) + '%';
-  };
-
-  /* ---------------- analysis loop ---------------- */
-  const tick = (ts) => {
-    if (!running) return;
-    // The user navigated away — the meter element is gone. Clean up.
-    if (!document.body.contains(meterEl)) { stop(); return; }
-
-    rafId = requestAnimationFrame(tick);
-    const now = ts || performance.now();
-    if (now - lastPaint < 45) return;   // ~22 fps max, plenty for this
-    lastPaint = now;
-
-    const buf = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(buf);
-
-    // RMS of the time-domain samples (0..255, centred at 128).
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const x = (buf[i] - 128) / 128;
-      sum += x * x;
-    }
-    const rms = Math.sqrt(sum / buf.length);
-    const db  = 20 * Math.log10(Math.max(rms, 1e-8));  // ~ -160 .. 0 dB
-
-    // Map dB → 0..100%. Sensitivity shifts the floor.
-    const sens  = Number(sensitivity) || 5;
-    const minDb = -58 - (sens - 5) * 4;   // sens 1 → -42, sens 5 → -58, sens 10 → -78
-    const maxDb = -12;                    // loud enough to hit 100%
-    let pct = ((db - minDb) / (maxDb - minDb)) * 100;
-    pct = Utils.clamp(pct, 0, 100);
-
-    // Exponential smoothing so the bar doesn't twitch on every syllable.
-    smoothed = smoothed * 0.7 + pct * 0.3;
-    paint(smoothed);
-
-    if (now - lastStat > 250) {
-      lastStat = now;
-      pushStats(smoothed);
+    function updatePointerFromEvent(e) {
+      const rect = canvasEl.getBoundingClientRect();
+      pointer.x = (e.clientX ?? (e.touches && e.touches[0] && e.touches[0].clientX) ?? 0) - rect.left;
+      pointer.y = (e.clientY ?? (e.touches && e.touches[0] && e.touches[0].clientY) ?? 0) - rect.top;
+      pointer.lastMoveAt = performance.now();
+      pointer.inside = true;
     }
 
-    if (now - (tick._lastPush || 0) > 120) {
-      tick._lastPush = now;
-      if (Presenter.isOpen() && Presenter._toolId === 'noise-meter') {
-        const c = classify(smoothed);
-        Presenter.send({ level: smoothed, label: c.label, color: c.color });
+    canvasEl.addEventListener('pointermove', updatePointerFromEvent, { passive: true });
+    canvasEl.addEventListener('pointerenter', updatePointerFromEvent, { passive: true });
+    canvasEl.addEventListener('pointerleave', () => {
+      pointer.inside = false;
+      pointer.x = -9999; pointer.y = -9999;
+    });
+
+    /* ─────────────────────────────────────────────────────────────
+       SHOCKWAVES  → click/tap bursts
+       ───────────────────────────────────────────────────────────── */
+    const shockwaves = [];   // { x, y, bornAt, maxR }
+
+    function triggerShockwave(cx, cy) {
+      if (!bouncy.ctx) return;
+
+      // Cap concurrent ripples
+      if (shockwaves.length >= 4) shockwaves.shift();
+      shockwaves.push({
+        x: cx, y: cy,
+        bornAt: performance.now(),
+        maxR: Math.max(bouncy.W, bouncy.H) * 0.85
+      });
+
+      // Physics impulse on every ball — stronger the closer to the click
+      const reach = Math.max(280, Math.min(bouncy.W, bouncy.H) * 0.75);
+      bouncy.balls.forEach(b => {
+        const dx = b.x - cx;
+        const dy = b.y - cy;
+        const d = Math.hypot(dx, dy) || 1;
+        const falloff = Math.max(0, 1 - d / reach);
+        if (falloff <= 0) return;
+        const power = falloff * falloff * 22;    // quadratic falloff
+        b.vx += (dx / d) * power;
+        b.vy += (dy / d) * power - 5 * falloff;  // slight extra lift
+        b.squash = Math.max(b.squash, falloff * 0.28);
+      });
+    }
+
+    canvasEl.addEventListener('pointerdown', (e) => {
+      updatePointerFromEvent(e);
+      const rect = canvasEl.getBoundingClientRect();
+      triggerShockwave(e.clientX - rect.left, e.clientY - rect.top);
+    });
+
+    /* ─────────────────────────────────────────────────────────────
+       METER MODE — paints the whole canvas as a live bar
+       ───────────────────────────────────────────────────────────── */
+    function paintMeter(v) {
+      const ctx = bouncy.ctx;
+      if (!ctx) return;
+      v = Utils.clamp(v, 0, 100);
+      const W = bouncy.W, H = bouncy.H;
+
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, W, H);
+
+      const trackH = 26;
+      const trackY = H / 2 - trackH / 2;
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(24, trackY, W - 48, trackH);
+
+      const grad = ctx.createLinearGradient(24, 0, W - 24, 0);
+      grad.addColorStop(0,    '#16a34a');
+      grad.addColorStop(0.25, '#22c55e');
+      grad.addColorStop(0.5,  '#eab308');
+      grad.addColorStop(0.75, '#f97316');
+      grad.addColorStop(1,    '#dc2626');
+      ctx.fillStyle = grad;
+      ctx.fillRect(24, trackY, (W - 48) * (v / 100), trackH);
+
+      const markerX = 24 + (W - 48) * (v / 100);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(markerX - 2, trackY - 8, 4, trackH + 16);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       BOUNCY BALLS — canvas engine
+       ───────────────────────────────────────────────────────────── */
+    const bouncy = {
+      ctx: null,
+      W: 0, H: 0,
+      DPR: Math.min(2, window.devicePixelRatio || 1),
+      balls: [],
+      floorY: 0,
+      gravity: 0.62,
+      impulseMin: 0.6,
+      impulseMax: 14.5,
+      airFriction: 0.999,
+      floorFriction: 0.965,
+      bounceLoss: 0.58,
+      maxBalls: 120
+    };
+
+    function themeConfig() { return BALL_THEMES[ballTheme]; }
+
+    function initBouncyEngine() {
+      if (!canvasEl) return false;
+      bouncy.ctx = canvasEl.getContext('2d');
+      resizeBouncyCanvas();
+      rebuildBalls();
+      return true;
+    }
+        /** Push the current noise config to the learner window immediately.
+     *  Called on theme change, view toggle, total-balls change, and every
+     *  volume tick — so the learner view always mirrors the teacher view. */
+    function pushNoiseConfigToPresenter() {
+      if (!(Presenter.isOpen() && Presenter._toolId === 'noise-meter')) return;
+      const c = classify(smoothed);
+      Presenter.send({
+        level: smoothed,
+        label: c.label,
+        color: c.color,
+        mode: displayMode,
+        theme: ballTheme,
+        totalBalls: totalBalls
+      });
+    }
+
+    function resizeBouncyCanvas() {
+      if (!canvasEl) return;
+      const rect = canvasEl.getBoundingClientRect();
+      bouncy.W = Math.max(240, rect.width);
+      bouncy.H = Math.max(320, rect.height);
+      canvasEl.width  = Math.round(bouncy.W * bouncy.DPR);
+      canvasEl.height = Math.round(bouncy.H * bouncy.DPR);
+      bouncy.ctx.setTransform(bouncy.DPR, 0, 0, bouncy.DPR, 0, 0);
+      bouncy.floorY = bouncy.H - 2;
+    }
+
+    function rebuildBalls() {
+      const want = Utils.clamp(Math.round(totalBalls), 5, bouncy.maxBalls);
+      while (bouncy.balls.length < want) bouncy.balls.push(makeBall());
+      while (bouncy.balls.length > want) bouncy.balls.pop();
+    }
+
+    function makeBall() {
+      const cfg = themeConfig();
+      // Wider size range: tiny (5 px) → hero (60 px). Exponent 2.1 keeps
+      // most bubbles small while letting a few stand out, matching the
+      // distribution in the reference tool.
+      const r = 5 + Math.pow(Math.random(), 2.1) * 55;
+      const color = cfg.mode === 'eyeball'
+        ? '#ffffff'
+        : (cfg.colors[Math.floor(Math.random() * cfg.colors.length)]);
+
+      return {
+        x: r + Math.random() * Math.max(1, bouncy.W - r * 2),
+        y: bouncy.floorY - r - Math.random() * 200,
+        vx: (Math.random() - 0.5) * 1.6,
+        vy: Math.random() * 3,
+        r,
+        color,
+        iris: cfg.mode === 'eyeball'
+          ? cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)]
+          : null,
+        glyph: cfg.mode === 'emoji'
+          ? cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)]
+          : null,
+        number: cfg.mode === 'number'
+          ? Math.floor(Math.random() * 99) + 1
+          : null,
+        squash: 0,
+        squashAngle: 0,
+
+        // Eyeball gaze state
+        _gazeX: 0, _gazeY: 0,          // current smoothed gaze (-1..1)
+        _gazeTargetX: 0, _gazeTargetY: 0,
+        _gazeNextAt: 0
+      };
+    }
+
+    function volumeToImpulse(v) {
+      const t = Utils.clamp(v, 0, 100) / 100;
+      const eased = Math.pow(t, 1.25);
+      return bouncy.impulseMin + eased * (bouncy.impulseMax - bouncy.impulseMin);
+    }
+
+    function stepBalls(vol, dt = 1) {
+      const cfg = themeConfig();
+      const W = bouncy.W, H = bouncy.H, floorY = bouncy.floorY;
+      const impulse = volumeToImpulse(vol);
+      const isBubble = cfg.mode === 'bubble';
+      const now = performance.now();
+
+      bouncy.balls.forEach(b => {
+        // ── Idle gaze target for eyeballs ─────────────────────────
+        if (cfg.mode === 'eyeball') {
+          if (!b._gazeNextAt || now > b._gazeNextAt) {
+            b._gazeTargetX = (Math.random() - 0.5) * 2;
+            b._gazeTargetY = (Math.random() - 0.5) * 2;
+            b._gazeNextAt = now + 1800 + Math.random() * 3200;
+          }
+          // Slow ease toward the idle target
+          b._gazeX += (b._gazeTargetX - b._gazeX) * 0.03 * dt;
+          b._gazeY += (b._gazeTargetY - b._gazeY) * 0.03 * dt;
+        }
+
+        // ── Gravity / buoyancy ────────────────────────────────────
+        if (isBubble) {
+          b.vy -= bouncy.gravity * 0.55 * dt;
+          if (vol > 10) b.vy -= impulse * 0.18 * dt;
+          b.vx += Math.sin((b.y + b.x) * 0.015) * 0.02 * dt;
+        } else {
+          b.vy += bouncy.gravity * dt;
+        }
+
+        // ── Volume impulse ────────────────────────────────────────
+        if (!isBubble && impulse > 1) {
+          const distanceFromFloor = (floorY - b.y) / H;
+          const nearFloor = Utils.clamp(1 - distanceFromFloor, 0, 1);
+          b.vy -= impulse * (0.45 + nearFloor * 1.05) * dt;
+        }
+        if (isBubble && impulse > 1) {
+          const belowMid = b.y > H * 0.4 ? 1 : 0.35;
+          b.vy -= impulse * 0.25 * belowMid * dt;
+        }
+
+        // ── Integrate ─────────────────────────────────────────────
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+
+        b.vx *= bouncy.airFriction;
+        b.vy *= 0.999;
+
+        // ── Walls ─────────────────────────────────────────────────
+        if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.7; }
+        if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
+
+        // ── Ceiling ───────────────────────────────────────────────
+        if (b.y - b.r < 0) {
+          b.y = b.r;
+          if (isBubble) {
+            b.vy = Math.abs(b.vy) * 0.15;
+            b.vx += (Math.random() - 0.5) * 0.6;
+          } else {
+            b.vy = Math.abs(b.vy) * 0.5;
+          }
+        }
+
+        // ── Floor ─────────────────────────────────────────────────
+        if (b.y + b.r > floorY) {
+          b.y = floorY - b.r;
+          if (isBubble) {
+            b.x = b.r + Math.random() * (W - b.r * 2);
+            b.y = b.r + Math.random() * 40;
+            b.vy = 0;
+            b.vx = (Math.random() - 0.5) * 1.2;
+          } else {
+            if (b.vy > 0.6) {
+              b.vy = -b.vy * bouncy.bounceLoss;
+              b.squash = Math.min(0.42, Math.abs(b.vy) * 0.05);
+              b.squashAngle = 0;
+            } else {
+              b.vy = 0;
+              b.squash *= 0.85;
+            }
+            b.vx *= bouncy.floorFriction;
+            if (Math.abs(b.vx) < 0.06) b.vx += (Math.random() - 0.5) * 0.08;
+          }
+        }
+
+        b.vy = Utils.clamp(b.vy, -26, 26);
+        b.vx = Utils.clamp(b.vx, -5, 5);
+        b.squash *= 0.86;
+      });
+
+      // ── Ball-to-ball soft collision ────────────────────────────
+      const balls = bouncy.balls;
+      const n = balls.length;
+      for (let i = 0; i < n; i++) {
+        const a = balls[i];
+        for (let j = i + 1; j < n; j++) {
+          const b = balls[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const distSq = dx * dx + dy * dy;
+          const minDist = a.r + b.r;
+          if (distSq >= minDist * minDist || distSq < 0.0001) continue;
+
+          const dist = Math.sqrt(distSq);
+          const overlap = minDist - dist;
+          const nx = dx / dist, ny = dy / dist;
+
+          const push = Math.min(overlap * 0.5, 2.4);
+          a.x -= nx * push; a.y -= ny * push;
+          b.x += nx * push; b.y += ny * push;
+
+          const dvx = b.vx - a.vx;
+          const dvy = b.vy - a.vy;
+          const dot = dvx * nx + dvy * ny;
+          if (dot < 0) {
+            const k = dot * 0.55;
+            a.vx += k * nx; a.vy += k * ny;
+            b.vx -= k * nx; b.vy -= k * ny;
+          }
+        }
       }
     }
-  };
-    Pages._bindPresenterButtons(root);
 
-  /* ---------------- start / stop ---------------- */
-  async function start() {
-    if (running) return;
+    /* ─────────────────────────────────────────────────────────────
+       COLOUR HELPERS
+       ───────────────────────────────────────────────────────────── */
+    function hexToRgb(hex) {
+      const h = hex.replace('#', '');
+      const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+    function hexToRgba(hex, a) { const c = hexToRgb(hex); return `rgba(${c.r},${c.g},${c.b},${a})`; }
+    function lighten(hex, amt) {
+      const c = hexToRgb(hex);
+      const f = v => Math.round(v + (255 - v) * amt);
+      return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`;
+    }
+    function darken(hex, amt) {
+      const c = hexToRgb(hex);
+      const f = v => Math.round(v * (1 - amt));
+      return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`;
+    }
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      statusEl.textContent = 'Microphone API is not supported in this browser.';
-      statusEl.style.color = 'var(--danger)';
-      UI.toast('Your browser does not support microphone access. Use the manual slider instead.', 'warning', 6000);
+    /* ─────────────────────────────────────────────────────────────
+       UNDERWATER LIGHT — animated god-rays for bubbles theme
+       ───────────────────────────────────────────────────────────── */
+    function drawUnderwaterLight() {
+      const cfg = themeConfig();
+      if (cfg.mode !== 'bubble') return;
+
+      const ctx = bouncy.ctx;
+      const W = bouncy.W, H = bouncy.H;
+      const t = performance.now() / 1000;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      // Six soft descending rays that sway left/right over time
+      const RAYS = 6;
+      for (let i = 0; i < RAYS; i++) {
+        const baseX = W * (0.08 + i * (0.86 / (RAYS - 1)));
+        const swayAmp = W * 0.06;
+        const swayPhase = t * 0.35 + i * 1.4;
+        const x0 = baseX + Math.sin(swayPhase) * swayAmp;
+        const topWidth  = W * 0.045;
+        const botWidth  = W * 0.24;
+        const tilt = Math.sin(swayPhase * 0.7) * 40;
+
+        const grad = ctx.createLinearGradient(x0, 0, x0 + tilt, H);
+        // Opacity breathes subtly with a second phase offset
+        const breath = 0.5 + 0.5 * Math.sin(t * 0.55 + i * 0.9);
+        grad.addColorStop(0,   `rgba(191, 219, 254, ${0.14 + breath * 0.09})`);
+        grad.addColorStop(0.35,`rgba(147, 197, 253, ${0.08 + breath * 0.05})`);
+        grad.addColorStop(0.75,`rgba(96, 165, 250, ${0.02 + breath * 0.02})`);
+        grad.addColorStop(1,   'rgba(59, 130, 246, 0)');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(x0 - topWidth / 2, 0);
+        ctx.lineTo(x0 + topWidth / 2, 0);
+        ctx.lineTo(x0 + tilt + botWidth / 2, H);
+        ctx.lineTo(x0 + tilt - botWidth / 2, H);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // A drifting "caustic" blobs layer near the top
+      const BLOBS = 5;
+      for (let i = 0; i < BLOBS; i++) {
+        const phase = t * 0.4 + i * 1.9;
+        const cx = W * (0.15 + 0.7 * ((i / BLOBS) + 0.1 * Math.sin(phase)));
+        const cy = H * 0.08 + Math.sin(phase * 0.8) * H * 0.05;
+        const r  = W * (0.10 + 0.05 * (0.5 + 0.5 * Math.sin(phase * 1.3)));
+
+        const g2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g2.addColorStop(0, 'rgba(186, 230, 253, 0.10)');
+        g2.addColorStop(0.6, 'rgba(147, 197, 253, 0.045)');
+        g2.addColorStop(1, 'rgba(96, 165, 250, 0)');
+
+        ctx.fillStyle = g2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       BALL RENDERING
+       ───────────────────────────────────────────────────────────── */
+    function drawBall(ctx, b) {
+      const cfg = themeConfig();
+      const sq = b.squash;
+      const rx = b.r * (1 + sq);
+      const ry = b.r * (1 - sq);
+
+      ctx.save();
+      ctx.translate(b.x, b.y);
+
+      if (cfg.mode === 'eyeball') {
+        // ── Determine gaze: mouse first, then idle drift ─────────
+        const now = performance.now();
+        const pointerActive = pointer.inside && (now - pointer.lastMoveAt < pointer.activeWindow);
+
+        let gx, gy;
+        if (pointerActive && pointer.x > -9999) {
+          const dx = pointer.x - b.x;
+          const dy = pointer.y - b.y;
+          const d = Math.hypot(dx, dy) || 1;
+          // Ignore jitter when the pointer is basically at the centre of the ball
+          if (d > b.r * 0.3) { gx = dx / d; gy = dy / d; }
+          else                { gx = 0; gy = 0; }
+        } else {
+          gx = b._gazeX;
+          gy = b._gazeY;
+        }
+
+        // ── Sclera ───────────────────────────────────────────────
+        const scleraGrad = ctx.createRadialGradient(
+          -b.r * 0.3, -b.r * 0.35, b.r * 0.1,
+          0, 0, b.r
+        );
+        scleraGrad.addColorStop(0, '#ffffff');
+        scleraGrad.addColorStop(0.75, '#f3f4f6');
+        scleraGrad.addColorStop(1, '#cbd5e1');
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = scleraGrad;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(15,23,42,0.12)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // ── Iris offset along the gaze direction ─────────────────
+        const maxOffset = b.r * 0.24;
+        const ox = gx * maxOffset;
+        const oy = gy * maxOffset;
+
+        const irisR = b.r * 0.5;
+        const irisGrad = ctx.createRadialGradient(
+          ox - irisR * 0.3, oy - irisR * 0.3, irisR * 0.2,
+          ox, oy, irisR
+        );
+        irisGrad.addColorStop(0, lighten(b.iris, 0.35));
+        irisGrad.addColorStop(0.7, b.iris);
+        irisGrad.addColorStop(1, darken(b.iris, 0.4));
+        ctx.beginPath();
+        ctx.arc(ox, oy, irisR, 0, Math.PI * 2);
+        ctx.fillStyle = irisGrad;
+        ctx.fill();
+
+        // ── Pupil, also offset ───────────────────────────────────
+        ctx.beginPath();
+        ctx.arc(ox, oy, irisR * 0.52, 0, Math.PI * 2);
+        ctx.fillStyle = '#0b1220';
+        ctx.fill();
+
+        // ── Catch-light ──────────────────────────────────────────
+        ctx.beginPath();
+        ctx.arc(ox - irisR * 0.32, oy - irisR * 0.36, irisR * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.fill();
+
+      } else if (cfg.mode === 'bubble') {
+        const grad = ctx.createRadialGradient(
+          -b.r * 0.4, -b.r * 0.45, b.r * 0.05,
+          0, 0, b.r
+        );
+        grad.addColorStop(0,   'rgba(255,255,255,0.55)');
+        grad.addColorStop(0.2, 'rgba(255,255,255,0.08)');
+        grad.addColorStop(0.55, hexToRgba(b.color, 0.25));
+        grad.addColorStop(1,   hexToRgba(b.color, 0.45));
+
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.strokeStyle = hexToRgba(lighten(b.color, 0.55), 0.85);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.ellipse(-b.r * 0.42, -b.r * 0.45, b.r * 0.28, b.r * 0.18, -0.55, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(b.r * 0.4, b.r * 0.42, b.r * 0.12, b.r * 0.08, -0.55, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fill();
+
+      } else if (cfg.mode === 'emoji') {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        ctx.font = `${Math.round(b.r * 1.65)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(b.glyph, 0, b.r * 0.06);
+
+      } else if (cfg.mode === 'number') {
+        const grad = ctx.createRadialGradient(
+          -b.r * 0.35, -b.r * 0.4, b.r * 0.1,
+          0, 0, b.r
+        );
+        grad.addColorStop(0, lighten(b.color, 0.5));
+        grad.addColorStop(0.6, b.color);
+        grad.addColorStop(1, darken(b.color, 0.35));
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.font = `800 ${Math.round(b.r * 0.95)}px Inter, "Segoe UI", Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#1e1b4b';
+        ctx.fillText(String(b.number), 0, 1);
+
+        ctx.beginPath();
+        ctx.ellipse(-b.r * 0.32, -b.r * 0.42, b.r * 0.22, b.r * 0.14, -0.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fill();
+
+      } else {
+        const grad = ctx.createRadialGradient(
+          -b.r * 0.42, -b.r * 0.45, b.r * 0.05,
+          0, 0, b.r * 1.05
+        );
+        grad.addColorStop(0,   lighten(b.color, 0.7));
+        grad.addColorStop(0.18, lighten(b.color, 0.35));
+        grad.addColorStop(0.6, b.color);
+        grad.addColorStop(1,   darken(b.color, 0.42));
+
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.ellipse(-b.r * 0.38, -b.r * 0.42, b.r * 0.32, b.r * 0.2, -0.55, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.78)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.ellipse(b.r * 0.42, b.r * 0.38, b.r * 0.08, b.r * 0.06, -0.55, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       BACKGROUND
+       ───────────────────────────────────────────────────────────── */
+    function paintBackground() {
+      const cfg = themeConfig();
+      const ctx = bouncy.ctx;
+      const W = bouncy.W, H = bouncy.H;
+
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0,    cfg.bgTop);
+      grad.addColorStop(0.55, cfg.bgMid);
+      grad.addColorStop(1,    cfg.bgBot);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      const vignette = ctx.createLinearGradient(0, H - 60, 0, H);
+      vignette.addColorStop(0, 'rgba(0,0,0,0)');
+      vignette.addColorStop(1, cfg.floorTint || 'rgba(0,0,0,0.3)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, H - 60, W, 60);
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       SHOCKWAVE RENDER
+       ───────────────────────────────────────────────────────────── */
+    function drawShockwaves() {
+      if (!shockwaves.length) return;
+      const ctx = bouncy.ctx;
+      const now = performance.now();
+
+      for (let i = shockwaves.length - 1; i >= 0; i--) {
+        const sw = shockwaves[i];
+        const age = (now - sw.bornAt) / 1000;
+        const LIFETIME = 1.1;
+        if (age > LIFETIME) { shockwaves.splice(i, 1); continue; }
+
+        const p = age / LIFETIME;               // 0 → 1
+        const r = sw.maxR * p;
+        const alpha = (1 - p) * (1 - p) * 0.55;
+
+        // Outer ring
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Inner ring (softer, wider)
+        ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.5})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, r * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       MAIN RENDER
+       ───────────────────────────────────────────────────────────── */
+    function renderBalls() {
+      if (!bouncy.ctx) return;
+      paintBackground();
+      drawUnderwaterLight();     // bubbles-only; no-op otherwise
+      bouncy.balls.forEach(b => drawBall(bouncy.ctx, b));
+      drawShockwaves();
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       CLASSIFY + OVERLAY
+       ───────────────────────────────────────────────────────────── */
+    function classify(v) {
+      if (v < 20) return { label: 'Silent',     color: '#198754' };
+      if (v < 45) return { label: 'Quiet',      color: '#0891B2' };
+      if (v < 70) return { label: 'Normal',     color: '#0038A8' };
+      if (v < 85) return { label: 'Discussion', color: '#F59E0B' };
+      return           { label: 'Too Loud',    color: '#DC3545' };
+    }
+
+    function updateOverlay(v) {
+      if (!overlayVal) return;
+      const c = classify(v);
+      overlayVal.textContent = Math.round(v) + '%';
+      overlayVal.style.color = '#fff';
+      overlayLbl.textContent = c.label;
+    }
+
+    function pushStats(v) {
+      const t = performance.now();
+      history.push({ t, v });
+      while (history.length && t - history[0].t > 10000) history.shift();
+      const avg = history.length ? history.reduce((s, h) => s + h.v, 0) / history.length : 0;
+      if (avgEl) avgEl.textContent = Math.round(avg) + '%';
+
+      peakWin.push({ t, v });
+      while (peakWin.length && t - peakWin[0].t > 3000) peakWin.shift();
+      const peak = peakWin.reduce((m, p) => Math.max(m, p.v), 0);
+      if (peakEl) peakEl.textContent = Math.round(peak) + '%';
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       ALERTS
+       ───────────────────────────────────────────────────────────── */
+    function playBeep() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const now = ctx.currentTime;
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.22, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+        osc.start(now);
+        osc.stop(now + 0.3);
+        setTimeout(() => { try { ctx.close(); } catch (e) {} }, 700);
+      } catch (e) {}
+    }
+
+    function playShush() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const dur = 0.7;
+        const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) {
+          const t = i / data.length;
+          const env = Math.pow(1 - t, 1.6);
+          data[i] = (Math.random() * 2 - 1) * env * 0.5;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 2400;
+        filter.Q.value = 0.9;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.42;
+        src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+        src.start();
+        setTimeout(() => { try { ctx.close(); } catch (e) {} }, 1400);
+      } catch (e) {}
+    }
+
+    function maybeFireAlert(v) {
+      if (alertMode === 'none') return;
+      const now = performance.now();
+      if (v < alertThresh) return;
+      if (now - lastAlertAt < 2200) return;
+      lastAlertAt = now;
+      if (alertMode === 'beep')  playBeep();
+      if (alertMode === 'shush') playShush();
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       MAIN ANIMATION LOOP — runs continuously while the page is mounted.
+       The mic only modulates the impulse value; it never gates the loop.
+       ───────────────────────────────────────────────────────────── */
+    function tick(ts) {
+      // Self-terminate if the page was unmounted
+      if (!document.body.contains(canvasEl)) {
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        return;
+      }
+      rafId = requestAnimationFrame(tick);
+
+      const now = ts || performance.now();
+      if (now - lastFrame < 33) return;
+      lastFrame = now;
+
+      /* ── Volume source: mic when running, graceful fade otherwise ── */
+      let vol = 0;
+      if (running && analyser) {
+        const buf = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const x = (buf[i] - 128) / 128;
+          sum += x * x;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        const db  = 20 * Math.log10(Math.max(rms, 1e-8));
+        const sens  = Number(sensitivity) || 5;
+        const minDb = -58 - (sens - 5) * 4;
+        const maxDb = -12;
+        let pct = ((db - minDb) / (maxDb - minDb)) * 100;
+        pct = Utils.clamp(pct, 0, 100);
+        smoothed = smoothed * 0.68 + pct * 0.32;
+        vol = smoothed;
+      } else {
+        // Mic off — let the value decay smoothly so balls settle naturally
+        smoothed *= 0.92;
+        if (smoothed < 0.05) smoothed = 0;
+        vol = smoothed;
+      }
+
+      /* ── Render ── */
+      if (displayMode === 'balls') {
+        stepBalls(vol, 0.5);
+        stepBalls(vol, 0.5);
+        renderBalls();
+      } else {
+        paintMeter(vol);
+      }
+      updateOverlay(vol);
+
+      /* ── Stats ── */
+      if (now - lastStat > 250) {
+        lastStat = now;
+        pushStats(vol);
+      }
+
+      /* ── Alerts (only meaningful when the mic is on) ── */
+      if (running) maybeFireAlert(vol);
+
+      /* ── Presenter bridge — push on every tick so the learner view
+             always receives the current mode/theme/total/level ── */
+      if (now - (tick._lastPush || 0) > 120) {
+        tick._lastPush = now;
+        pushNoiseConfigToPresenter();
+      }
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       START / STOP
+       ───────────────────────────────────────────────────────────── */
+    async function start() {
+      if (running) return;
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        micStatus.textContent = 'Not supported';
+        UI.toast('This browser does not support microphone access. Use the manual slider instead.', 'warning', 6000);
+        return;
+      }
+
+      micStatus.textContent = 'Requesting…';
+      micToggle.disabled = true;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        });
+
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) throw new Error('Web Audio API is not supported in this browser.');
+        audioCtx = new Ctx();
+        if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch (e) {} }
+
+        sourceNode = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.4;
+        sourceNode.connect(analyser);
+
+        running = true;
+        smoothed = 0;
+        micToggle.classList.add('active');
+        micToggle.setAttribute('aria-pressed', 'true');
+        micStatus.textContent = 'Microphone On';
+        micToggle.disabled = false;
+        manualWrap.style.opacity = '0.5';
+        manualWrap.style.pointerEvents = 'none';
+
+        if (displayMode === 'balls') {
+          if (!bouncy.ctx) initBouncyEngine();
+          else { resizeBouncyCanvas(); }
+        }
+        // NOTE: the RAF loop is already running — do NOT schedule another one.
+        // Smoothing is snapshotted to the current value so start-up is gradual.
+        smoothed = 0;
+      } catch (err) {
+        console.error('Microphone access failed:', err);
+        let msg = 'Could not access the microphone.';
+        if (err && err.name === 'NotAllowedError')   msg = 'Microphone permission was denied.';
+        else if (err && err.name === 'NotFoundError')    msg = 'No microphone was found on this device.';
+        else if (err && err.name === 'NotReadableError') msg = 'The microphone is already in use by another application.';
+        else if (err && err.name === 'SecurityError')    msg = 'Microphone access is blocked (insecure origin or browser policy).';
+        else if (err && err.message) msg = err.message;
+
+        micStatus.textContent = 'Microphone Off';
+        UI.toast(msg + ' You can still use the manual slider below.', 'warning', 7000);
+        micToggle.disabled = false;
+
+        try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        try { if (audioCtx) await audioCtx.close(); } catch (e) {}
+        stream = null; audioCtx = null; analyser = null; sourceNode = null;
+        running = false;
+      }
+    }
+
+    function stop() {
+      // Release the mic — but keep the animation loop running so the balls
+      // can decelerate naturally instead of freezing mid-air.
+      running = false;
+
+      if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
+      if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+      analyser = null; sourceNode = null;
+      history.length = 0; peakWin.length = 0;
+      // NOTE: smoothed is NOT reset here — the tick loop fades it to 0 for us.
+
+      micToggle.classList.remove('active');
+      micToggle.setAttribute('aria-pressed', 'false');
+      micToggle.disabled = false;
+      micStatus.textContent = 'Microphone Off';
+      manualWrap.style.opacity = '1';
+      manualWrap.style.pointerEvents = '';
+
+      if (manualInp) manualInp.value = 0;
+    }
+
+    /* ─────────────────────────────────────────────────────────────
+       CONTROL BINDINGS
+       ───────────────────────────────────────────────────────────── */
+    micToggle.onclick = () => { running ? stop() : start(); };
+
+    sensInp.oninput = () => {
+      sensitivity = Number(sensInp.value) || 5;
+      sensValue.textContent = sensitivity;
+    };
+
+    totalInp.oninput = () => {
+      totalBalls = Number(totalInp.value) || 40;
+      totalValue.textContent = totalBalls;
+      State._noiseTotalBalls = totalBalls;
+      rebuildBalls();
+      pushNoiseConfigToPresenter();
+    };
+
+    themeList.querySelectorAll('[data-theme]').forEach(btn => {
+      btn.onclick = () => {
+        ballTheme = btn.dataset.theme;
+        State._noiseBallTheme = ballTheme;
+        themeList.querySelectorAll('[data-theme]').forEach(b => {
+          b.classList.toggle('active', b.dataset.theme === ballTheme);
+        });
+        const cfg = themeConfig();
+        bouncy.balls.forEach(b => {
+          if (cfg.mode === 'eyeball') {
+            b.color = '#ffffff';
+            b.iris = cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)];
+            b._gazeX = 0; b._gazeY = 0;
+            b._gazeTargetX = (Math.random() - 0.5) * 2;
+            b._gazeTargetY = (Math.random() - 0.5) * 2;
+            b._gazeNextAt = performance.now() + 1800 + Math.random() * 3200;
+          } else if (cfg.mode === 'emoji') {
+            b.glyph = cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)];
+          } else if (cfg.mode === 'number') {
+            b.color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+            b.number = Math.floor(Math.random() * 99) + 1;
+          } else {
+            b.color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+          }
+        });
+        if (cfg.mode === 'bubble') {
+          bouncy.balls.forEach(b => {
+            b.x = b.r + Math.random() * (bouncy.W - b.r * 2);
+            b.y = bouncy.H * 0.35 + Math.random() * bouncy.H * 0.45;
+            b.vx = (Math.random() - 0.5) * 1.2;
+            b.vy = -0.4 - Math.random() * 0.8;
+          });
+        }
+        if (displayMode === 'balls') {
+          renderBalls();
+        }
+        pushNoiseConfigToPresenter();
+      };
+    });
+
+    alertList.querySelectorAll('[data-alert]').forEach(btn => {
+      btn.onclick = () => {
+        alertMode = btn.dataset.alert;
+        State._noiseAlertMode = alertMode;
+        alertList.querySelectorAll('[data-alert]').forEach(b => {
+          b.classList.toggle('active', b.dataset.alert === alertMode);
+        });
+        alertThreshWrap.style.display = alertMode === 'none' ? 'none' : '';
+      };
+    });
+
+    alertThreshInp.oninput = () => {
+      alertThresh = Number(alertThreshInp.value) || 80;
+      alertThreshValue.textContent = alertThresh + '%';
+      State._noiseAlertThresh = alertThresh;
+    };
+
+    root.querySelectorAll('[data-view]').forEach(btn => {
+      btn.onclick = () => {
+        const v = btn.dataset.view;
+        if (v === displayMode) return;
+        displayMode = v;
+        State._noiseDisplayMode = displayMode;
+        root.querySelectorAll('[data-view]').forEach(b => {
+          b.classList.toggle('active', b.dataset.view === displayMode);
+        });
+        if (displayMode === 'balls') {
+          if (!bouncy.ctx) initBouncyEngine();
+          else resizeBouncyCanvas();
+          renderBalls();
+        } else {
+          paintMeter(smoothed);
+        }
+        pushNoiseConfigToPresenter();
+      };
+    });
+
+    manualInp.oninput = () => {
+      if (running) return;
+      const v = Number(manualInp.value) || 0;
+      if (displayMode === 'balls') {
+        if (!bouncy.ctx) initBouncyEngine();
+        stepBalls(v, 0.6);
+        renderBalls();
+      } else {
+        paintMeter(v);
+      }
+      updateOverlay(v);
+      if (Presenter.isOpen() && Presenter._toolId === 'noise-meter') {
+        const c = classify(v);
+        Presenter.send({
+          level: v,
+          label: c.label,
+          color: c.color,
+          mode: displayMode,
+          theme: ballTheme,
+          totalBalls: totalBalls
+        });
+      }
+    };
+
+    /* ─────────────────────────────────────────────────────────────
+       INITIAL PAINT + RESIZE
+       ───────────────────────────────────────────────────────────── */
+    if (!initBouncyEngine()) {
+      console.warn('[NoiseMeter] Could not initialise canvas.');
       return;
     }
 
-    statusEl.textContent = 'Requesting microphone permission…';
-    statusEl.style.color = '';
-    startBtn.disabled = true;
-
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation:  false,
-          noiseSuppression:  false,
-          autoGainControl:   false
-        }
+    Pages._bouncyResizeHandler = () => {
+      if (!document.body.contains(canvasEl)) return;
+      resizeBouncyCanvas();
+      bouncy.balls.forEach(b => {
+        b.x = Utils.clamp(b.x, b.r + 2, bouncy.W - b.r - 2);
+        b.y = Utils.clamp(b.y, b.r + 2, bouncy.floorY - b.r);
       });
+      if (displayMode === 'balls') renderBalls();
+      else paintMeter(smoothed);
+    };
+    window.addEventListener('resize', Pages._bouncyResizeHandler);
 
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) throw new Error('Web Audio API is not supported in this browser.');
-      audioCtx = new Ctx();
-      if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch (e) {} }
+    // Seed the scene with an initial launch
+    bouncy.balls.forEach(b => { b.vy = -(Math.random() * 3 + 0.8); });
 
-      sourceNode = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.4;
-      sourceNode.connect(analyser);
+    // First paint so the canvas is never blank
+    if (displayMode === 'balls') renderBalls();
+    else paintMeter(0);
 
-      running = true;
-      smoothed = 0;
-      startBtn.disabled = true;
-      stopBtn.disabled  = false;
-      statusEl.textContent = 'Listening in real time…';
-      statusEl.style.color = 'var(--success)';
-      meterEl.classList.add('is-listening');
-      manualWrap.style.opacity = '0.5';
-      manualWrap.style.pointerEvents = 'none';
+    /* ═════════════════════════════════════════════════════════════
+       Start the persistent animation loop. It runs from now until the
+       page is unmounted, regardless of whether the mic is on.
+       ═════════════════════════════════════════════════════════════ */
+    rafId = requestAnimationFrame(tick);
 
-      rafId = requestAnimationFrame(tick);
-    } catch (err) {
-      console.error('Microphone access failed:', err);
-      let msg = 'Could not access the microphone.';
-      if (err && err.name === 'NotAllowedError')   msg = 'Microphone permission was denied.';
-      else if (err && err.name === 'NotFoundError')    msg = 'No microphone was found on this device.';
-      else if (err && err.name === 'NotReadableError') msg = 'The microphone is already in use by another application.';
-      else if (err && err.name === 'SecurityError')    msg = 'Microphone access is blocked (insecure origin or browser policy).';
-      else if (err && err.message) msg = err.message;
+    /* Presenter binding */
+    Pages._bindPresenterButtons(root);
 
-      statusEl.textContent = msg + ' You can still use the manual slider below.';
-      statusEl.style.color = 'var(--danger)';
-      UI.toast(msg, 'warning', 7000);
-
-      // Clean up anything partially acquired.
-      try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-      try { if (audioCtx) await audioCtx.close(); } catch (e) {}
-      stream = null; audioCtx = null; analyser = null; sourceNode = null;
+    /* Full teardown — cancels the RAF AND releases the mic.
+       Called by App.navigate() when the user leaves the page. */
+    Pages._noiseCleanup = () => {
       running = false;
-      startBtn.disabled = false;
-      stopBtn.disabled  = true;
-    }
-  }
-
-  function stop() {
-    running = false;
-    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-    if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
-    if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
-    analyser = null; sourceNode = null;
-    smoothed = 0;
-    history.length = 0; peakWin.length = 0;
-
-    if (startBtn) startBtn.disabled = false;
-    if (stopBtn)  stopBtn.disabled  = true;
-    if (statusEl) { statusEl.textContent = 'Stopped.'; statusEl.style.color = ''; }
-    if (meterEl)  meterEl.classList.remove('is-listening');
-    if (manualWrap) { manualWrap.style.opacity = '1'; manualWrap.style.pointerEvents = ''; }
-    paint(0);
-    if (peakEl) peakEl.textContent = '0%';
-    if (avgEl)  avgEl.textContent  = '0%';
-    if (manualInp) manualInp.value = 0;
-
-    if (Presenter.isOpen() && Presenter._toolId === 'noise-meter') {
-      Presenter.send({ level: 0, label: 'Silent', color: '#198754' });
-    }
-    Pages._bindPresenterButtons(root);  //pydjian
-  }
-
-  // Expose cleanup so a later visit to this page (or navigating away)
-  // can release the mic even before the RAF check runs.
-  Pages._noiseCleanup = stop;
-
-  /* ---------------- wire up controls ---------------- */
-  startBtn.onclick = start;
-  stopBtn.onclick  = stop;
-
-  sensInp.oninput = () => {
-    sensitivity = Number(sensInp.value) || 5;
-    sensLbl.textContent = sensitivity;
-  };
-
-  manualInp.oninput = () => {
-    if (running) return;
-    const v = Number(manualInp.value) || 0;
-    paint(v);
-    if (Presenter.isOpen() && Presenter._toolId === 'noise-meter') {
-      const c = classify(v);
-      Presenter.send({ level: v, label: c.label, color: c.color });
-    }
-  };
-},
-
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (stream) { try { stream.getTracks().forEach(t => t.stop()); } catch (e) {} stream = null; }
+      if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+      analyser = null; sourceNode = null;
+      if (Pages._bouncyResizeHandler) {
+        window.removeEventListener('resize', Pages._bouncyResizeHandler);
+        Pages._bouncyResizeHandler = null;
+      }
+      if (typeof stopBtn !== 'undefined' && stopBtn) stopBtn.disabled = true;
+    };
+  },
   async signal(root) {
     const modes = [
       { id: 'silent',     label: 'Silent',       color: '#198754', desc: 'No talking. Eyes on teacher.',   icon: 'shield' },
@@ -24955,7 +27343,7 @@ async quizManager(root) {
       '#': i+1, LRN: l.lrn||'', Name: Utils.fullName(l), Sex: l.sex||'',
       Age: Utils.calcAge(l.birthDate), Parent: l.parent||'', Contact: l.parentContact||''
     }));
-    Utils.download('class-list-' + Utils.todayISO() + '.csv', Utils.toCSV(rows), 'text/csv');
+    Utils.download('class-list-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
   },
   printClassList() {
     if (!State.activeClass) return;
@@ -24993,7 +27381,7 @@ async quizManager(root) {
       const c = classes.find(x => x.id === l.classId);
       return { Class: c ? c.gradeLevel + ' - ' + c.section : '', LRN: l.lrn||'', Name: Utils.fullName(l), Sex: l.sex||'', Status: l.status||'Active' };
     });
-    Utils.download('masterlist-' + Utils.todayISO() + '.csv', Utils.toCSV(rows), 'text/csv');
+    Utils.download('masterlist-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
   },
 /* ---------- GRADE SUMMARY (Enhanced · 3-Term · All Subjects) ---------- */
 async gradeSummary(root) {
@@ -25547,7 +27935,7 @@ _gsExportCSV(subjects, terms, matrixBySubject, gwaByLearner, policy) {
   }
 
   const cls = State.activeClass;
-  const filename = `grade-summary-${cls.gradeLevel.replace(/\s+/g, '')}-${cls.section.replace(/\s+/g, '')}-${Utils.todayISO()}.csv`;
+  const filename = `grade-summary-${cls.gradeLevel.replace(/\s+/g, '')}-${cls.section.replace(/\s+/g, '')}-${Utils.timestamp()}.csv`;
   Utils.download(filename, Utils.toCSV(rows, headers), 'text/csv');
   App.logActivity('Grade summary exported as CSV', 'Reports');
   UI.toast('CSV exported', 'success');
@@ -28400,7 +30788,7 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
       if (!json || bytes < 2) throw new Error('Backup produced no data.');
 
       Utils.download(
-        'klazassist-backup-' + Utils.todayISO() + '.json',
+        'klazassist-backup-' + Utils.timestampForFilename() + '.json',
         json,
         'application/json;charset=utf-8'
       );
@@ -28419,7 +30807,7 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
     try {
       const att = await DB.getAll('attendance');
       Utils.download(
-        'attendance-' + Utils.todayISO() + '.json',
+        'attendance-' + Utils.timestampForFilename() + '.json',
         JSON.stringify(att, null, 2),
         'application/json;charset=utf-8'
       );
@@ -30351,6 +32739,568 @@ If you received this message, Web3Forms is configured correctly and you can now 
       onConfirm: async () => { await DB.clear('activityLogs'); App.navigate('activity-log'); UI.toast('Log cleared', 'success'); }
     });
   },
+  /* ============================================================================
+   TEACHING LOAD — main page
+   ============================================================================ */
+async teachingLoad(root) {
+  const all = ((await DB.getAll('teachingLoad')) || []).slice();
+
+  const notifEnabled = await DB.getSetting('teachingLoadNotifyEnabled', true);
+  const notifLead    = Number(await DB.getSetting('teachingLoadNotifyMin', 10)) || 10;
+
+  const dayNames  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const weekOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const now       = new Date();
+  const todayName = dayNames[now.getDay()];
+  const nowMin    = now.getHours() * 60 + now.getMinutes();
+
+  // ---------- Stats ----------
+  const totalWeeklyMin = all.reduce((sum, e) =>
+    sum + Pages._tlDuration(e.startTime, e.endTime) * (e.days || []).length, 0
+  );
+  const totalHours = (totalWeeklyMin / 60).toFixed(1);
+
+  const todayEntries = all
+    .filter(e => (e.days || []).includes(todayName))
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
+  const currentClass = todayEntries.find(e => {
+    const s  = Pages._tlTimeToMin(e.startTime);
+    const en = Pages._tlTimeToMin(e.endTime);
+    return nowMin >= s && nowMin < en;
+  });
+
+  const nextClass = todayEntries.find(e => Pages._tlTimeToMin(e.startTime) > nowMin);
+
+  const uniqueSubjects = new Set(all.map(e => e.subject));
+
+  // Sort the master list by first day-of-week, then by start time
+  all.sort((a, b) => {
+    const idx = (e) => {
+      const ids = (e.days || []).map(d => weekOrder.indexOf(d)).filter(i => i >= 0);
+      return ids.length ? Math.min(...ids) : 99;
+    };
+    const da = idx(a), db = idx(b);
+    if (da !== db) return da - db;
+    return (a.startTime || '').localeCompare(b.startTime || '');
+  });
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Teaching Load</h2>
+        <p>Your weekly subject assignments with time, days, and period reminders</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="tl-notif-settings">${icon('signal')} Notification Settings</button>
+        <button class="btn btn-primary" id="tl-add">${icon('edit')} + Add Subject</button>
+      </div>
+    </div>
+
+    ${!notifEnabled ? `
+      <div class="alert alert-warning mb-16">
+        ${icon('alert')}
+        <div>Period-start notifications are currently <strong>off</strong>.
+          <button class="btn btn-sm btn-primary" id="tl-enable-notif" style="margin-left:8px;">Enable</button>
+        </div>
+      </div>` : ''}
+
+    <!-- KPI Row -->
+    <div class="grid grid-4 mb-20">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('book')}</div>
+        <div class="stat-label">Subjects</div>
+        <div class="stat-value">${uniqueSubjects.size}</div>
+        <div class="text-xs text-muted">${all.length} schedule entr${all.length === 1 ? 'y' : 'ies'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">${icon('timer')}</div>
+        <div class="stat-label">Weekly Hours</div>
+        <div class="stat-value">${totalHours}</div>
+        <div class="text-xs text-muted">Across all days</div>
+      </div>
+      <div class="stat-card accent-gold">
+        <div class="stat-icon">${icon('calendar')}</div>
+        <div class="stat-label">Today's Classes</div>
+        <div class="stat-value">${todayEntries.length}</div>
+        <div class="text-xs text-muted">${Utils.esc(todayName)}</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('play')}</div>
+        <div class="stat-label">${currentClass ? 'Now Teaching' : 'Next Class'}</div>
+        <div class="stat-value" style="font-size:16px;line-height:1.3;">
+          ${currentClass
+            ? Utils.esc(currentClass.subject)
+            : nextClass
+              ? Utils.esc(nextClass.subject)
+              : '—'}
+        </div>
+        <div class="text-xs text-muted">
+          ${currentClass
+            ? Pages._tlFormatTime(currentClass.startTime) + ' – ' + Pages._tlFormatTime(currentClass.endTime)
+            : nextClass
+              ? 'Starts at ' + Pages._tlFormatTime(nextClass.startTime)
+              : 'No more classes today'}
+        </div>
+      </div>
+    </div>
+
+    ${all.length === 0 ? `
+      <div class="card">
+        ${UI.emptyState({
+          icon: 'calendar',
+          title: 'No teaching load yet',
+          message: 'Add each subject you teach with its days and time. KlazAssist will notify you when a period is about to start.',
+          actionLabel: '+ Add Subject',
+          actionFn: 'Pages.openTeachingLoadModal()'
+        })}
+      </div>
+    ` : `
+      <!-- Today's Schedule -->
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3>${Utils.esc(todayName)} · Today's Schedule</h3>
+          <span class="text-xs text-muted">${todayEntries.length} class${todayEntries.length === 1 ? '' : 'es'}</span>
+        </div>
+        ${todayEntries.length === 0
+          ? `<p class="text-sm text-muted" style="text-align:center;padding:20px;">No classes scheduled for ${Utils.esc(todayName)}.</p>`
+          : `<div style="display:flex;flex-direction:column;gap:8px;">
+              ${todayEntries.map(e => {
+                const s  = Pages._tlTimeToMin(e.startTime);
+                const en = Pages._tlTimeToMin(e.endTime);
+                const isNow  = nowMin >= s && nowMin < en;
+                const isPast = nowMin >= en;
+                const isNext = e === nextClass;
+                const color  = e.color || '#0038A8';
+                const minsUntil = s - nowMin;
+                return `
+                  <div style="display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:10px;
+                              background:${isNow ? 'var(--light-blue)' : 'var(--bg)'};
+                              border-left:4px solid ${color};${isPast ? 'opacity:0.55;' : ''}">
+                    <div style="min-width:88px;flex-shrink:0;">
+                      <div style="font-size:12px;font-weight:700;color:${isNow ? 'var(--deped-blue)' : 'var(--text)'};">
+                        ${Pages._tlFormatTime(e.startTime)}
+                      </div>
+                      <div class="text-xs text-muted">${Pages._tlFormatTime(e.endTime)}</div>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        ${Utils.esc(e.subject)}
+                        ${isNow ? '<span class="badge badge-gold" style="font-size:9px;margin-left:6px;">NOW</span>' : ''}
+                        ${isNext && !isNow ? `<span class="badge badge-blue" style="font-size:9px;margin-left:6px;">NEXT · ${minsUntil}m</span>` : ''}
+                      </div>
+                      <div class="text-xs text-muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        ${e.gradeSection ? Utils.esc(e.gradeSection) : ''}${e.room ? (e.gradeSection ? ' · ' : '') + Utils.esc(e.room) : ''}
+                      </div>
+                    </div>
+                  </div>`;
+              }).join('')}
+            </div>`}
+      </div>
+
+      <!-- Weekly overview -->
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3>Weekly Overview</h3>
+          <span class="text-xs text-muted">${weekOrder.join(' · ')}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(${weekOrder.length},minmax(0,1fr));gap:8px;">
+          ${weekOrder.map(d => {
+            const dayEntries = all.filter(e => (e.days || []).includes(d))
+              .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+            const isToday = d === todayName;
+            return `
+              <div style="background:${isToday ? 'var(--light-blue)' : 'var(--bg)'};border-radius:10px;padding:10px;
+                          border:${isToday ? '2px solid var(--deped-blue)' : '1px solid var(--border)'};min-height:140px;">
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;
+                            color:${isToday ? 'var(--deped-blue)' : 'var(--text-muted)'};margin-bottom:8px;text-align:center;">
+                  ${d.slice(0, 3)}
+                </div>
+                ${dayEntries.length === 0
+                  ? '<p class="text-xs text-muted" style="text-align:center;opacity:.5;">—</p>'
+                  : dayEntries.map(e => {
+                    const color = e.color || '#0038A8';
+                    return `
+                      <div data-tl-edit="${Utils.attr(e.id)}"
+                           style="background:${color}15;border-left:3px solid ${color};border-radius:6px;
+                                  padding:6px 8px;margin-bottom:5px;cursor:pointer;"
+                           title="${Utils.attr(e.subject + (e.room ? ' · ' + e.room : ''))}">
+                        <div style="font-size:11px;font-weight:700;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                          ${Utils.esc(e.subject)}
+                        </div>
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">
+                          ${Pages._tlFormatTime(e.startTime).replace(/ ?[AP]M/, '')}
+                        </div>
+                      </div>`;
+                  }).join('')}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- All Assignments -->
+      <div class="card">
+        <div class="card-head">
+          <h3>All Assignments</h3>
+          <span class="text-xs text-muted">${all.length} entr${all.length === 1 ? 'y' : 'ies'}</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Subject</th>
+                <th>Grade &amp; Section</th>
+                <th>Days</th>
+                <th>Time</th>
+                <th>Room</th>
+                <th>Duration</th>
+                <th style="width:100px;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${all.map(e => {
+                const dur = Pages._tlDuration(e.startTime, e.endTime);
+                const durStr = dur >= 60
+                  ? Math.floor(dur / 60) + 'h ' + (dur % 60 ? (dur % 60) + 'm' : '').trim()
+                  : dur + 'm';
+                const color = e.color || '#0038A8';
+                return `
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="width:6px;height:24px;border-radius:3px;background:${color};flex-shrink:0;"></span>
+                        <strong>${Utils.esc(e.subject)}</strong>
+                      </div>
+                    </td>
+                    <td>${Utils.esc(e.gradeSection || '—')}</td>
+                    <td class="text-xs">${(e.days || []).map(d => d.slice(0, 3)).join(', ')}</td>
+                    <td style="white-space:nowrap;">${Pages._tlFormatTime(e.startTime)} – ${Pages._tlFormatTime(e.endTime)}</td>
+                    <td>${Utils.esc(e.room || '—')}</td>
+                    <td class="text-xs text-muted">${durStr}</td>
+                    <td class="table-actions">
+                      <button class="icon-btn" data-tl-edit="${Utils.attr(e.id)}" title="Edit">${icon('edit')}</button>
+                      <button class="icon-btn" data-tl-del="${Utils.attr(e.id)}" title="Delete">${icon('trash')}</button>
+                    </td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `}
+  `;
+
+  /* ---------- Bindings ---------- */
+  root.querySelector('#tl-add').onclick = () => Pages.openTeachingLoadModal();
+
+  const notifBtn = root.querySelector('#tl-notif-settings');
+  if (notifBtn) notifBtn.onclick = () => Pages.openTeachingLoadNotifSettings();
+
+  const enableBtn = root.querySelector('#tl-enable-notif');
+  if (enableBtn) enableBtn.onclick = async () => {
+    await DB.setSetting('teachingLoadNotifyEnabled', true);
+    App.navigate('teaching-load');
+    UI.toast('Period notifications enabled', 'success');
+  };
+
+  root.querySelectorAll('[data-tl-edit]').forEach(el => {
+    el.onclick = (ev) => { ev.stopPropagation(); Pages.openTeachingLoadModal(el.dataset.tlEdit); };
+  });
+  root.querySelectorAll('[data-tl-del]').forEach(el => {
+    el.onclick = () => Pages.deleteTeachingLoad(el.dataset.tlDel);
+  });
+},
+
+/* ============================================================================
+   TEACHING LOAD — add / edit modal
+   ============================================================================ */
+async openTeachingLoadModal(id) {
+  const existing = id ? await DB.get('teachingLoad', id) : null;
+  const weekDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const colors = ['#0038A8','#0057B8','#0891B2','#198754','#7C3AED','#BE185D','#DC3545','#F59E0B'];
+
+  const body = `
+    <div class="form-row">
+      <div class="form-group">
+        <label>Subject <span class="req">*</span></label>
+        <input class="form-control" id="tl-subj" value="${existing ? Utils.attr(existing.subject || '') : ''}" placeholder="e.g. Mathematics">
+      </div>
+      <div class="form-group">
+        <label>Grade &amp; Section</label>
+        <input class="form-control" id="tl-gsec" value="${existing ? Utils.attr(existing.gradeSection || '') : ''}" placeholder="e.g. Grade 9 - Saint Claire">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Room</label>
+        <input class="form-control" id="tl-room" value="${existing ? Utils.attr(existing.room || '') : ''}" placeholder="e.g. Room 201">
+      </div>
+      <div class="form-group">
+        <label>Color</label>
+        <div class="flex gap-6" style="flex-wrap:wrap;padding-top:6px;gap:6px;">
+          ${colors.map(c => `
+            <button type="button" class="tl-color-swatch" data-color="${c}"
+                    style="width:28px;height:28px;border-radius:50%;background:${c};
+                           border:${existing && existing.color === c ? '3px solid var(--text)' : '2px solid transparent'};
+                           cursor:pointer;transition:transform .15s;"></button>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Days <span class="req">*</span></label>
+      <div class="flex gap-12" style="flex-wrap:wrap;padding-top:4px;">
+        ${weekDays.map(d => `
+          <label class="auth-check" style="font-size:13px;">
+            <input type="checkbox" class="tl-day-cb" value="${d}" ${existing && (existing.days || []).includes(d) ? 'checked' : ''}>
+            <span>${d.slice(0, 3)}</span>
+          </label>`).join('')}
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Start Time <span class="req">*</span></label>
+        <input type="time" class="form-control" id="tl-start" value="${existing ? Utils.attr(existing.startTime || '') : ''}">
+      </div>
+      <div class="form-group">
+        <label>End Time <span class="req">*</span></label>
+        <input type="time" class="form-control" id="tl-end" value="${existing ? Utils.attr(existing.endTime || '') : ''}">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Notes <span class="text-muted" style="font-weight:400;">(optional)</span></label>
+      <textarea class="form-control" id="tl-notes" rows="2" placeholder="e.g. Bring lab materials">${existing ? Utils.esc(existing.notes || '') : ''}</textarea>
+    </div>`;
+
+  const m = UI.modal({
+    title: existing ? 'Edit Teaching Load' : 'Add Subject to Teaching Load',
+    body,
+    footer: `<button class="btn btn-outline" data-cancel>Cancel</button>
+             <button class="btn btn-primary" id="tl-save">${existing ? 'Save Changes' : 'Add Subject'}</button>`
+  });
+
+  let selectedColor = existing ? (existing.color || colors[0]) : colors[0];
+
+  m.overlay.querySelectorAll('.tl-color-swatch').forEach(sw => {
+    sw.onmouseenter = () => { sw.style.transform = 'scale(1.1)'; };
+    sw.onmouseleave = () => { sw.style.transform = ''; };
+    sw.onclick = () => {
+      selectedColor = sw.dataset.color;
+      m.overlay.querySelectorAll('.tl-color-swatch').forEach(s => {
+        s.style.border = s.dataset.color === selectedColor ? '3px solid var(--text)' : '2px solid transparent';
+      });
+    };
+  });
+
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+  m.overlay.querySelector('#tl-save').onclick = async () => {
+    const subject      = m.overlay.querySelector('#tl-subj').value.trim();
+    const gradeSection = m.overlay.querySelector('#tl-gsec').value.trim();
+    const room         = m.overlay.querySelector('#tl-room').value.trim();
+    const startTime    = m.overlay.querySelector('#tl-start').value;
+    const endTime      = m.overlay.querySelector('#tl-end').value;
+    const notes        = m.overlay.querySelector('#tl-notes').value.trim();
+    const days         = Array.from(m.overlay.querySelectorAll('.tl-day-cb:checked')).map(cb => cb.value);
+
+    if (!subject)   { UI.toast('Subject is required', 'warning'); return; }
+    if (!days.length) { UI.toast('Select at least one day', 'warning'); return; }
+    if (!startTime || !endTime) { UI.toast('Start and end times are required', 'warning'); return; }
+    if (Pages._tlTimeToMin(endTime) <= Pages._tlTimeToMin(startTime)) {
+      UI.toast('End time must be after start time', 'warning');
+      return;
+    }
+
+    const rec = {
+      id: existing ? existing.id : Utils.uid('tl-'),
+      subject, gradeSection, room, days, startTime, endTime, notes,
+      color: selectedColor,
+      createdAt: existing ? existing.createdAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await DB.put('teachingLoad', rec);
+    App.logActivity(
+      existing ? `Teaching load updated: ${subject}` : `Subject added to teaching load: ${subject}`,
+      'Teaching Load'
+    );
+    m.close();
+    App.navigate('teaching-load');
+    UI.toast(existing ? 'Assignment updated' : 'Subject added', 'success');
+  };
+},
+
+/* ============================================================================
+   TEACHING LOAD — delete
+   ============================================================================ */
+async deleteTeachingLoad(id) {
+  const e = await DB.get('teachingLoad', id);
+  if (!e) return;
+  UI.confirm({
+    title: 'Delete Assignment',
+    message: `Remove <strong>${Utils.esc(e.subject)}</strong> from your teaching load?`,
+    confirmText: 'Delete',
+    confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      await DB.delete('teachingLoad', id);
+      App.logActivity('Teaching load entry deleted: ' + e.subject, 'Teaching Load');
+      App.navigate('teaching-load');
+      UI.toast('Removed from teaching load', 'success');
+    }
+  });
+},
+
+/* ============================================================================
+   TEACHING LOAD — notification settings modal
+   ============================================================================ */
+async openTeachingLoadNotifSettings() {
+  const enabled = await DB.getSetting('teachingLoadNotifyEnabled', true);
+  const lead    = Number(await DB.getSetting('teachingLoadNotifyMin', 10)) || 10;
+
+  const m = UI.modal({
+    title: 'Period Notification Settings',
+    body: `
+      <p class="text-sm text-muted mb-16">
+        KlazAssist checks your teaching load every minute. When a class is about to start, you'll receive a
+        notification in the bell menu and a toast on this device.
+      </p>
+
+      <label class="wheel-toggle-row mb-12" style="cursor:pointer;">
+        <input type="checkbox" id="tl-set-enabled" ${enabled ? 'checked' : ''}>
+        <div class="wtr-body">
+          <div class="wtr-title">Enable period notifications</div>
+          <div class="wtr-desc">Get notified a few minutes before each class begins.</div>
+        </div>
+      </label>
+
+      <div class="form-group">
+        <label>Notify me before the period starts</label>
+        <select class="form-control" id="tl-set-lead">
+          <option value="5"  ${lead === 5  ? 'selected' : ''}>5 minutes before</option>
+          <option value="10" ${lead === 10 ? 'selected' : ''}>10 minutes before</option>
+          <option value="15" ${lead === 15 ? 'selected' : ''}>15 minutes before</option>
+          <option value="20" ${lead === 20 ? 'selected' : ''}>20 minutes before</option>
+          <option value="30" ${lead === 30 ? 'selected' : ''}>30 minutes before</option>
+        </select>
+      </div>
+
+      <div class="divider"></div>
+
+      <button class="btn btn-secondary btn-block" id="tl-test-notif">
+        ${icon('signal')} Send a Test Notification
+      </button>
+      <p class="text-xs text-muted mt-8" style="text-align:center;">
+        The test fires a notification right now so you can verify it works.
+      </p>`,
+    footer: `<button class="btn btn-outline" data-cancel>Cancel</button>
+             <button class="btn btn-primary" id="tl-set-save">Save</button>`
+  });
+
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+
+  m.overlay.querySelector('#tl-test-notif').onclick = async () => {
+    const soonMin = (new Date().getHours() * 60 + new Date().getMinutes() + 5);
+    const testStart = Pages._tlMinToTime(soonMin);
+    const msg = `⏰ Test Subject (Grade 9 - Sample) starts in 5 minutes at ${Pages._tlFormatTime(testStart)} · Room 101`;
+
+    await App.addNotification({
+      id: Utils.uid('n-'),
+      message: msg,
+      module: 'teaching-load',
+      timestamp: new Date().toISOString(),
+      read: false,
+      type: 'info'
+    });
+
+    UI.toast(msg, 'info', 10000);
+    if (typeof Pages._playWheelTimeUpSound === 'function') {
+      try { Pages._playWheelTimeUpSound(); } catch (e) {}
+    }
+    UI.toast('Test notification sent — check the bell menu.', 'success', 3000);
+  };
+
+  m.overlay.querySelector('#tl-set-save').onclick = async () => {
+    await DB.setSetting('teachingLoadNotifyEnabled', m.overlay.querySelector('#tl-set-enabled').checked);
+    await DB.setSetting('teachingLoadNotifyMin', Number(m.overlay.querySelector('#tl-set-lead').value) || 10);
+    App.logActivity('Teaching load notification settings updated', 'Settings');
+    m.close();
+    App.navigate('teaching-load');
+    UI.toast('Settings saved', 'success');
+  };
+},
+
+/* ============================================================================
+   TEACHING LOAD — minute-by-minute notification check
+   ============================================================================ */
+async checkTeachingLoadNotifications() {
+  // Skip if not signed in or locked
+  if (!Session.state.authenticated || Session.state.locked) return;
+
+  // Reset the "already notified" tracker when the day changes
+  const todayISO = Utils.todayISO();
+  if (State._tlNotifiedDate !== todayISO) {
+    State._tlNotifiedDate = todayISO;
+    State._tlNotifiedToday = {};
+  }
+
+  try {
+    const enabled = await DB.getSetting('teachingLoadNotifyEnabled', true);
+    if (!enabled) return;
+
+    const lead = Number(await DB.getSetting('teachingLoadNotifyMin', 10)) || 10;
+
+    const now       = new Date();
+    const dayNames  = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const todayName = dayNames[now.getDay()];
+    const nowMin    = now.getHours() * 60 + now.getMinutes();
+
+    const all = (await DB.getAll('teachingLoad')) || [];
+
+    for (const entry of all) {
+      if (!(entry.days || []).includes(todayName)) continue;
+
+      const startMin = Pages._tlTimeToMin(entry.startTime);
+      const diff     = startMin - nowMin;
+
+      // Notify only within the lead window, and only once per day per entry
+      if (diff < 0 || diff > lead) continue;
+      if (State._tlNotifiedToday[entry.id]) continue;
+
+      State._tlNotifiedToday[entry.id] = true;
+
+      const minuteLabel = diff === 0
+        ? 'less than a minute'
+        : `${diff} minute${diff === 1 ? '' : 's'}`;
+
+      const msg = `⏰ ${entry.subject}` +
+        (entry.gradeSection ? ` (${entry.gradeSection})` : '') +
+        ` starts in ${minuteLabel}` +
+        (entry.room ? ` · ${entry.room}` : '');
+
+      await App.addNotification({
+        id: Utils.uid('n-'),
+        message: msg,
+        module: 'teaching-load',
+        timestamp: new Date().toISOString(),
+        read: false,
+        type: 'info'
+      });
+
+      UI.toast(msg, 'info', 8000);
+
+      if (typeof Pages._playWheelTimeUpSound === 'function') {
+        try { Pages._playWheelTimeUpSound(); } catch (e) {}
+      }
+
+      App.logActivity('Period reminder: ' + entry.subject + ' (in ' + minuteLabel + ')', 'Teaching Load');
+    }
+  } catch (e) {
+    console.warn('[Teaching Load] notification check failed:', e);
+  }
+},
+
   async about(root) {
     root.innerHTML = `
       <div class="page-head"><div><h2>About</h2><p>Application information</p></div></div>
@@ -33672,7 +36622,14 @@ Pages._buildPresenterState = function(tool) {
       return rz ? { label: rz.label, display: rz.display } : { label: 'Randomizer', display: '—' };
     }
     case 'noise-meter':
-      return { level: 0, label: 'Silent', color: '#198754' };
+      return {
+        level: 0,
+        label: 'Silent',
+        color: '#198754',
+        mode: State._noiseDisplayMode  || 'balls',
+        theme: State._noiseBallTheme   || 'bubbles',
+        totalBalls: State._noiseTotalBalls || 40
+      };
     case 'signal': {
       const modes = {
         silent:     { label: 'Silent',      desc: 'No talking. Eyes on teacher.',    color: '#198754', icon: 'shield' },
@@ -33720,7 +36677,8 @@ const aliases = {
   'school-profile': 'schoolProfile',
   'activity-log': 'activityLog',
   'parent-notes': 'parentNotes',
-  'security-settings': 'securitySettings'
+  'security-settings': 'securitySettings',
+  'teaching-load': 'teachingLoad'
 };
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
@@ -33748,7 +36706,8 @@ for (const k in aliases) {
  '_seatMigratePlanDimensions','seatInitializeGrid','seatAddRowAtEnd','seatAddColumnAtEnd',
  'seatGridUniform','seatGridAutoFit','seatToggleOrientation','_seatInsertColumn','_seatInsertRow',
  '_seatDeleteColumn','_seatDeleteRow','_seatOpenContextMenu', '_seatToggleBlocked',
- 'openCalendarEventById'
+ 'openCalendarEventById',
+ 'openTeachingLoadModal','deleteTeachingLoad','openTeachingLoadNotifSettings'    // ← NEW
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
 /* ============================================================================
    EXPORTS + BOOT
