@@ -5082,10 +5082,10 @@ const SampleData = {
   async create() {
     await DB.put('schools', {
       id: Utils.uid('s-'),
-      name: 'San Isidro National High School', schoolId: '305123',
-      region: 'Region IV-A CALABARZON', division: 'Division of Laguna',
-      district: 'San Isidro District', address: 'San Isidro, Laguna',
-      schoolHead: 'Dr. Roberto M. Villanueva', contact: '(049) 555-1234', sample: true
+      name: 'Cabalinadan High School', schoolId: '309766',
+      region: 'Region V-Bicol', division: 'Division of Camarines Sur',
+      district: 'Tigaon District', address: 'Tigaon, Camarines Sur',
+      schoolHead: 'Wilfred John C. Ortinero', contact: '(049) 555-1234', sample: true
     });
     const sampleSY = State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
     const samplePolicy = GradingEngine.resolvePolicy({ schoolYear: sampleSY });
@@ -5117,7 +5117,7 @@ const SampleData = {
         firstName: first, middleName: this.middleNames[i % this.middleNames.length],
         lastName: last, suffix: '', sex,
         birthDate: `${birthYear}-${String(birthMonth).padStart(2,'0')}-${String(birthDay).padStart(2,'0')}`,
-        address: (i+1) + ' ' + this.streets[i % this.streets.length] + ', San Isidro, Laguna',
+        address: (i+1) + ' ' + this.streets[i % this.streets.length] + ', Goa, Camarines Sur',
         parent: 'Mr./Mrs. ' + last, parentContact: '09' + String(170000000 + i * 111).slice(0,9),
         emergencyContact: '09' + String(180000000 + i * 222).slice(0,9),
         medicalNotes: '', remarks: '', status: 'Active', photo: '',
@@ -8140,6 +8140,16 @@ const XlsxWriter = {
       ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>';
 
+    // ▼▼▼ ADD THIS BLOCK ▼▼▼
+    const proBadgeHTML = Licensing.isPro()
+      ? `<div class="hero-pro-badge active" onclick="App.navigate('settings')" title="Pro License Active">
+           ${icon('star')} PRO LICENSE
+         </div>`
+      : `<div class="hero-pro-badge" onclick="Pages.openUpgradeModal()" title="Upgrade to Pro">
+           ${icon('star')} FREE LICENSE
+         </div>`;
+    // ▲▲▲ END ADD ▲▲▲
+
     const classChips = State.classes.length
       ? `<div class="hero-class-chips">
           ${State.classes.map(c => {
@@ -8156,6 +8166,7 @@ const XlsxWriter = {
 
     let html = `
       <div class="hero-banner">
+       ${proBadgeHTML}
         <div style="display:flex;gap:20px;align-items:center;position:relative;z-index:1;flex-wrap:wrap;">
           <div class="hero-teacher-avatar"
                id="hero-teacher-avatar"
@@ -11975,7 +11986,7 @@ _showClassMismatchDialog(comparison, classInfo) {
 
     const body = `
       <div class="alert alert-info mb-16">${icon('info')}<div>
-        Import learners from a <strong>DepEd LIS-generated SF1 (.xlsx)</strong>, a <strong>.csv file</strong>, or by <strong>pasting rows from Excel / Google Sheets</strong>. You'll see a full preview and validation report before anything is saved.
+        Import learners from a <strong>DepEd LIS-generated SF1 (.xls, .xlsx)</strong>, a <strong>.csv file</strong>, or by <strong>pasting rows from Excel / Google Sheets</strong>. You'll see a full preview and validation report before anything is saved.
       </div></div>
 
       <div class="tabs mb-16">
@@ -28489,7 +28500,7 @@ If you received this message, Web3Forms is configured correctly and you can now 
         </div>
         <div class="form-group">
           <label>School / Station</label>
-          <input class="form-control" id="tp-school" value="${Utils.attr(t.school || '')}" placeholder="e.g. San Isidro National High School">
+          <input class="form-control" id="tp-school" value="${Utils.attr(t.school || '')}" placeholder="e.g. Cabalinadan High School">
         </div>
       </div>
 
@@ -29605,7 +29616,7 @@ openUpgradeModal(featureId) {
       <div class="card mb-16" style="border:2px solid var(--deped-blue);">
         <div class="flex-between" style="align-items:center;flex-wrap:wrap;gap:12px;">
           <div>
-            <div style="font-weight:800;font-size:24px;color:var(--deped-blue);">₱499</div>
+            <div style="font-weight:800;font-size:24px;color:var(--deped-blue);">₱799</div>
             <div class="text-xs text-muted">One-time payment · Lifetime access</div>
           </div>
           <button class="btn btn-primary btn-lg" id="upg-buy">
