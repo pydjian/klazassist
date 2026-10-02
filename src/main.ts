@@ -27041,22 +27041,26 @@ Notes:
           </div></div>`;
       }
     };
-    renderTab('general');
-    // Refresh storage card whenever the "data" tab is opened
-    const origRenderTab = renderTab;
-    renderTab = (tab) => {
-      origRenderTab(tab);
+    // Single renderTab that also handles the "post-render" work
+    // that used to live in a reassignment wrapper.
+    const renderTabWithExtras = (tab) => {
+      renderTab(tab);
+
+      // Refresh the storage card whenever the "data" tab is opened
       if (tab === 'data') {
         setTimeout(() => Pages.renderStorageHealth(), 0);
         const refreshBtn = content.querySelector('#st-refresh-storage');
         if (refreshBtn) refreshBtn.onclick = () => Pages.renderStorageHealth(true);
       }
     };
+
+    renderTabWithExtras('general');
+
     root.querySelectorAll('.tab').forEach(b => {
       b.onclick = () => {
         root.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
         b.classList.add('active');
-        renderTab(b.dataset.st);
+        renderTabWithExtras(b.dataset.st);
       };
     });
     content.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('click', () => App.navigate(el.dataset.goto)));
