@@ -153,32 +153,6 @@ npm run build
 npm run preview
 ```
 
-The dev server runs at `http://localhost:5173` (or whatever port Vite prints). **Do not open `index.html` directly via `file://`** — `fetch`, Web Crypto, and IndexedDB behave unpredictably on the `file://` protocol.
-
----
-
-## 🖼️ Screenshots
-
-<div align="center">
-
-### Dashboard
-<img src="./docs/screenshots/dashboard.png" alt="Dashboard" width="720">
-
-### Gradebook
-<img src="./docs/screenshots/gradebook.png" alt="Gradebook" width="720">
-
-### Wheel of Names
-<img src="./docs/screenshots/wheel.png" alt="Wheel of Names" width="720">
-
-### Noise Meter
-<img src="./docs/screenshots/noise-meter.png" alt="Noise Meter" width="720">
-
-</div>
-
-> Screenshots are stored in `docs/screenshots/`. Add your own — just drop PNGs there and update the paths above.
-
----
-
 ## 🧠 Grading Engine
 
 KlazAssist implements **DepEd Order No. 015, s. 2026** — the *Revised Guidelines on Classroom Assessment, Grading System, and Awards and Recognition for the K to 12 Basic Education Program*, effective SY 2026-2027.
