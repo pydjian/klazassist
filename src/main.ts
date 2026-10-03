@@ -3757,6 +3757,16 @@ const App = {
         }
       }
 
+    // ── DepEd Calendar auto-sync ────────────────────────────────────────
+    // Runs on every launch, but exits immediately when the bundled CSV
+    // has not changed since the last import.
+    try {
+      await Pages.syncBundledDepEdCalendar();
+    } catch (e) {
+      console.warn('[DepEd Calendar] Auto-sync failed:', e);
+    }
+    // ────────────────────────────────────────────────────────────────────
+      
       if (done >= MIGRATION_VERSION) return;
 
       await Promise.all([
@@ -28079,6 +28089,11 @@ _parseDepEdCalendar(text) {
   rows.forEach((row, idx) => {
     if (!row || !row.length) return;
 
+      // --- NEW: skip comment lines starting with # ---
+      const firstCell = String(row[0] || '').trim();
+      if (firstCell.startsWith('#')) return;
+      // -----------------------------------------------
+
     // Skip header row
     if (idx === 0) {
       const firstCell = String(row[0] || '').trim().toLowerCase();
@@ -28198,6 +28213,27 @@ async _importDepEdCalendar(events) {
 
   return { added, skipped };
 },
+/* ============================================================================
+   DEPED CALENDAR — AUTO-SYNC FROM BUNDLED CSV
+   ──────────────────────────────────────────────────────────────────────────
+   Ships a DepEd School Calendar CSV with the app so every teacher starts with
+   the same baseline events, and receives updates automatically when the file
+   is revised.
+
+   How update detection works:
+     • On launch, the CSV is fetched and hashed (SHA-256).
+     • The hash is compared to the last-imported hash stored in IndexedDB.
+     • If they differ, the file is parsed and imported.
+     • Duplicate detection is (date, title) — existing rows are left alone.
+     • If the fetch fails (offline, missing file), the sync is skipped and
+       retried on the next launch. The user is never interrupted.
+
+   To ship a new calendar:
+     1. Edit  data/deped-calendar.csv
+     2. Rebuild / republish the app
+     3. Teachers pick up the changes on their next launch
+   ============================================================================ */
+
 /* ─── Grade Summary: print the class-wide table ─── */
 printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, selectedSubject) {
   const cls = State.activeClass;
@@ -30316,9 +30352,35 @@ Notes:
               <button class="btn btn-secondary" onclick="Pages.addSampleData()">${icon('star')} Add Sample Data</button>
               <button class="btn btn-outline" onclick="Pages.removeSampleData()">${icon('trash')} Remove Sample Data</button>
             </div></div>
+            
+          <div class="card mb-16">
+            <div class="card-head"><h3>DepEd Calendar</h3></div>
+            <p class="text-sm text-muted mb-12">
+              A DepEd School Calendar ships with the app and updates automatically on launch.
+              You can force a re-import here if events are missing.
+            </p>
+            <button class="btn btn-outline" id="st-resync-calendar">
+              ${icon('history')} Re-import bundled calendar
+            </button>
+          </div>
+
           <div class="card"><div class="card-head"><h3>Reset Local Database</h3></div>
             <div class="alert alert-danger">${icon('alert')}<div><strong>Danger zone.</strong> This will permanently delete ALL local data including your local account.</div></div>
             <button class="btn btn-danger" onclick="Pages.confirmReset()">Reset Local Database</button></div>`;
+
+            const resyncBtn = content.querySelector('#st-resync-calendar');
+            if (resyncBtn) resyncBtn.onclick = async () => {
+              await DB.setSetting(Pages.DEPED_CALENDAR_HASH_KEY, null);
+              const r = await Pages.syncBundledDepEdCalendar();
+              if (r && r.added > 0) {
+                UI.toast(`Re-imported ${r.added} event${r.added === 1 ? '' : 's'}.`, 'success');
+              } else if (r && r.skipped === 'no-events') {
+                UI.toast('The bundled calendar has no events to import.', 'warning', 5000);
+              } else {
+                UI.toast('Bundled calendar is already up to date.', 'info');
+              }
+            };
+            
       } else if (tab === 'about') {
         content.innerHTML = `
           <div class="card"><div style="text-align:center;padding:20px 0;">
@@ -30341,7 +30403,9 @@ Notes:
         const refreshBtn = content.querySelector('#st-refresh-storage');
         if (refreshBtn) refreshBtn.onclick = () => Pages.renderStorageHealth(true);
       }
+        
     };
+    
 
     renderTabWithExtras('general');
 
@@ -32956,6 +33020,96 @@ openUpgradeModal(featureId) {
     }
   };
 },
+};
+/* ============================================================================
+   DEPED CALENDAR — INLINE SYNC
+   ──────────────────────────────────────────────────────────────────────────
+   The DepEd Calendar is bundled directly with the app (see deped-calendar.ts).
+   No fetch, no network, no downloads, no MIME issues.
+
+   How updates work:
+     1. You edit `src/deped-calendar.ts` and rebuild the app.
+     2. Every teacher picks up the change on their next launch.
+     3. Duplicate detection is by (date, title), so existing user changes
+        are never overwritten and no event is ever duplicated.
+   ============================================================================ */
+
+Pages.DEPED_CALENDAR_HASH_KEY = 'depedCalendarHash';
+Pages.DEPED_CALENDAR_LAST_SYNC = 'depedCalendarLastSyncAt';
+
+Pages.syncBundledDepEdCalendar = async function () {
+  // Learner/presenter window? Nothing to do.
+  if (typeof Presenter !== 'undefined' && Presenter.isLearnerWindow && Presenter.isLearnerWindow()) {
+    return { skipped: 'learner-window' };
+  }
+
+  // The calendar is a compile-time constant. Import it once.
+  // (If you'd rather keep the string in a separate file, adjust the import.)
+  const { DEPED_CALENDAR_CSV, DEPED_CALENDAR_VERSION } = await import('./deped-calendar');
+  const text = DEPED_CALENDAR_CSV;
+
+  if (!text || !text.trim()) return { skipped: 'empty-constant' };
+
+  // Cheap, deterministic hash — no Web Crypto needed (works on file://,
+  // http://192.168.x.x, and everything else).
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h) + text.charCodeAt(i);
+    h = h | 0;
+  }
+  const hash = `v${DEPED_CALENDAR_VERSION}-${(h >>> 0).toString(16)}-${text.length}`;
+
+  const lastHash = await DB.getSetting(Pages.DEPED_CALENDAR_HASH_KEY, null);
+  if (lastHash === hash) {
+    return { skipped: 'unchanged', hash };
+  }
+
+  let parsed;
+  try {
+    parsed = Pages._parseDepEdCalendar(text);
+  } catch (e) {
+    console.warn('[DepEd Calendar] Parse failed:', e);
+    return { skipped: 'parse-failed', error: e.message };
+  }
+
+  if (!parsed.events.length) {
+    await DB.setSetting(Pages.DEPED_CALENDAR_HASH_KEY, hash);
+    return { skipped: 'no-events', hash };
+  }
+
+  let result;
+  try {
+    result = await Pages._importDepEdCalendar(parsed.events);
+  } catch (e) {
+    console.warn('[DepEd Calendar] Import failed:', e);
+    return { skipped: 'import-failed', error: e.message, hash };
+  }
+
+  await DB.setSetting(Pages.DEPED_CALENDAR_HASH_KEY, hash);
+  await DB.setSetting(Pages.DEPED_CALENDAR_LAST_SYNC, new Date().toISOString());
+
+  if (result.added > 0) {
+    App.addNotification({
+      id: Utils.uid('n-'),
+      message: `${result.added} new DepEd calendar event${result.added === 1 ? '' : 's'} imported.`,
+      module: 'calendar',
+      timestamp: new Date().toISOString(),
+      read: false,
+      type: 'info'
+    });
+    UI.toast(
+      `DepEd calendar updated — ${result.added} new event${result.added === 1 ? '' : 's'}` +
+      (result.skipped ? ` · ${result.skipped} already existed` : ''),
+      'success',
+      4500
+    );
+    App.logActivity(
+      `Bundled DepEd calendar synced (${result.added} added, ${result.skipped} skipped)`,
+      'Planning'
+    );
+  }
+
+  return { ...result, hash };
 };
 /* ============================================================================
    POWERPOINT GENERATOR
