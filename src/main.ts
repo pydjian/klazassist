@@ -5310,18 +5310,28 @@ const Dashboard = {
     }
   },
 
-  WIDGETS: [
-    { id: 'prompt',       label: 'Next Action',           icon: 'play',      span: 'full' },
-    { id: 'stats',        label: 'Key Numbers',            icon: 'chart' },
-    { id: 'attention',    label: 'Needs Your Attention',   icon: 'alert' },
-    { id: 'attendance',   label: "Today's Attendance",     icon: 'check' },
-    { id: 'performance',  label: 'Class Performance',      icon: 'trending' },
-    { id: 'schedule',     label: "Today's Schedule",       icon: 'calendar' },
-    { id: 'birthdays',    label: 'Upcoming Birthdays',     icon: 'star' },
-    { id: 'upcoming',     label: 'Upcoming Activities',    icon: 'file' },
-    { id: 'quicktools',   label: 'Quick Tools',            icon: 'grid',      span: 'full' },
-    { id: 'activity',     label: 'Recent Activity',        icon: 'history' }
-  ],
+WIDGETS: [
+  { id: 'prompt',       label: 'Next Action',           icon: 'play',      span: 'full',
+    desc: 'A time-aware nudge showing what to do right now.' },
+  { id: 'stats',        label: 'Key Numbers',            icon: 'chart',
+    desc: "Today's attendance, tasks, and headcounts at a glance." },
+  { id: 'attention',    label: 'Needs Your Attention',   icon: 'alert',
+    desc: 'Attendance streaks, overdue work, and data gaps.' },
+  { id: 'attendance',   label: "Today's Attendance",     icon: 'check',
+    desc: 'Live attendance breakdown for the current day.' },
+  { id: 'performance',  label: 'Class Performance',      icon: 'trending',
+    desc: 'Average scores across recent assessments.' },
+  { id: 'schedule',     label: "Today's Schedule",       icon: 'calendar',
+    desc: 'Your timetable for the day, current period marked.' },
+  { id: 'birthdays',    label: 'Upcoming Birthdays',     icon: 'star',
+    desc: 'Learner birthdays over the next 30 days.' },
+  { id: 'upcoming',     label: 'Upcoming Activities',    icon: 'file',
+    desc: 'Assignments, calendar events, and deadlines.' },
+  { id: 'quicktools',   label: 'Quick Tools',            icon: 'grid',      span: 'full',
+    desc: 'Shortcuts to the tools you use most often.' },
+  { id: 'activity',     label: 'Recent Activity',        icon: 'history',
+    desc: 'A running log of recent actions in the app.' }
+],
   DEFAULT_ORDER: ['prompt','stats','attention','attendance','performance','schedule','birthdays','upcoming','quicktools','activity'],
 
   async loadLayout() {
@@ -9015,54 +9025,117 @@ async _renderDashUpcoming(s) {
   },
 
   /* ---------- Customize modal ---------- */
-  async _openDashboardCustomize() {
-    const layout = await Dashboard.loadLayout();
-    const m = UI.modal({
-      title: 'Customize Dashboard',
-      body: `
-        <p class="text-sm text-muted mb-12">Check a widget to show it on your dashboard. Drag the rows (in the actual dashboard) to reorder.</p>
-        <div class="dash-customize-list">
-          ${Dashboard.WIDGETS.map(w => `
-            <div class="dash-customize-row">
-              <label>
-                <input type="checkbox" data-widget-toggle="${Utils.attr(w.id)}" ${layout.hidden.includes(w.id) ? '' : 'checked'}>
-                <span>${icon(w.icon)} ${Utils.esc(w.label)}</span>
-              </label>
-            </div>`).join('')}
+async _openDashboardCustomize() {
+  const layout = await Dashboard.loadLayout();
+
+  // Show rows in the same order as the dashboard itself
+  const orderedWidgets = layout.order
+    .map(id => Dashboard.WIDGETS.find(w => w.id === id))
+    .filter(Boolean);
+
+  const visibleCount = orderedWidgets.length - layout.hidden.length;
+  const totalCount = orderedWidgets.length;
+
+  const m = UI.modal({
+    title: 'Customize Dashboard',
+    size: 'modal-lg',
+    body: `
+      <p class="text-sm text-muted mb-16">
+        Choose which widgets appear on your dashboard. To reorder them, drag the handles on the dashboard itself.
+      </p>
+
+      <div class="dash-customize-toolbar">
+        <div class="flex gap-8">
+          <button type="button" class="btn btn-sm btn-outline" id="dash-show-all">
+            ${icon('check')} Show all
+          </button>
+          <button type="button" class="btn btn-sm btn-outline" id="dash-hide-all">
+            ${icon('xCircle')} Hide all
+          </button>
         </div>
-        <div style="margin-top:14px;text-align:right;">
-          <button class="btn btn-ghost btn-sm" id="dash-reset-layout">Reset to default layout</button>
-        </div>`,
-      footer: `<button class="btn btn-outline" data-close>Cancel</button>
-               <button class="btn btn-primary" id="dash-customize-save">Save</button>`
+        <span class="text-xs text-muted" id="dash-customize-count">
+          ${visibleCount} of ${totalCount} visible
+        </span>
+      </div>
+
+      <div class="dash-customize-list">
+        ${orderedWidgets.map(w => `
+          <label class="dash-customize-row">
+            <span class="dc-icon">${icon(w.icon)}</span>
+            <span class="dc-body">
+              <span class="dc-label">${Utils.esc(w.label)}</span>
+              <span class="dc-desc">${Utils.esc(w.desc || '')}</span>
+            </span>
+            <span class="dc-switch">
+              <input type="checkbox"
+                     data-widget-toggle="${Utils.attr(w.id)}"
+                     ${layout.hidden.includes(w.id) ? '' : 'checked'}>
+              <span class="dc-switch-track"><span class="dc-switch-thumb"></span></span>
+            </span>
+          </label>`).join('')}
+      </div>
+
+      <div class="dash-customize-footer">
+        <button type="button" class="btn btn-ghost btn-sm" id="dash-reset-layout">
+          ${icon('history')} Reset to default layout
+        </button>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="dash-customize-save">
+        ${icon('save')} Save
+      </button>
+    `
+  });
+
+  const updateCount = () => {
+    const visible = m.overlay.querySelectorAll('[data-widget-toggle]:checked').length;
+    const total = m.overlay.querySelectorAll('[data-widget-toggle]').length;
+    const el = m.overlay.querySelector('#dash-customize-count');
+    if (el) el.textContent = `${visible} of ${total} visible`;
+  };
+
+  m.overlay.querySelectorAll('[data-widget-toggle]').forEach(cb => {
+    cb.addEventListener('change', updateCount);
+  });
+
+  m.overlay.querySelector('#dash-show-all').onclick = () => {
+    m.overlay.querySelectorAll('[data-widget-toggle]').forEach(cb => { cb.checked = true; });
+    updateCount();
+  };
+
+  m.overlay.querySelector('#dash-hide-all').onclick = () => {
+    m.overlay.querySelectorAll('[data-widget-toggle]').forEach(cb => { cb.checked = false; });
+    updateCount();
+  };
+
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+
+  m.overlay.querySelector('#dash-customize-save').onclick = async () => {
+    const hidden = [];
+    m.overlay.querySelectorAll('[data-widget-toggle]').forEach(cb => {
+      if (!cb.checked) hidden.push(cb.dataset.widgetToggle);
     });
+    const current = await Dashboard.loadLayout();
+    current.hidden = hidden;
+    await Dashboard.saveLayout(current);
+    App.logActivity('Dashboard layout updated', 'Settings');
+    m.close();
+    App.navigate('dashboard');
+  };
 
-    m.overlay.querySelector('[data-close]').onclick = m.close;
-
-    m.overlay.querySelector('#dash-customize-save').onclick = async () => {
-      const hidden = [];
-      m.overlay.querySelectorAll('[data-widget-toggle]').forEach(cb => {
-        if (!cb.checked) hidden.push(cb.dataset.widgetToggle);
-      });
-      const current = await Dashboard.loadLayout();
-      current.hidden = hidden;
-      await Dashboard.saveLayout(current);
-      App.logActivity('Dashboard layout updated', 'Settings');
-      m.close();
-      App.navigate('dashboard');
-    };
-
-    m.overlay.querySelector('#dash-reset-layout').onclick = async () => {
-      await Dashboard.saveLayout({
-        order: Dashboard.DEFAULT_ORDER.slice(),
-        hidden: [],
-        collapsed: {}
-      });
-      App.logActivity('Dashboard layout reset', 'Settings');
-      m.close();
-      App.navigate('dashboard');
-    };
-  },
+  m.overlay.querySelector('#dash-reset-layout').onclick = async () => {
+    await Dashboard.saveLayout({
+      order: Dashboard.DEFAULT_ORDER.slice(),
+      hidden: [],
+      collapsed: {}
+    });
+    App.logActivity('Dashboard layout reset', 'Settings');
+    m.close();
+    App.navigate('dashboard');
+  };
+},
 
   async loadLearnersNeedingAttention() {
     const el = document.getElementById('dash-attention');
@@ -30380,7 +30453,7 @@ Notes:
                 UI.toast('Bundled calendar is already up to date.', 'info');
               }
             };
-            
+
       } else if (tab === 'about') {
         content.innerHTML = `
           <div class="card"><div style="text-align:center;padding:20px 0;">
