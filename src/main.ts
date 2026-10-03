@@ -84,7 +84,8 @@ const PRO_FEATURES = {
   'grade-summary':        { tier: 'pro', label: 'Grade Summary / GWA' },
   'item-analysis':        { tier: 'pro', label: 'Item Analysis' },
 
-  // Bulk tools
+  // Printable reports & bulk exports
+  'printable-reports':    { tier: 'pro', label: 'Printable Reports' },
   'export-center':        { tier: 'pro', label: 'Export Center' }
 };
 
@@ -672,6 +673,26 @@ const Utils = {
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   },
   attr(str) { return this.esc(str); },
+  
+  /**
+   * Safely toggle a class on an element, coercing the force argument
+   * to a real boolean. Prevents the classic footgun where an
+   * `undefined` force argument is treated by the DOM spec as
+   * "not passed at all", causing toggle to flip the class instead
+   * of forcing it on or off.
+   *
+   * Accepts either an Element or a CSS selector string.
+   * Returns true if the class is now present, false otherwise.
+   */
+  setClass(target, className, force) {
+    const el = typeof target === 'string'
+      ? document.querySelector(target)
+      : target;
+    if (!el || !el.classList) return false;
+    el.classList.toggle(className, !!force);
+    return el.classList.contains(className);
+  },
+  // ↑↑↑ END ADD ↑↑↑
   todayISO() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
@@ -2739,20 +2760,11 @@ const NAV = [
     { id: 'learner-performance', label: 'Learner Performance', icon: 'user-check' }
   ]},
   { section: 'TEACHING TOOLS', items: [
-    { id: 'random-picker', label: 'Random Student Picker', icon: 'shuffle' },
-    { id: 'timer', label: 'Timer & Stopwatch', icon: 'timer' },
-    { id: 'randomizer', label: 'Randomizer', icon: 'dice' },
-    { id: 'wheel', label: 'Wheel of Names', icon: 'wheel' },
-    { id: 'noise-meter', label: 'Noise Meter', icon: 'volume' },
-    { id: 'signal', label: 'Classroom Signal', icon: 'signal' }
+    { id: 'teaching-tools', label: 'Teaching Tools', icon: 'shuffle' }
   ]},
-{ section: 'LESSON & PLANNING', items: [
-    { id: 'lesson-planner',        label: 'Lesson Planner',         icon: 'book-open' },
-    { id: 'tos-generator',         label: 'TOS & Exam Generator',   icon: 'file' },
-    { id: 'powerpoint-generator',  label: 'PowerPoint Generator',   icon: 'play' },   /* NEW */
-    { id: 'weekly-planner',        label: 'Weekly Planner',         icon: 'calendar' },
-    { id: 'calendar',              label: 'Calendar',               icon: 'calendar' }
-]},
+  { section: 'LESSON & PLANNING', items: [
+    { id: 'planning', label: 'Lesson & Planning', icon: 'book-open' }
+  ]},
   { section: 'SCHOOL FORMS', items: [
     { id: 'sf1', label: 'SF1 — School Register', icon: 'file' },
     { id: 'sf2', label: 'SF2 — Daily Attendance', icon: 'calendar' },
@@ -2837,6 +2849,11 @@ const State = {
   storageEstimate: null
 };
 
+/* Which nav item should appear "active" when a hub's sub-page is open? */
+const HUB_CHILDREN = {
+  'teaching-tools': ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
+  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator', 'weekly-planner', 'calendar']
+};
 /* ============================================================================
    AUTH UI
    ============================================================================ */
@@ -3467,6 +3484,25 @@ const App = {
       await this.loadState();
 
       this.renderSidebar();
+
+            // 1 · Pre-decode the DepEd seal so the first print job never shows a blank header.
+      try { const warm = new Image(); warm.src = DEPED_SEAL_PATH; } catch (e) {}
+
+      // 2 · Pre-decode the school logo.
+      try {
+        const s = State.schools[0];
+        if (s && s.schoolLogo) { const w2 = new Image(); w2.src = s.schoolLogo; }
+      } catch (e) {}
+
+      // 3 · Pre-load the blackletter font used on DepEd letterheads.
+      //     document.fonts.load() forces the browser to fetch and decode the font
+      //     file immediately, so it's ready by the time the user prints anything.
+      try {
+        if (document.fonts && document.fonts.load) {
+          document.fonts.load('16px "UnifrakturMaguntia"').catch(() => {});
+        }
+      } catch (e) {}
+
       this.bindEvents();
       this.applyTheme(State.theme);
 
@@ -3952,9 +3988,12 @@ const App = {
 
     this.toggleSidebar(false);
 
-    document.querySelectorAll('.nav-item').forEach(el =>
-      el.classList.toggle('active', el.dataset.nav === id)
-    );
+    document.querySelectorAll('.nav-item').forEach(el => {
+      const navId = el.dataset.nav;
+      const isDirect = navId === id;
+      const isParentOfActive = !!(HUB_CHILDREN[navId] && HUB_CHILDREN[navId].includes(id));
+      Utils.setClass(el, 'active', isDirect || isParentOfActive);
+    });
     document.querySelectorAll('.bottom-nav button').forEach(el =>
       el.classList.toggle('active', el.dataset.nav === id)
     );
@@ -8140,15 +8179,55 @@ const XlsxWriter = {
       ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>';
 
-    // ▼▼▼ ADD THIS BLOCK ▼▼▼
+    // ▼▼▼ REPLACE THE PRO BADGE BLOCK WITH THIS ▼▼▼
     const proBadgeHTML = Licensing.isPro()
-      ? `<div class="hero-pro-badge active" onclick="App.navigate('settings')" title="Pro License Active">
-           ${icon('star')} PRO LICENSE
+      ? `<div class="hero-pro-badge premium active" onclick="App.navigate('settings')" title="Pro License Active">
+           <span class="hpb-shine"></span>
+           <span class="hpb-sparkles">
+             <span class="hpb-spark s1"></span>
+             <span class="hpb-spark s2"></span>
+             <span class="hpb-spark s3"></span>
+             <span class="hpb-spark s4"></span>
+           </span>
+           <span class="hpb-inner">
+             <span class="hpb-crown">
+               <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                 <path d="M2.5 7.5l4.5 4 5-7 5 7 4.5-4-2 12.5H4.5L2.5 7.5z" />
+                 <circle cx="2.5" cy="7.5" r="1.6"/>
+                 <circle cx="21.5" cy="7.5" r="1.6"/>
+                 <circle cx="12" cy="4.5" r="1.6"/>
+               </svg>
+             </span>
+             <span class="hpb-text">
+               <span class="hpb-label">PRO</span>
+               <span class="hpb-sub">Licensed</span>
+             </span>
+           </span>
          </div>`
-      : `<div class="hero-pro-badge" onclick="Pages.openUpgradeModal()" title="Upgrade to Pro">
-           ${icon('star')} FREE LICENSE
+      : `<div class="hero-pro-badge premium" onclick="Pages.openUpgradeModal()" title="Upgrade to KlazAssist Pro">
+           <span class="hpb-shine"></span>
+           <span class="hpb-sparkles">
+             <span class="hpb-spark s1"></span>
+             <span class="hpb-spark s2"></span>
+             <span class="hpb-spark s3"></span>
+             <span class="hpb-spark s4"></span>
+           </span>
+           <span class="hpb-inner">
+             <span class="hpb-crown">
+               <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                 <path d="M2.5 7.5l4.5 4 5-7 5 7 4.5-4-2 12.5H4.5L2.5 7.5z" />
+                 <circle cx="2.5" cy="7.5" r="1.6"/>
+                 <circle cx="21.5" cy="7.5" r="1.6"/>
+                 <circle cx="12" cy="4.5" r="1.6"/>
+               </svg>
+             </span>
+             <span class="hpb-text">
+               <span class="hpb-label">Unlock PRO</span>
+               <span class="hpb-sub">Go Premium →</span>
+             </span>
+           </span>
          </div>`;
-    // ▲▲▲ END ADD ▲▲▲
+    // ▲▲▲ END REPLACEMENT ▲▲▲
 
     const classChips = State.classes.length
       ? `<div class="hero-class-chips">
@@ -12688,19 +12767,37 @@ _showClassMismatchDialog(comparison, classInfo) {
     const teacher = State.currentUser || {};
     const cls = State.activeClass;
     document.getElementById('print-area').innerHTML = `
-      <div class="print-header"><h1>${Utils.esc(school.name || 'School Name')}</h1>
-        <p>${Utils.esc(school.address || '')} · School ID: ${Utils.esc(school.schoolId || '—')}</p>
-        <p>${Utils.esc(school.division || '')} · ${Utils.esc(school.region || '')}</p>
-        <div class="print-line"></div>
-        <h2 style="font-size:13pt;">${type === 'daily' ? 'Daily Attendance Report' : type === 'summary' ? 'Class Attendance Summary' : 'Learner Attendance Summary'}</h2>
-      </div>
-        <div class="print-meta"><span>Teacher: ${Utils.esc(Licensing.getReportSignatory(cls) || '—')}</span><span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span><span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span><span>Date: ${Utils.formatDate(date)}</span></div>
-      <table><thead><tr>${Object.keys(rows[0]||{}).map(k => `<th>${Utils.esc(k)}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map(r => `<tr>${Object.keys(r).map(k => `<td>${Utils.esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table>
-      <div class="print-footer"><span>Generated: ${Utils.formatDateTime(new Date().toISOString())}</span><span>KlazAssist</span></div>`;
-    window.print();
+      <div class="print-attendance">
+        ${Pages._buildDepEdHeader()}
+        <h3 style="text-align:center;font-size:13pt;margin:10px 0 4px;">
+          ${type === 'daily' ? 'Daily Attendance Report' : type === 'summary' ? 'Class Attendance Summary' : 'Learner Attendance Summary'}
+        </h3>
+        <div style="font-size:10pt;display:flex;justify-content:space-between;margin-bottom:10px;">
+          <span>Teacher: ${Utils.esc(Licensing.getReportSignatory(cls) || '—')}</span>
+          <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+          <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+          <span>Date: ${Utils.formatDate(date)}</span>
+        </div>
+        <table>
+          <thead><tr>${Object.keys(rows[0]||{}).map(k => `<th>${Utils.esc(k)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(r => `<tr>${Object.keys(r).map(k => `<td>${Utils.esc(r[k])}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+        ${Pages._buildDepEdFooter()}
+      </div>`;
+
+      // Wait for the DepEd seal + school logo to finish decoding before
+      // the print dialog opens. Without this, external image files race
+      // against Chrome's print rasterizer and appear as blank spaces.
+      Pages._waitForPrintImagesThen(() => {
+      window.print();
+      // Give the print pipeline time to fully render before clearing.
+      setTimeout(() => {
+        const area = document.getElementById('print-area');
+        if (area) area.innerHTML = '';
+      }, 1500);
+    });
   },
+  
 
   /* ---------- GRADEBOOK ---------- */
 async gradebook(root) {
@@ -13401,22 +13498,102 @@ _gbResetColWidths(columns) {
       UI.toast('Assessment added', 'success');
     };
   },
-  async exportGrades() {
-    if (!State.activeClass || !State.learners.length) { UI.toast('Nothing to export', 'warning'); return; }
-    const results = await DB.getAll('assessmentResults');
-    const my = results.filter(r => r.classId === State.activeClass.id);
-    const assessments = (await DB.getAll('assessments')).filter(a => a.classId === State.activeClass.id);
-    const rows = State.learners.map(l => {
-      const o = { LRN: l.lrn||'', Name: Utils.fullName(l) };
-      assessments.forEach(a => {
-        const r = my.find(x => x.learnerId === l.id && x.assessmentId === a.id);
-        o[a.title] = r ? (r.score||'') : '';
-      });
-      return o;
+async exportGrades() {
+  const cls = State.activeClass;
+  if (!cls) { UI.toast('No class selected.', 'warning'); return; }
+  if (!State.learners.length) { UI.toast('No learners to export.', 'warning'); return; }
+
+  const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+
+  const allResults     = await DB.getAll('assessmentResults');
+  const allAssessments = await DB.getAll('assessments');
+  const results     = allResults.filter(r => r.classId === cls.id);
+  const assessments = allAssessments.filter(a => a.classId === cls.id);
+
+  // Group assessments by category for a predictable column order
+  const order = isLegacy ? ['WW','PT','QA'] : ['WW','PT','ST1','ST2','TE'];
+  const catOf = (a) => isLegacy ? (a.type || 'WW') : (a.category || 'WW');
+  const sortedAssessments = assessments.slice().sort((a, b) => {
+    const ca = order.indexOf(catOf(a));
+    const cb = order.indexOf(catOf(b));
+    if (ca !== cb) return ca - cb;
+    return (a.createdAt || '').localeCompare(b.createdAt || '');
+  });
+
+  // Index results by learner + assessment
+  const byKey = {};
+  results.forEach(r => { byKey[r.learnerId + '|' + r.assessmentId] = r; });
+
+  const isDO015 = !isLegacy && policy.termModel === 'three-term';
+
+  // Build rows
+  const rows = State.learners.map(l => {
+    const base = {
+      'LRN':         l.lrn || '',
+      'Last Name':   l.lastName || '',
+      'First Name':  l.firstName || '',
+      'Middle Name': l.middleName || '',
+      'Sex':         Utils.normalizeSex(l.sex) || '',
+      'Status':      l.status || 'Active'
+    };
+
+    // One column per assessment
+    sortedAssessments.forEach(a => {
+      const r = byKey[l.id + '|' + a.id];
+      const label = `[${catOf(a)}] ${a.title || 'Untitled'}`;
+      base[label] = r && r.score !== undefined && r.score !== null ? r.score : '';
     });
-    Utils.download('grades-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
-    UI.toast('Grades exported', 'success');
-  },
+
+    // Add per-term finalized grades + final grade if DO 015
+    if (isDO015) {
+      // (term grades are async-loaded below; placeholder for now)
+      policy.terms.forEach(t => { base[t + ' Grade'] = ''; });
+    }
+
+    return base;
+  });
+
+  // For DO 015 classes, hydrate term columns from finalized termGrades
+  if (isDO015) {
+    const termGrades = (await DB.getAllByIndex('termGrades', 'classId', cls.id)) || [];
+    const termByLearner = {};
+    termGrades.forEach(tg => {
+      if (tg.status !== 'finalized') return;
+      termByLearner[tg.learnerId] = termByLearner[tg.learnerId] || {};
+      termByLearner[tg.learnerId][tg.term] = tg.reportedGrade;
+    });
+    State.learners.forEach((l, i) => {
+      policy.terms.forEach(t => {
+        const v = termByLearner[l.id] && termByLearner[l.id][t];
+        rows[i][t + ' Grade'] = (v !== undefined && v !== null && v !== '') ? v : '';
+      });
+      // Final = average of terms with data
+      const vals = policy.terms
+        .map(t => Number(termByLearner[l.id] && termByLearner[l.id][t]))
+        .filter(v => !isNaN(v) && v > 0);
+      rows[i]['Final Grade'] = vals.length
+        ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)
+        : '';
+    });
+  }
+
+  // Safe filename: class + subject + SY + timestamp
+  const safeGrade   = String(cls.gradeLevel || '').replace(/[^A-Za-z0-9]+/g, '_');
+  const safeSection = String(cls.section    || '').replace(/[^A-Za-z0-9]+/g, '_');
+  const safeSubject = String(cls.subject    || '').replace(/[^A-Za-z0-9]+/g, '_');
+  const safeSY      = String(cls.schoolYear || State.schoolYear || '').replace(/[^A-Za-z0-9]+/g, '_');
+
+  const filename =
+    `gradebook_${safeGrade}_${safeSection}` +
+    (safeSubject ? `_${safeSubject}` : '') +
+    `_${safeSY}_${Utils.timestampForFilename()}.csv`;
+
+  Utils.download(filename, Utils.toCSV(rows), 'text/csv');
+  App.logActivity(`Gradebook exported (${State.learners.length} learners, ${assessments.length} assessments)`, 'Grading');
+  UI.toast(`Exported ${State.learners.length} learners × ${assessments.length} assessments`, 'success');
+},
 
   /* ---------- ASSESSMENT ---------- */
   async assessmentBuilder(root) {
@@ -14085,71 +14262,1887 @@ _formatQuizTime(sec) {
     if (selEl) selEl.addEventListener('change', () => { State.itemAnalysisAssessment = selEl.value; App.navigate('item-analysis'); });
   },
   async classPerformance(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'chart', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
-    const results = await DB.getAll('assessmentResults');
-    const my = results.filter(r => r.classId === State.activeClass.id);
-    const scores = my.map(r => r.percentage||0);
-    const avg = Utils.avg(scores);
-    const highest = scores.length ? Math.max(...scores) : 0;
-    const lowest = scores.length ? Math.min(...scores) : 0;
-    const median = Utils.median(scores);
-    const passing = scores.filter(s => s >= CONFIG.PASSING_GRADE).length;
-    const passingRate = scores.length ? Utils.round((passing / scores.length) * 100, 1) : 0;
-    const buckets = [
-      { label: '90-100', value: 0, color: '#198754' },
-      { label: '85-89', value: 0, color: '#0057B8' },
-      { label: '80-84', value: 0, color: '#0038A8' },
-      { label: '75-79', value: 0, color: '#F7C948' },
-      { label: '<75', value: 0, color: '#DC3545' }
-    ];
-    scores.forEach(s => {
-      if (s >= 90) buckets[0].value++;
-      else if (s >= 85) buckets[1].value++;
-      else if (s >= 80) buckets[2].value++;
-      else if (s >= 75) buckets[3].value++;
-      else buckets[4].value++;
-    });
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Class Performance</h2><p>${Utils.esc(State.activeClass.gradeLevel)} - ${Utils.esc(State.activeClass.section)}</p></div></div>
-      <div class="grid grid-4 mb-20">
-        <div class="stat-card"><div class="stat-label">Class Average</div><div class="stat-value">${Utils.round(avg,1)}%</div></div>
-        <div class="stat-card accent-success"><div class="stat-label">Highest</div><div class="stat-value">${Utils.round(highest,1)}%</div></div>
-        <div class="stat-card accent-danger"><div class="stat-label">Lowest</div><div class="stat-value">${Utils.round(lowest,1)}%</div></div>
-        <div class="stat-card accent-gold"><div class="stat-label">Median</div><div class="stat-value">${Utils.round(median,1)}%</div></div>
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon:'chart', title:'No class selected',
+      message:'Create or select a class to view performance analytics.'
+    })}</div>`;
+    return;
+  }
+
+  const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+  const passing = policy.passingGrade || 75;
+  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+
+  // ---- Load all needed data in parallel ----
+  const [allResults, allAssessments, termGrades, attendance] = await Promise.all([
+    DB.getAll('assessmentResults'),
+    DB.getAll('assessments'),
+    DB.getAllByIndex('termGrades', 'classId', cls.id).catch(() => []),
+    DB.getAllByIndex('attendance', 'classId', cls.id).catch(() => [])
+  ]);
+
+  const assessments    = allAssessments.filter(a => a.classId === cls.id);
+  const results        = allResults.filter(r => r.classId === cls.id);
+  const finalizedTerms = (termGrades || []).filter(t => t.status === 'finalized');
+
+  // ---- Compute per-learner grades ----
+  const learnerGrades = Pages._perfComputeLearnerGrades(
+    cls, policy, State.learners, assessments, results, finalizedTerms
+  );
+
+  // ---- Overall stats ----
+  const graded       = learnerGrades.filter(g => g.hasAny && g.reportedGrade !== '' && g.reportedGrade != null);
+  const gradeValues  = graded.map(g => Number(g.reportedGrade));
+  const classAvg     = gradeValues.length ? Utils.round(Utils.avg(gradeValues), 1) : null;
+  const classMedian  = gradeValues.length ? Utils.round(Utils.median(gradeValues), 1) : null;
+  const classStdDev  = Pages._perfStdDev(gradeValues);
+  const highestGrade = gradeValues.length ? Math.max(...gradeValues) : null;
+  const lowestGrade  = gradeValues.length ? Math.min(...gradeValues) : null;
+  const passedCount  = gradeValues.filter(g => g >= passing).length;
+  const passRate     = gradeValues.length ? Utils.round((passedCount / gradeValues.length) * 100, 1) : null;
+
+  // ---- Descriptor distribution ----
+  const bands = (policy.descriptors || []).slice().sort((a, b) => b.min - a.min);
+  const distribution = bands.map(b => ({
+    label: b.label,
+    range: `${b.min}–${b.max}`,
+    count: 0,
+    min: b.min,
+    max: b.max,
+    color: Pages._perfDescriptorColor(b)
+  }));
+  gradeValues.forEach(g => {
+    const b = distribution.find(x => g >= x.min && g <= x.max);
+    if (b) b.count++;
+  });
+  const distTotal = distribution.reduce((s, d) => s + d.count, 0) || 1;
+
+  // ---- Assessment trend line (chronological) ----
+  const chronological = assessments.slice().sort((a, b) =>
+    (a.createdAt || '').localeCompare(b.createdAt || '')
+  );
+  const trendPoints = chronological.map(a => {
+    const ar = results.filter(r => r.assessmentId === a.id);
+    const pcts = ar.map(r => r.percentage || 0).filter(p => p > 0);
+    return {
+      fullTitle: a.title || 'Untitled',
+      value: pcts.length ? Utils.round(Utils.avg(pcts), 1) : null,
+      count: ar.length
+    };
+  }).filter(p => p.value !== null);
+
+  // ---- Category averages ----
+  const gradedForCats = graded.filter(g => g.hasAny);
+  const catWW = gradedForCats.length ? Utils.round(Utils.avg(gradedForCats.map(g => g.wwPct || 0)), 1) : null;
+  const catPT = gradedForCats.length ? Utils.round(Utils.avg(gradedForCats.map(g => g.ptPct || 0)), 1) : null;
+  const catEX = !isLegacy && gradedForCats.length
+    ? Utils.round(Utils.avg(gradedForCats.map(g => g.exPct || 0)), 1) : null;
+  const catQA = isLegacy && gradedForCats.length
+    ? Utils.round(Utils.avg(gradedForCats.map(g => g.qaPct || 0)), 1) : null;
+
+  // ---- Leaderboards ----
+  const ranked = graded.slice().sort((a, b) => Number(b.reportedGrade) - Number(a.reportedGrade));
+  const topLearners     = ranked.slice(0, 5);
+  const strugglingList  = ranked.filter(g => Number(g.reportedGrade) < passing).slice(-5).reverse();
+
+  // ---- Attendance correlation ----
+  const attByLearner = {};
+  attendance.forEach(a => {
+    if (!attByLearner[a.learnerId]) attByLearner[a.learnerId] = { total: 0, present: 0 };
+    attByLearner[a.learnerId].total++;
+    if (a.status !== 'Absent') attByLearner[a.learnerId].present++;
+  });
+  const pairs = graded.map(g => {
+    const att = attByLearner[g.learner.id];
+    if (!att || !att.total) return null;
+    return { x: (att.present / att.total) * 100, y: Number(g.reportedGrade) };
+  }).filter(Boolean);
+  const correlation = pairs.length >= 4
+    ? Pages._perfPearson(pairs.map(p => p.x), pairs.map(p => p.y))
+    : null;
+  const correlationLabel = correlation == null ? 'Not enough data'
+    : Math.abs(correlation) >= 0.7 ? 'Strong'
+    : Math.abs(correlation) >= 0.4 ? 'Moderate'
+    : Math.abs(correlation) >= 0.2 ? 'Weak'
+    : 'Negligible';
+
+  // ---- Assessment leaderboard ----
+  const assessmentBoard = chronological.map(a => {
+    const ar = results.filter(r => r.assessmentId === a.id);
+    const pcts = ar.map(r => r.percentage || 0).filter(p => p > 0);
+    const cat = (isLegacy ? a.type : a.category) || '—';
+    return {
+      id: a.id,
+      title: a.title || 'Untitled',
+      category: cat,
+      term: a.term || '',
+      maxScore: a.maxScore || 100,
+      responses: ar.length,
+      avg: pcts.length ? Utils.round(Utils.avg(pcts), 1) : null,
+      highest: pcts.length ? Utils.round(Math.max(...pcts), 1) : null,
+      lowest: pcts.length ? Utils.round(Math.min(...pcts), 1) : null
+    };
+  }).filter(a => a.responses > 0)
+    .sort((a, b) => (b.avg || 0) - (a.avg || 0));
+
+  // ---- Has any data? ----
+  const hasData = graded.length > 0;
+
+  // ---- Render ----
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Class Performance</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${Utils.esc(cls.subject || 'No subject')} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
       </div>
-      <div class="grid grid-2">
-        <div class="card"><div class="card-head"><h3>Score Distribution</h3></div>${UI.barChart(buckets, { height: 220 })}</div>
-        <div class="card"><div class="card-head"><h3>Summary</h3></div>
-          <div class="stat-card mb-8"><div class="stat-label">Total Assessment Results</div><div class="stat-value">${my.length}</div></div>
-          <div class="stat-card"><div class="stat-label">Passing Rate</div><div class="stat-value">${passingRate}%</div></div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="cp-refresh">${icon('history')} Refresh</button>
+        <button class="btn btn-outline" id="cp-export">${icon('download')} Export CSV</button>
+        <button class="btn btn-outline" id="cp-print">${icon('printer')} Print</button>
+      </div>
+    </div>
+
+    ${!hasData ? `<div class="card">${UI.emptyState({
+      icon: 'chart',
+      title: 'No grades recorded yet',
+      message: 'Enter assessment scores in the Gradebook, then come back to see performance analytics.',
+      actionLabel: 'Open Gradebook',
+      actionFn: `App.navigate('gradebook')`
+    })}</div>` : `
+
+    <!-- ============ KPI ROW ============ -->
+    <div class="grid grid-4 mb-16 perf-grid-2">
+      <div class="stat-card accent-${classAvg >= 80 ? 'success' : classAvg >= 75 ? '' : 'danger'}">
+        <div class="stat-icon">${icon('chart')}</div>
+        <div class="stat-label">Class Average</div>
+        <div class="stat-value">${classAvg ?? '—'}</div>
+        <div class="text-xs text-muted">
+          ${classAvg >= passing ? `${Utils.round(classAvg - passing, 1)} pts above passing` : `${Utils.round(passing - classAvg, 1)} pts below passing`}
         </div>
-      </div>`;
-  },
-  async learnerPerformance(root) {
-    if (!State.learners.length) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'user-check', title:'No learners', message:'Add learners first.'})}</div>`; return; }
-    const results = await DB.getAll('assessmentResults');
-    const attendance = await DB.getAll('attendance');
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Learner Performance</h2><p>Overview of each learner</p></div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">${icon('trending')}</div>
+        <div class="stat-label">Median · Std Dev</div>
+        <div class="stat-value" style="font-size:20px;">${classMedian ?? '—'} <span style="font-size:14px;color:var(--text-muted);font-weight:500;">± ${Utils.round(classStdDev, 1)}</span></div>
+        <div class="text-xs text-muted">
+          ${classStdDev < 5 ? 'Tight spread' : classStdDev < 10 ? 'Moderate spread' : 'Wide spread — mixed abilities'}
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">${icon('signal')}</div>
+        <div class="stat-label">Range</div>
+        <div class="stat-value">${highestGrade ?? '—'} <span style="font-size:14px;color:var(--text-muted);font-weight:500;">/ ${lowestGrade ?? '—'}</span></div>
+        <div class="text-xs text-muted">Highest / Lowest</div>
+      </div>
+      <div class="stat-card accent-${passRate >= 85 ? 'success' : passRate >= 70 ? 'warning' : 'danger'}">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Passing Rate</div>
+        <div class="stat-value">${passRate ?? '—'}%</div>
+        <div class="text-xs text-muted">${passedCount} of ${gradeValues.length} learners ≥ ${passing}</div>
+      </div>
+    </div>
+
+    <!-- ============ DISTRIBUTION + TREND ============ -->
+    <div class="grid grid-2 mb-16 perf-grid-2" style="align-items:start;">
+
       <div class="card">
-        <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>Photo</th><th>Learner</th><th>LRN</th><th>Attendance</th><th>Avg Score</th><th>Status</th></tr></thead>
-          <tbody>${State.learners.map(l => {
-            const att = attendance.filter(a => a.learnerId === l.id);
-            const present = att.filter(a => a.status === 'Present' || a.status === 'Late' || a.status === 'Excused').length;
-            const rate = att.length ? Utils.round((present/att.length)*100, 1) + '%' : '—';
-            const rs = results.filter(r => r.learnerId === l.id);
-            const avg = rs.length ? Utils.round(Utils.avg(rs.map(r=>r.percentage||0)),1) + '%' : '—';
-            return `<tr>
-              <td>${Utils.avatarHTML(l, 32, 12)}</td>
-              <td><strong>${Utils.esc(Utils.displayName(l))}</strong></td>
-              <td>${Utils.esc(l.lrn||'—')}</td><td>${rate}</td><td>${avg}</td>
-              <td>${UI.statusBadge(l.status||'Active')}</td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table></div>
-      </div>`;
-  },
+        <div class="card-head">
+          <h3>Grade Distribution</h3>
+          <span class="text-xs text-muted">${gradeValues.length} graded · ${policy.descriptors ? 'By descriptor band' : ''}</span>
+        </div>
+        ${distribution.map(b => {
+          const pct = Math.round((b.count / distTotal) * 100);
+          return `
+            <div style="margin-bottom:12px;">
+              <div class="flex-between" style="font-size:12.5px;margin-bottom:5px;">
+                <span style="font-weight:700;color:${b.color};">${Utils.esc(b.label)}</span>
+                <span class="text-muted">${Utils.esc(b.range)} · <strong style="color:${b.color};">${b.count}</strong> (${pct}%)</span>
+              </div>
+              <div class="progress-bar" style="height:8px;">
+                <div style="width:${pct}%;background:${b.color};"></div>
+              </div>
+            </div>`;
+        }).join('')}
+        <div class="divider" style="margin:14px 0;"></div>
+        <div class="flex-between" style="font-size:12px;">
+          <span class="text-muted">Above passing (≥ ${passing})</span>
+          <strong style="color:var(--success);">${passedCount} learners</strong>
+        </div>
+        <div class="flex-between" style="font-size:12px;margin-top:6px;">
+          <span class="text-muted">Below passing</span>
+          <strong style="color:var(--danger);">${gradeValues.length - passedCount} learners</strong>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Assessment Trend</h3>
+          <span class="text-xs text-muted">${trendPoints.length} assessment${trendPoints.length === 1 ? '' : 's'} over time</span>
+        </div>
+        ${trendPoints.length < 2
+          ? `<p class="text-sm text-muted" style="text-align:center;padding:24px;">
+               Create at least two assessments with recorded scores to see a trend line.
+             </p>`
+          : (() => {
+              // Compute the SVG trend line
+              const w = 360, h = 160, padX = 24, padY = 22;
+              const vals = trendPoints.map(p => p.value);
+              const minV = Math.max(0, Math.floor(Math.min(...vals, passing) - 5));
+              const maxV = Math.min(100, Math.ceil(Math.max(...vals, passing) + 5));
+              const span = Math.max(5, maxV - minV);
+              const xFor = i => padX + (i * (w - padX * 2) / Math.max(1, trendPoints.length - 1));
+              const yFor = v => h - padY - ((v - minV) / span) * (h - padY * 2);
+              const path = trendPoints.map((p, i) => `${i === 0 ? 'M' : 'L'}${xFor(i).toFixed(1)},${yFor(p.value).toFixed(1)}`).join(' ');
+              const passingY = yFor(passing);
+              const first = trendPoints[0].value;
+              const last = trendPoints[trendPoints.length - 1].value;
+              const delta = Utils.round(last - first, 1);
+              const deltaColor = delta > 1 ? 'var(--success)' : delta < -1 ? 'var(--danger)' : 'var(--text-muted)';
+              return `
+                <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block;">
+                  <defs>
+                    <linearGradient id="cp-trend-fill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="var(--deped-blue)" stop-opacity="0.22"/>
+                      <stop offset="100%" stop-color="var(--deped-blue)" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  ${[0,1,2,3].map(i => {
+                    const y = padY + (i * (h - padY * 2) / 3);
+                    return `<line x1="${padX}" y1="${y}" x2="${w - padX}" y2="${y}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 3"/>`;
+                  }).join('')}
+                  <line x1="${padX}" y1="${passingY}" x2="${w - padX}" y2="${passingY}" stroke="#DC3545" stroke-width="1.2" stroke-dasharray="5 4" opacity="0.6"/>
+                  <text x="${w - padX - 2}" y="${passingY - 4}" text-anchor="end" font-size="9" fill="#DC3545" font-weight="700">Passing (${passing})</text>
+                  <path d="${path} L${xFor(trendPoints.length - 1).toFixed(1)},${h - padY} L${xFor(0).toFixed(1)},${h - padY} Z" fill="url(#cp-trend-fill)"/>
+                  <path d="${path}" fill="none" stroke="var(--deped-blue)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  ${trendPoints.map((p, i) => `
+                    <circle cx="${xFor(i).toFixed(1)}" cy="${yFor(p.value).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--deped-blue)" stroke-width="2.2">
+                      <title>${Utils.esc(p.fullTitle)} — ${p.value}%</title>
+                    </circle>`).join('')}
+                </svg>
+                <div class="flex-between" style="margin-top:10px;font-size:12px;">
+                  <span class="text-muted">First → Latest</span>
+                  <span style="font-weight:700;color:${deltaColor};">
+                    ${delta > 0 ? '↑' : delta < 0 ? '↓' : '→'} ${delta > 0 ? '+' : ''}${delta} pts
+                  </span>
+                </div>`;
+            })()}
+      </div>
+    </div>
+
+    <!-- ============ CATEGORIES + ATTENDANCE CORRELATION ============ -->
+    <div class="grid grid-2 mb-16 perf-grid-2" style="align-items:start;">
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Category Averages</h3>
+          <span class="text-xs text-muted">Weighted components</span>
+        </div>
+        ${(() => {
+          const rows = isLegacy
+            ? [
+                { label: 'Written Works',         value: catWW, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).ww },
+                { label: 'Performance Tasks',     value: catPT, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).pt },
+                { label: 'Quarterly Assessment',  value: catQA, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).qa }
+              ]
+            : (() => {
+                const w = cls.resolvedWeights || policy.weights[cls.weightKey] || policy.weights['KS2_CORE'];
+                return [
+                  { label: 'Written / Oral Works',      value: catWW, weight: w.WW },
+                  { label: 'Product / Performance Tasks', value: catPT, weight: w.PT },
+                  { label: 'Examinations',              value: catEX, weight: w.EX }
+                ];
+              })();
+          return rows.map(r => {
+            const v = r.value ?? 0;
+            const color = v >= 85 ? '#198754' : v >= 75 ? '#0057B8' : v >= 65 ? '#F59E0B' : '#DC3545';
+            return `
+              <div style="margin-bottom:14px;">
+                <div class="flex-between" style="font-size:12.5px;margin-bottom:5px;">
+                  <span style="font-weight:700;">${Utils.esc(r.label)}</span>
+                  <span class="text-muted">Avg <strong style="color:${color};">${r.value ?? '—'}%</strong> · Weight ${r.weight}%</span>
+                </div>
+                <div class="progress-bar" style="height:8px;">
+                  <div style="width:${v}%;background:${color};"></div>
+                </div>
+              </div>`;
+          }).join('') + `
+            <div class="divider" style="margin:14px 0;"></div>
+            <p class="text-xs text-muted" style="margin:0;line-height:1.6;">
+              These are the class-wide averages <em>before</em> weighting. The weighted sum produces each learner's Initial Grade, which is then transmuted to the Reported Grade.
+            </p>`;
+        })()}
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Attendance ↔ Grade Correlation</h3>
+          <span class="text-xs text-muted">${pairs.length} learners with both data</span>
+        </div>
+        ${correlation == null ? `
+          <div class="alert alert-info" style="margin:0;font-size:12px;">
+            ${icon('info')}<div>
+              Record attendance and grades for at least 4 learners to compute the correlation.
+            </div></div>
+        ` : `
+          <div style="text-align:center;padding:8px 0 12px;">
+            <div style="font-size:42px;font-weight:800;line-height:1;color:${Math.abs(correlation) >= 0.4 ? 'var(--deped-blue)' : 'var(--text-muted)'};">
+              ${Utils.round(correlation, 2)}
+            </div>
+            <div class="text-xs text-muted" style="margin-top:4px;">
+              Pearson r · <strong>${correlationLabel}</strong> positive relationship
+            </div>
+          </div>
+          ${(() => {
+            // Scatter plot
+            const w = 360, h = 180, pad = 30;
+            const xs = pairs.map(p => p.x);
+            const ys = pairs.map(p => p.y);
+            const xMin = Math.max(0, Math.floor(Math.min(...xs) / 10) * 10 - 5);
+            const xMax = Math.min(100, Math.ceil(Math.max(...xs) / 10) * 10 + 5);
+            const yMin = Math.max(0, Math.floor(Math.min(...ys) / 10) * 10 - 5);
+            const yMax = Math.min(100, Math.ceil(Math.max(...ys) / 10) * 10 + 5);
+            const xFor = v => pad + ((v - xMin) / Math.max(1, xMax - xMin)) * (w - pad * 2);
+            const yFor = v => h - pad - ((v - yMin) / Math.max(1, yMax - yMin)) * (h - pad * 2);
+            const passingY = yFor(passing);
+            return `
+              <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;display:block;">
+                <line x1="${pad}" y1="${passingY}" x2="${w - pad}" y2="${passingY}" stroke="#DC3545" stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
+                <text x="${w - pad - 2}" y="${passingY - 3}" text-anchor="end" font-size="9" fill="#DC3545">Passing</text>
+                <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="var(--border)" stroke-width="1"/>
+                <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="var(--border)" stroke-width="1"/>
+                <text x="${w/2}" y="${h - 6}" text-anchor="middle" font-size="10" fill="var(--text-muted)">Attendance Rate (%)</text>
+                <text x="10" y="${h/2}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90 10 ${h/2})">Grade</text>
+                <text x="${pad}" y="${h - pad + 12}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${xMin}</text>
+                <text x="${w - pad}" y="${h - pad + 12}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${xMax}</text>
+                ${pairs.map(p => `
+                  <circle cx="${xFor(p.x).toFixed(1)}" cy="${yFor(p.y).toFixed(1)}" r="4"
+                          fill="${p.y >= passing ? '#0057B8' : '#DC3545'}" opacity="0.65">
+                    <title>${p.x.toFixed(1)}% attendance · grade ${p.y}</title>
+                  </circle>`).join('')}
+              </svg>`;
+          })()}
+          <p class="text-xs text-muted" style="margin:12px 0 0;line-height:1.6;">
+            ${correlation >= 0.4
+              ? 'Learners with better attendance tend to earn higher grades. This is worth mentioning in parent conferences.'
+              : correlation <= -0.3
+                ? 'Unusual pattern: attendance does not predict performance in this class. Investigate individual cases.'
+                : 'Attendance has limited predictive weight for this class so far. More data will sharpen the picture.'}
+          </p>
+        `}
+      </div>
+    </div>
+
+    <!-- ============ TOP + STRUGGLING ============ -->
+    <div class="grid grid-2 mb-16 perf-grid-2" style="align-items:start;">
+      <div class="card">
+        <div class="card-head">
+          <h3>Top Performers</h3>
+          <span class="text-xs text-muted">Highest reported grade</span>
+        </div>
+        ${topLearners.length === 0
+          ? `<p class="text-sm text-muted" style="text-align:center;padding:20px;">No grades recorded yet.</p>`
+          : topLearners.map((g, i) => {
+              const desc = g.descriptor || { label: '—' };
+              return `
+                <div style="display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;background:var(--bg);margin-bottom:6px;cursor:pointer;"
+                     data-perf-learner="${Utils.attr(g.learner.id)}">
+                  <div class="perf-rank ${i < 3 ? 'top3' : ''}">#${i + 1}</div>
+                  ${Utils.avatarHTML(g.learner, 32, 12)}
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                      ${Utils.esc(Utils.displayName(g.learner))}
+                    </div>
+                    <div class="text-xs text-muted">${Utils.esc(desc.label)}</div>
+                  </div>
+                  <div class="grade-badge grade-outstanding" style="font-size:13px;">${g.reportedGrade}</div>
+                </div>`;
+            }).join('')}
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 style="color:var(--danger);">Needs Support</h3>
+          <span class="text-xs text-muted">Below passing (< ${passing})</span>
+        </div>
+        ${strugglingList.length === 0
+          ? `<div class="alert alert-success" style="margin:0;">${icon('check')}<div>
+               All graded learners are at or above the passing grade of ${passing}. Excellent!
+             </div></div>`
+          : strugglingList.map(g => {
+              const desc = g.descriptor || { label: '—' };
+              return `
+                <div style="display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;background:rgba(220,53,69,0.05);border-left:3px solid var(--danger);margin-bottom:6px;cursor:pointer;"
+                     data-perf-learner="${Utils.attr(g.learner.id)}">
+                  ${Utils.avatarHTML(g.learner, 32, 12)}
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                      ${Utils.esc(Utils.displayName(g.learner))}
+                    </div>
+                    <div class="text-xs text-muted">${Utils.esc(desc.label)} · ${Utils.round(passing - g.reportedGrade, 1)} pts to pass</div>
+                  </div>
+                  <div class="grade-badge grade-didnot" style="font-size:13px;">${g.reportedGrade}</div>
+                </div>`;
+            }).join('')}
+      </div>
+    </div>
+
+    <!-- ============ ASSESSMENT LEADERBOARD ============ -->
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>Assessment Leaderboard</h3>
+        <span class="text-xs text-muted">Sorted by class average (highest first)</span>
+      </div>
+      ${assessmentBoard.length === 0
+        ? `<p class="text-sm text-muted" style="text-align:center;padding:20px;">No assessments with recorded scores yet.</p>`
+        : `<div class="table-wrap">
+            <table class="data-table" style="font-size:13px;">
+              <thead>
+                <tr>
+                  <th style="width:38px;">#</th>
+                  <th>Assessment</th>
+                  <th style="width:70px;">Category</th>
+                  <th style="width:70px;text-align:center;">Max</th>
+                  <th style="width:80px;text-align:center;">Responses</th>
+                  <th style="width:90px;text-align:center;">Class Avg</th>
+                  <th style="width:90px;text-align:center;">Highest</th>
+                  <th style="width:90px;text-align:center;">Lowest</th>
+                  <th style="width:160px;">Strength</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${assessmentBoard.map((a, i) => {
+                  const avg = a.avg ?? 0;
+                  const color = avg >= 85 ? '#198754' : avg >= 70 ? '#0057B8' : avg >= 50 ? '#F59E0B' : '#DC3545';
+                  const strength = avg >= 85 ? 'Very Easy' : avg >= 70 ? 'Easy' : avg >= 50 ? 'Moderate' : avg >= 30 ? 'Challenging' : 'Very Challenging';
+                  return `
+                    <tr>
+                      <td class="text-muted">${i + 1}</td>
+                      <td><strong>${Utils.esc(a.title)}</strong></td>
+                      <td><span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(a.category)}</span></td>
+                      <td style="text-align:center;">${a.maxScore}</td>
+                      <td style="text-align:center;">${a.responses}</td>
+                      <td style="text-align:center;font-weight:700;color:${color};">${avg}%</td>
+                      <td style="text-align:center;">${a.highest ?? '—'}%</td>
+                      <td style="text-align:center;">${a.lowest ?? '—'}%</td>
+                      <td>
+                        <div class="progress-bar" style="height:6px;">
+                          <div style="width:${avg}%;background:${color};"></div>
+                        </div>
+                        <div class="text-xs text-muted" style="margin-top:2px;">${strength}</div>
+                      </td>
+                    </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`}
+    </div>
+
+    <div class="alert alert-info">
+      ${icon('info')}
+      <div>
+        Grades above are computed live from the current assessment scores using
+        <strong>${Utils.esc(policy.label)}</strong>.
+        Finalized term grades are used when available — otherwise the calculation reflects the latest live scores.
+        For editing individual scores, open the Gradebook.
+      </div>
+    </div>
+    `}
+  `;
+
+  // ---- Bind ----
+  const refresh = root.querySelector('#cp-refresh');
+  if (refresh) refresh.onclick = () => Pages.classPerformance(root);
+
+  const exportBtn = root.querySelector('#cp-export');
+  if (exportBtn) exportBtn.onclick = () => Pages._perfExportClassCSV(cls, learnerGrades, policy);
+
+  const printBtn = root.querySelector('#cp-print');
+  if (printBtn) printBtn.onclick = () => Pages._perfPrintClassReport(cls, {
+    policy, learnerGrades,
+    classAvg, classMedian, classStdDev, highestGrade, lowestGrade,
+    passRate, passedCount, gradeValues,
+    distribution, trendPoints,
+    catWW, catPT, catEX, catQA, isLegacy,
+    topLearners, strugglingList, assessmentBoard,
+    correlation, correlationLabel
+  });
+
+  root.querySelectorAll('[data-perf-learner]').forEach(el => {
+    el.onclick = () => App.openLearnerProfile(el.dataset.perfLearner);
+  });
+},
+async learnerPerformance(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon:'user-check', title:'No class selected',
+      message:'Create or select a class first.'
+    })}</div>`;
+    return;
+  }
+  if (!State.learners.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon:'users', title:'No learners',
+      message:'Add learners to this class first.',
+      actionLabel: '+ Add Learner',
+      actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    return;
+  }
+
+  // ---- Persistent UI state ----
+  if (!State.lpUI) {
+    State.lpUI = { query: '', statusFilter: '', sortBy: 'lastName', sortDir: 'asc', viewMode: 'table' };
+  }
+  const U = State.lpUI;
+
+  const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+  const passing = policy.passingGrade || 75;
+
+  // ---- Load data ----
+  const [allResults, allAssessments, allAttendance, termGrades] = await Promise.all([
+    DB.getAll('assessmentResults'),
+    DB.getAll('assessments'),
+    DB.getAllByIndex('attendance', 'classId', cls.id).catch(() => []),
+    DB.getAllByIndex('termGrades', 'classId', cls.id).catch(() => [])
+  ]);
+  const assessments = allAssessments.filter(a => a.classId === cls.id);
+  const results     = allResults.filter(r => r.classId === cls.id);
+  const finalized   = (termGrades || []).filter(t => t.status === 'finalized');
+
+  // ---- Per-learner computation ----
+  const enriched = State.learners.map(l => {
+    const g = Pages._perfComputeLearnerGrades(cls, policy, [l], assessments, results, finalized)[0];
+
+    // Attendance rate
+    const lAtt = allAttendance.filter(a => a.learnerId === l.id);
+    const presentDays = lAtt.filter(a => a.status !== 'Absent').length;
+    const attRate = lAtt.length ? Utils.round((presentDays / lAtt.length) * 100, 1) : null;
+
+    // Trend: chronological assessment percentages
+    const lResults = results.filter(r => r.learnerId === l.id)
+      .sort((a, b) => (a.updatedAt || a.createdAt || '').localeCompare(b.updatedAt || b.createdAt || ''));
+    const trendValues = lResults.map(r => r.percentage || 0).filter(v => v > 0);
+    const trend = Pages._perfLearnerTrend(trendValues);
+
+    return {
+      ...g,
+      attendance: { total: lAtt.length, present: presentDays, rate: attRate },
+      trendValues,
+      trend
+    };
+  });
+
+  // ---- Rank (only among graded learners) ----
+  const graded = enriched.filter(e => e.hasAny && e.reportedGrade !== '' && e.reportedGrade != null);
+  const ranked = graded.slice().sort((a, b) => Number(b.reportedGrade) - Number(a.reportedGrade));
+  const rankMap = {};
+  let lastGrade = null, lastRank = 0;
+  ranked.forEach((e, i) => {
+    if (Number(e.reportedGrade) !== lastGrade) { lastRank = i + 1; lastGrade = Number(e.reportedGrade); }
+    rankMap[e.learner.id] = lastRank;
+  });
+
+  // ---- At-risk flag ----
+  enriched.forEach(e => {
+    const flags = [];
+    if (e.hasAny && e.reportedGrade !== '' && Number(e.reportedGrade) < passing) flags.push('below grade');
+    if (e.attendance.rate != null && e.attendance.rate < 85) flags.push('low attendance');
+    if (e.trend.direction === 'down' && Math.abs(e.trend.delta) >= 5) flags.push('declining');
+    if (!e.hasAny) flags.push('no grades');
+    e.riskFlags = flags;
+    e.atRisk = flags.length > 0;
+  });
+
+  // ---- Stats ----
+  const totalLearners   = enriched.length;
+  const gradedCount     = graded.length;
+  const passingCount    = graded.filter(e => Number(e.reportedGrade) >= passing).length;
+  const atRiskCount     = enriched.filter(e => e.atRisk).length;
+  const classAvg        = gradedCount ? Utils.round(Utils.avg(graded.map(e => Number(e.reportedGrade))), 1) : null;
+
+  // ---- Filter + sort ----
+  const q = U.query.trim().toLowerCase();
+  let filtered = enriched.filter(e => {
+    if (q) {
+      const hay = [Utils.fullName(e.learner), e.learner.lrn, e.learner.firstName, e.learner.lastName]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (U.statusFilter === 'passing' && !(e.hasAny && e.reportedGrade !== '' && Number(e.reportedGrade) >= passing)) return false;
+    if (U.statusFilter === 'failing' && !(e.hasAny && e.reportedGrade !== '' && Number(e.reportedGrade) < passing)) return false;
+    if (U.statusFilter === 'at-risk' && !e.atRisk) return false;
+    if (U.statusFilter === 'no-grades' && e.hasAny) return false;
+    return true;
+  });
+
+  const dir = U.sortDir === 'desc' ? -1 : 1;
+  filtered.sort((a, b) => {
+    switch (U.sortBy) {
+      case 'grade': {
+        const av = a.hasAny && a.reportedGrade !== '' ? Number(a.reportedGrade) : -1;
+        const bv = b.hasAny && b.reportedGrade !== '' ? Number(b.reportedGrade) : -1;
+        return (av - bv) * dir;
+      }
+      case 'attendance': {
+        const av = a.attendance.rate ?? -1;
+        const bv = b.attendance.rate ?? -1;
+        return (av - bv) * dir;
+      }
+      case 'rank': {
+        const av = rankMap[a.learner.id] || 9999;
+        const bv = rankMap[b.learner.id] || 9999;
+        return (av - bv) * dir;
+      }
+      case 'lastName':
+      default:
+        return ((a.learner.lastName || '') + (a.learner.firstName || ''))
+          .toLowerCase()
+          .localeCompare(((b.learner.lastName || '') + (b.learner.firstName || '')).toLowerCase()) * dir;
+    }
+  });
+
+  // ---- Render ----
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Learner Performance</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${totalLearners} learners · ${gradedCount} graded</p>
+      </div>
+        <div class="page-actions">
+          <button class="btn btn-outline" id="lp-export">${icon('download')} Export CSV</button>
+          <button class="btn btn-outline" id="lp-print">${icon('printer')} Print</button>
+          <button class="btn btn-primary" id="lp-refresh">${icon('history')} Refresh</button>
+        </div>
+    </div>
+
+    <!-- ============ STAT STRIP ============ -->
+    <div class="grid grid-4 mb-16 perf-grid-2">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('users')}</div>
+        <div class="stat-label">Class Average</div>
+        <div class="stat-value">${classAvg ?? '—'}</div>
+        <div class="text-xs text-muted">${gradedCount} of ${totalLearners} learners</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Passing</div>
+        <div class="stat-value">${passingCount}</div>
+        <div class="text-xs text-muted">${gradedCount ? Utils.round((passingCount / gradedCount) * 100) + '%' : '—'} of graded</div>
+      </div>
+      <div class="stat-card ${atRiskCount ? 'accent-danger' : 'accent-success'}">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Needs Attention</div>
+        <div class="stat-value">${atRiskCount}</div>
+        <div class="text-xs text-muted">Below grade, low attendance, or declining</div>
+      </div>
+      <div class="stat-card accent-gold">
+        <div class="stat-icon">${icon('star')}</div>
+        <div class="stat-label">Top of Class</div>
+        <div class="stat-value" style="font-size:14px;line-height:1.3;padding-top:4px;">
+          ${ranked[0] ? Utils.esc(Utils.lastNameFirst(ranked[0].learner)) : '—'}
+        </div>
+        <div class="text-xs text-muted">${ranked[0] ? ranked[0].reportedGrade : '—'}</div>
+      </div>
+    </div>
+
+    <!-- ============ TOOLBAR ============ -->
+    <div class="card mb-16">
+      <div class="flex gap-12" style="flex-wrap:wrap;align-items:flex-end;">
+        <div style="flex:1;min-width:220px;">
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Search</label>
+          <div class="search-bar" style="max-width:none;">
+            ${icon('search')}
+            <input class="form-control" id="lp-search" placeholder="Name or LRN…" value="${Utils.attr(U.query)}">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Status</label>
+          <select class="form-control" id="lp-status" style="min-width:160px;">
+            <option value="" ${!U.statusFilter ? 'selected' : ''}>All learners</option>
+            <option value="passing"   ${U.statusFilter === 'passing'   ? 'selected' : ''}>Passing only</option>
+            <option value="failing"   ${U.statusFilter === 'failing'   ? 'selected' : ''}>Below passing</option>
+            <option value="at-risk"   ${U.statusFilter === 'at-risk'   ? 'selected' : ''}>Needs attention</option>
+            <option value="no-grades" ${U.statusFilter === 'no-grades' ? 'selected' : ''}>No grades yet</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Sort</label>
+          <select class="form-control" id="lp-sort" style="min-width:150px;">
+            <option value="lastName"   ${U.sortBy === 'lastName'   ? 'selected' : ''}>Name (A–Z)</option>
+            <option value="grade"      ${U.sortBy === 'grade'      ? 'selected' : ''}>Grade</option>
+            <option value="attendance" ${U.sortBy === 'attendance' ? 'selected' : ''}>Attendance</option>
+            <option value="rank"       ${U.sortBy === 'rank'       ? 'selected' : ''}>Class rank</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Direction</label>
+          <button class="btn btn-outline" id="lp-dir" style="min-height:36px;">
+            ${U.sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'}
+          </button>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">View</label>
+          <div class="rz-segment">
+            <button type="button" data-lp-view="table" class="${U.viewMode === 'table' ? 'active' : ''}">Table</button>
+            <button type="button" data-lp-view="card"  class="${U.viewMode === 'card'  ? 'active' : ''}">Cards</button>
+          </div>
+        </div>
+      </div>
+      <div class="flex-between mt-12" style="font-size:12px;">
+        <span class="text-muted">Showing <strong>${filtered.length}</strong> of ${totalLearners} learners</span>
+        ${(U.query || U.statusFilter)
+          ? `<button class="btn btn-ghost btn-sm" id="lp-clear">Clear filters</button>`
+          : ''}
+      </div>
+    </div>
+
+    <!-- ============ CONTENT ============ -->
+    ${filtered.length === 0
+      ? `<div class="card">${UI.emptyState({
+          icon: 'search',
+          title: 'No learners match',
+          message: 'Adjust the filters above.'
+        })}</div>`
+      : U.viewMode === 'table'
+        ? Pages._perfRenderLearnerTable(filtered, rankMap, passing, policy)
+        : Pages._perfRenderLearnerCards(filtered, rankMap, passing)
+    }
+  `;
+
+  /* ============ Bind toolbar ============ */
+  const search = root.querySelector('#lp-search');
+  search.addEventListener('input', Utils.debounce(() => {
+    U.query = search.value;
+    Pages.learnerPerformance(root);
+    setTimeout(() => {
+      const s = root.querySelector('#lp-search');
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 20);
+  }, 220));
+
+  root.querySelector('#lp-status').onchange = (e) => { U.statusFilter = e.target.value; Pages.learnerPerformance(root); };
+  root.querySelector('#lp-sort').onchange   = (e) => { U.sortBy = e.target.value; Pages.learnerPerformance(root); };
+  root.querySelector('#lp-dir').onclick     = () => {
+    U.sortDir = U.sortDir === 'asc' ? 'desc' : 'asc';
+    Pages.learnerPerformance(root);
+  };
+  root.querySelectorAll('[data-lp-view]').forEach(b => {
+    b.onclick = () => { U.viewMode = b.dataset.lpView; Pages.learnerPerformance(root); };
+  });
+  const clearBtn = root.querySelector('#lp-clear');
+  if (clearBtn) clearBtn.onclick = () => {
+    U.query = ''; U.statusFilter = ''; Pages.learnerPerformance(root);
+  };
+
+  const refreshBtn = root.querySelector('#lp-refresh');
+  if (refreshBtn) refreshBtn.onclick = () => Pages.learnerPerformance(root);
+
+  const exportBtn = root.querySelector('#lp-export');
+  if (exportBtn) exportBtn.onclick = () => Pages._perfExportLearnersCSV(cls, enriched, rankMap, policy);
+
+  const printBtn = root.querySelector('#lp-print');
+  if (printBtn) printBtn.onclick = () => Pages._perfPrintLearnersReport(cls, filtered, rankMap, {
+    policy, passing,
+    classAvg, gradedCount, passingCount, atRiskCount, totalLearners
+  });
+
+  /* ============ Row / card click → detail modal ============ */
+  root.querySelectorAll('[data-lp-detail]').forEach(el => {
+    el.onclick = () => Pages._perfOpenLearnerDetail(
+      el.dataset.lpDetail, cls, policy, assessments, results, allAttendance, rankMap
+    );
+  });
+},
+
+/* ============================================================================
+   PERFORMANCE HELPERS — shared by Class Performance & Learner Performance
+   ============================================================================ */
+
+/** Compute weighted grades for each learner, honouring the versioned policy.
+ *  Matches renderGradebookRowsDO015's math exactly so tabs stay consistent. */
+_perfComputeLearnerGrades(cls, policy, learners, assessments, results, finalizedTerms) {
+  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+  const weights  = isLegacy
+    ? (cls.weights || CONFIG.DEFAULT_WEIGHTS)
+    : (cls.resolvedWeights || policy.weights[cls.weightKey] || policy.weights['KS2_CORE']);
+
+  const byCat = (cat) => assessments.filter(a => (isLegacy ? a.type : a.category) === cat);
+  const ww  = byCat('WW');
+  const pt  = byCat('PT');
+  const st1 = isLegacy ? [] : byCat('ST1');
+  const st2 = isLegacy ? [] : byCat('ST2');
+  const te  = isLegacy ? [] : byCat('TE');
+  const qa  = isLegacy ? byCat('QA') : [];
+
+  // Index results: learnerId → assessmentId → record
+  const byLearner = {};
+  results.forEach(r => {
+    (byLearner[r.learnerId] = byLearner[r.learnerId] || {})[r.assessmentId] = r;
+  });
+
+  const avgPct = (list, lr) =>
+    list.length ? Utils.avg(list.map(a => lr[a.id] ? (lr[a.id].percentage || 0) : 0)) : 0;
+
+  return learners.map(l => {
+    const lr = byLearner[l.id] || {};
+
+    // Prefer finalized term grades when they exist for this learner
+    const learnerFinalized = (finalizedTerms || []).filter(t => t.learnerId === l.id);
+    if (learnerFinalized.length) {
+      const sorted = learnerFinalized.slice().sort((a, b) => (b.finalizedAt || '').localeCompare(a.finalizedAt || ''));
+      const rec = sorted[0];
+      const reported = Number(rec.reportedGrade);
+      return {
+        learner: l,
+        wwPct: rec.wwPct || 0,
+        ptPct: rec.ptPct || 0,
+        exPct: rec.exPct,
+        qaPct: undefined,
+        initialGrade: rec.initialGrade || 0,
+        reportedGrade: reported,
+        descriptor: GradingEngine.getDescriptor(reported, policy),
+        hasAny: true,
+        fromFinalized: true,
+        finalizedTerm: rec.term
+      };
+    }
+
+    // Otherwise compute live from assessment results
+    const wwPct = Utils.round(avgPct(ww, lr), 2);
+    const ptPct = Utils.round(avgPct(pt, lr), 2);
+
+    if (isLegacy) {
+      const qaPct = Utils.round(avgPct(qa, lr), 2);
+      const hasAny = ww.length || pt.length || qa.length;
+      const ig = hasAny
+        ? Utils.round(wwPct * (weights.ww / 100) + ptPct * (weights.pt / 100) + qaPct * (weights.qa / 100), 2)
+        : 0;
+      const reported = hasAny ? Utils.transmute(ig) : '';
+      return {
+        learner: l, wwPct, ptPct, qaPct,
+        initialGrade: ig,
+        reportedGrade: reported,
+        descriptor: reported !== '' ? GradingEngine.getDescriptor(reported, policy) : { label: '—', description: '' },
+        hasAny,
+        fromFinalized: false
+      };
+    }
+
+    const st1Pct = Utils.round(avgPct(st1, lr), 2);
+    const st2Pct = Utils.round(avgPct(st2, lr), 2);
+    const tePct  = Utils.round(avgPct(te, lr), 2);
+    const exPct  = GradingEngine.calculateExaminationComponent(st1Pct, st2Pct, tePct, policy.examinationSubstructure);
+    const hasAny = ww.length || pt.length || st1.length || st2.length || te.length;
+    const ig = hasAny ? GradingEngine.calculateInitialGrade({ wwPct, ptPct, exPct }, weights) : 0;
+    const { reportedGrade } = hasAny ? GradingEngine.applyTransmutation(ig, policy) : { reportedGrade: '' };
+
+    return {
+      learner: l, wwPct, ptPct, exPct,
+      initialGrade: ig,
+      reportedGrade,
+      descriptor: hasAny ? GradingEngine.getDescriptor(reportedGrade, policy) : { label: '—', description: '' },
+      hasAny,
+      fromFinalized: false
+    };
+  });
+},
+
+/** Linear-regression slope direction over a series of scores. */
+_perfLearnerTrend(values) {
+  if (!values || values.length < 3) return { direction: 'flat', delta: 0 };
+  const recent = values.slice(-6);
+  const n = recent.length;
+  const meanX = (n - 1) / 2;
+  const meanY = recent.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (i - meanX) * (recent[i] - meanY);
+    den += Math.pow(i - meanX, 2);
+  }
+  const slope = den ? num / den : 0;
+  const delta = recent[n - 1] - recent[0];
+  if (slope > 1.5 || delta >= 5)  return { direction: 'up',   delta: Utils.round(delta, 1) };
+  if (slope < -1.5 || delta <= -5) return { direction: 'down', delta: Utils.round(delta, 1) };
+  return { direction: 'flat', delta: Utils.round(delta, 1) };
+},
+
+/** Standard deviation of an array of numbers. */
+_perfStdDev(arr) {
+  const nums = (arr || []).map(Number).filter(n => !isNaN(n));
+  if (nums.length < 2) return 0;
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+  const variance = nums.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / nums.length;
+  return Math.sqrt(variance);
+},
+
+/** Pearson correlation coefficient between two numeric arrays. */
+_perfPearson(xs, ys) {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return null;
+  const mx = xs.slice(0, n).reduce((a, b) => a + b, 0) / n;
+  const my = ys.slice(0, n).reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xs[i] - mx;
+    const b = ys[i] - my;
+    num += a * b; dx += a * a; dy += b * b;
+  }
+  const den = Math.sqrt(dx * dy);
+  return den ? num / den : null;
+},
+
+/** Map a descriptor to a colour swatch. */
+_perfDescriptorColor(d) {
+  const label = (d && d.label || '').toLowerCase();
+  if (/advanc|outstanding/.test(label))          return '#198754';
+  if (/benchmark|very satisfactory/.test(label)) return '#0057B8';
+  if (/connect|satisfactory/.test(label))        return '#0038A8';
+  if (/develop|fairly/.test(label))              return '#F59E0B';
+  if (/emerging|did not/.test(label))            return '#DC3545';
+  return '#627D98';
+},
+
+/** Tiny inline sparkline SVG. */
+_perfSparkline(values, opts = {}) {
+  const w = opts.w || 60;
+  const h = opts.h || 20;
+  const color = opts.color || 'var(--deped-blue)';
+  const nums = (values || []).map(Number).filter(n => !isNaN(n));
+  if (nums.length < 2) return `<svg width="${w}" height="${h}" class="perf-sparkline"></svg>`;
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  const span = Math.max(1, max - min);
+  const xFor = i => (i / (nums.length - 1)) * w;
+  const yFor = v => h - 2 - ((v - min) / span) * (h - 4);
+  const path = nums.map((v, i) => `${i === 0 ? 'M' : 'L'}${xFor(i).toFixed(1)},${yFor(v).toFixed(1)}`).join(' ');
+  return `<svg width="${w}" height="${h}" class="perf-sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+},
+
+/** Table view for learner performance. */
+_perfRenderLearnerTable(rows, rankMap, passing, policy) {
+  return `
+    <div class="card">
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width:38px;">#</th>
+              <th style="width:44px;">Rank</th>
+              <th style="width:52px;">Photo</th>
+              <th>Learner</th>
+              <th style="width:100px;">LRN</th>
+              <th style="width:90px;text-align:center;">Grade</th>
+              <th style="width:110px;">Descriptor</th>
+              <th style="width:90px;text-align:center;">Attendance</th>
+              <th style="width:110px;text-align:center;">Trend</th>
+              <th style="width:100px;">Flags</th>
+              <th style="width:50px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((e, i) => {
+              const rank = rankMap[e.learner.id];
+              const grade = e.hasAny && e.reportedGrade !== '' ? Number(e.reportedGrade) : null;
+              const desc = e.descriptor || { label: '—' };
+              const gradeColor = grade == null ? 'var(--text-muted)'
+                : grade >= 90 ? 'var(--success)'
+                : grade >= passing ? 'var(--deped-blue)'
+                : 'var(--danger)';
+              const trendIcon = e.trend.direction === 'up' ? '↑'
+                : e.trend.direction === 'down' ? '↓' : '→';
+              const trendClass = `perf-trend-${e.trend.direction}`;
+              const attColor = e.attendance.rate == null ? 'var(--text-muted)'
+                : e.attendance.rate >= 90 ? 'var(--success)'
+                : e.attendance.rate >= 80 ? 'var(--deped-blue)'
+                : 'var(--danger)';
+              return `
+                <tr data-lp-detail="${Utils.attr(e.learner.id)}" style="cursor:pointer;">
+                  <td class="text-muted">${i + 1}</td>
+                  <td>${rank ? `<span class="perf-rank ${rank <= 3 ? 'top3' : ''}">#${rank}</span>` : '<span class="text-muted">—</span>'}</td>
+                  <td>${Utils.avatarHTML(e.learner, 32, 12)}</td>
+                  <td>
+                    <strong>${Utils.esc(Utils.displayName(e.learner))}</strong>
+                    ${e.fromFinalized ? `<div class="text-xs text-muted">Finalized · ${Utils.esc(e.finalizedTerm || '')}</div>` : ''}
+                  </td>
+                  <td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px;">${Utils.esc(e.learner.lrn || '—')}</td>
+                  <td style="text-align:center;font-weight:800;color:${gradeColor};font-size:14px;">${grade ?? '—'}</td>
+                  <td class="text-xs" style="color:${grade == null ? 'var(--text-muted)' : 'var(--text)'};">${Utils.esc(desc.label)}</td>
+                  <td style="text-align:center;font-weight:600;color:${attColor};">
+                    ${e.attendance.rate != null ? e.attendance.rate + '%' : '—'}
+                  </td>
+                  <td style="text-align:center;">
+                    <div style="display:flex;align-items:center;gap:6px;justify-content:center;">
+                      ${Pages._perfSparkline(e.trendValues, {
+                        color: e.trend.direction === 'up' ? '#198754'
+                             : e.trend.direction === 'down' ? '#DC3545' : '#627D98'
+                      })}
+                      <span class="${trendClass}" style="font-weight:700;font-size:12px;">${trendIcon}</span>
+                    </div>
+                  </td>
+                  <td>
+                    ${e.riskFlags.length === 0
+                      ? `<span class="badge badge-success" style="font-size:10px;">On track</span>`
+                      : e.riskFlags.map(f => `<span class="badge badge-${f === 'below grade' ? 'danger' : f === 'low attendance' ? 'warning' : f === 'declining' ? 'warning' : 'neutral'}" style="font-size:9px;margin-right:2px;">${Utils.esc(f)}</span>`).join('')}
+                  </td>
+                  <td>
+                    <button class="icon-btn" title="View details">${icon('user')}</button>
+                  </td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+},
+
+/** Card view for learner performance. */
+_perfRenderLearnerCards(rows, rankMap, passing) {
+  return `
+    <div class="grid grid-auto">
+      ${rows.map(e => {
+        const rank = rankMap[e.learner.id];
+        const grade = e.hasAny && e.reportedGrade !== '' ? Number(e.reportedGrade) : null;
+        const desc = e.descriptor || { label: '—' };
+        const gradeColor = grade == null ? 'var(--text-muted)'
+          : grade >= 90 ? 'var(--success)'
+          : grade >= passing ? 'var(--deped-blue)'
+          : 'var(--danger)';
+        const trendIcon = e.trend.direction === 'up' ? '↑'
+          : e.trend.direction === 'down' ? '↓' : '→';
+        const trendClass = `perf-trend-${e.trend.direction}`;
+        return `
+          <div class="card" style="cursor:pointer;position:relative;padding:16px;"
+               data-lp-detail="${Utils.attr(e.learner.id)}">
+            ${rank ? `<div class="perf-rank ${rank <= 3 ? 'top3' : ''}" style="position:absolute;top:10px;right:10px;">#${rank}</div>` : ''}
+            <div class="flex gap-12" style="align-items:center;margin-bottom:12px;">
+              ${Utils.avatarHTML(e.learner, 52, 18)}
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  ${Utils.esc(Utils.fullName(e.learner))}
+                </div>
+                <div class="text-xs text-muted">LRN ${Utils.esc(e.learner.lrn || '—')}</div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+              <div style="text-align:center;padding:8px;background:var(--bg);border-radius:8px;">
+                <div style="font-size:22px;font-weight:800;color:${gradeColor};line-height:1;">${grade ?? '—'}</div>
+                <div class="text-xs text-muted" style="margin-top:2px;">${Utils.esc(desc.label)}</div>
+              </div>
+              <div style="text-align:center;padding:8px;background:var(--bg);border-radius:8px;">
+                <div style="font-size:22px;font-weight:800;color:var(--deped-blue);line-height:1;">
+                  ${e.attendance.rate != null ? e.attendance.rate + '%' : '—'}
+                </div>
+                <div class="text-xs text-muted" style="margin-top:2px;">Attendance</div>
+              </div>
+            </div>
+
+            <div class="flex-between" style="margin-bottom:8px;">
+              <span class="text-xs text-muted">Trend</span>
+              <div style="display:flex;align-items:center;gap:6px;">
+                ${Pages._perfSparkline(e.trendValues, { w: 80, h: 22,
+                  color: e.trend.direction === 'up' ? '#198754'
+                       : e.trend.direction === 'down' ? '#DC3545' : '#627D98' })}
+                <span class="${trendClass}" style="font-weight:700;font-size:13px;">${trendIcon}</span>
+              </div>
+            </div>
+
+            ${e.riskFlags.length
+              ? `<div style="padding-top:8px;border-top:1px solid var(--border);">${e.riskFlags.map(f => `<span class="badge badge-${f === 'below grade' ? 'danger' : f === 'no grades' ? 'neutral' : 'warning'}" style="font-size:9px;margin-right:2px;">${Utils.esc(f)}</span>`).join('')}</div>`
+              : `<div style="padding-top:8px;border-top:1px solid var(--border);"><span class="badge badge-success" style="font-size:10px;">✓ On track</span></div>`}
+          </div>`;
+      }).join('')}
+    </div>`;
+},
+
+/** Rich detail modal for a single learner. */
+async _perfOpenLearnerDetail(learnerId, cls, policy, assessments, results, attendance, rankMap) {
+  const learner = State.learners.find(l => l.id === learnerId);
+  if (!learner) return;
+
+  const passing = policy.passingGrade || 75;
+  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+
+  // This learner's computed grade
+  const grades = Pages._perfComputeLearnerGradeForOne(cls, policy, learner, assessments, results);
+  const rank = rankMap[learner.id];
+
+  // Class comparison
+  const allGrades = State.learners
+    .map(l => Pages._perfComputeLearnerGradeForOne(cls, policy, l, assessments, results))
+    .filter(g => g.hasAny && g.reportedGrade !== '' && g.reportedGrade != null)
+    .map(g => Number(g.reportedGrade));
+  const classAvg = allGrades.length ? Utils.round(Utils.avg(allGrades), 1) : null;
+  const classAvgDelta = (grades.hasAny && classAvg != null)
+    ? Utils.round(Number(grades.reportedGrade) - classAvg, 1)
+    : null;
+
+  // This learner's assessment results
+  const lResults = results
+    .filter(r => r.learnerId === learner.id)
+    .map(r => {
+      const a = assessments.find(x => x.id === r.assessmentId);
+      return a ? {
+        title: a.title || 'Untitled',
+        category: isLegacy ? a.type : a.category,
+        term: a.term || '',
+        score: r.score || 0,
+        max: r.maxScore || 100,
+        percentage: r.percentage || 0,
+        updatedAt: r.updatedAt
+      } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.updatedAt || '').localeCompare(b.updatedAt || ''));
+
+  // Attendance summary
+  const lAtt = attendance.filter(a => a.learnerId === learner.id);
+  const presentCount = lAtt.filter(a => a.status === 'Present').length;
+  const lateCount    = lAtt.filter(a => a.status === 'Late').length;
+  const absentCount  = lAtt.filter(a => a.status === 'Absent').length;
+  const excusedCount = lAtt.filter(a => a.status === 'Excused').length;
+  const attRate = lAtt.length ? Utils.round(((presentCount + lateCount + excusedCount) / lAtt.length) * 100, 1) : null;
+
+  const m = UI.modal({
+    title: 'Learner Performance · ' + Utils.fullName(learner),
+    size: 'modal-xl',
+    body: `
+      <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:20px;">
+        ${Utils.avatarHTML(learner, 72, 24)}
+        <div style="flex:1;min-width:200px;">
+          <h3 style="font-size:18px;margin-bottom:4px;">${Utils.esc(Utils.fullName(learner))}</h3>
+          <div class="text-sm text-muted">LRN ${Utils.esc(learner.lrn || '—')} · ${Utils.esc(learner.sex || '—')} · Age ${Utils.calcAge(learner.birthDate) || '—'}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:44px;font-weight:800;line-height:1;color:${grades.hasAny ? 'var(--deped-blue)' : 'var(--text-muted)'};">
+            ${grades.hasAny ? grades.reportedGrade : '—'}
+          </div>
+          <div class="text-xs text-muted">${Utils.esc(grades.descriptor?.label || '—')}</div>
+          ${rank ? `<div class="perf-rank ${rank <= 3 ? 'top3' : ''}" style="margin-top:6px;">Rank #${rank}</div>` : ''}
+        </div>
+      </div>
+
+      <div class="grid grid-4 mb-16" style="gap:10px;">
+        <div class="stat-card" style="padding:12px;">
+          <div class="stat-label">Initial Grade</div>
+          <div class="stat-value" style="font-size:20px;">${grades.hasAny ? grades.initialGrade : '—'}</div>
+        </div>
+        <div class="stat-card" style="padding:12px;">
+          <div class="stat-label">Attendance</div>
+          <div class="stat-value" style="font-size:20px;color:${attRate == null ? 'var(--text-muted)' : attRate >= 90 ? 'var(--success)' : attRate >= 80 ? 'var(--deped-blue)' : 'var(--danger)'};">
+            ${attRate != null ? attRate + '%' : '—'}
+          </div>
+          <div class="text-xs text-muted">${lAtt.length} record${lAtt.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="stat-card" style="padding:12px;">
+          <div class="stat-label">Assessments</div>
+          <div class="stat-value" style="font-size:20px;">${lResults.length}</div>
+          <div class="text-xs text-muted">Recorded</div>
+        </div>
+        <div class="stat-card" style="padding:12px;background:${classAvgDelta >= 0 ? 'rgba(25,135,84,0.08)' : 'rgba(220,53,69,0.08)'};">
+          <div class="stat-label">vs Class Avg</div>
+          <div class="stat-value" style="font-size:20px;color:${classAvgDelta >= 0 ? 'var(--success)' : 'var(--danger)'};">
+            ${classAvgDelta != null ? (classAvgDelta >= 0 ? '+' : '') + classAvgDelta : '—'}
+          </div>
+          <div class="text-xs text-muted">Class: ${classAvg ?? '—'}</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2 mb-16 perf-grid-2" style="gap:16px;">
+
+        <div class="card">
+          <div class="card-head"><h3 style="font-size:14px;">Weighted Components</h3></div>
+          ${(() => {
+            const rows = isLegacy
+              ? [
+                  { label: 'Written Works',         value: grades.wwPct, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).ww },
+                  { label: 'Performance Tasks',     value: grades.ptPct, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).pt },
+                  { label: 'Quarterly Assessment',  value: grades.qaPct, weight: (cls.weights || CONFIG.DEFAULT_WEIGHTS).qa }
+                ]
+              : (() => {
+                  const w = cls.resolvedWeights || policy.weights[cls.weightKey] || policy.weights['KS2_CORE'];
+                  return [
+                    { label: 'Written / Oral Works',      value: grades.wwPct, weight: w.WW },
+                    { label: 'Product / Performance Tasks', value: grades.ptPct, weight: w.PT },
+                    { label: 'Examinations',              value: grades.exPct, weight: w.EX }
+                  ];
+                })();
+            return rows.map(r => {
+              const v = r.value ?? 0;
+              const color = v >= 85 ? '#198754' : v >= 75 ? '#0057B8' : v >= 65 ? '#F59E0B' : '#DC3545';
+              return `
+                <div style="margin-bottom:12px;">
+                  <div class="flex-between" style="font-size:12.5px;margin-bottom:4px;">
+                    <span style="font-weight:600;">${Utils.esc(r.label)}</span>
+                    <span class="text-muted">${v}% · weight ${r.weight}%</span>
+                  </div>
+                  <div class="progress-bar" style="height:6px;"><div style="width:${v}%;background:${color};"></div></div>
+                </div>`;
+            }).join('');
+          })()}
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3 style="font-size:14px;">Attendance</h3></div>
+          ${lAtt.length === 0
+            ? '<p class="text-sm text-muted">No attendance records yet.</p>'
+            : `
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px;">
+                <div style="padding:10px;background:rgba(25,135,84,0.08);border-radius:8px;text-align:center;">
+                  <div style="font-size:20px;font-weight:800;color:var(--success);">${presentCount}</div>
+                  <div class="text-xs text-muted">Present</div>
+                </div>
+                <div style="padding:10px;background:rgba(245,158,11,0.08);border-radius:8px;text-align:center;">
+                  <div style="font-size:20px;font-weight:800;color:var(--warning);">${lateCount}</div>
+                  <div class="text-xs text-muted">Late</div>
+                </div>
+                <div style="padding:10px;background:rgba(220,53,69,0.08);border-radius:8px;text-align:center;">
+                  <div style="font-size:20px;font-weight:800;color:var(--danger);">${absentCount}</div>
+                  <div class="text-xs text-muted">Absent</div>
+                </div>
+                <div style="padding:10px;background:rgba(0,56,168,0.08);border-radius:8px;text-align:center;">
+                  <div style="font-size:20px;font-weight:800;color:var(--deped-blue);">${excusedCount}</div>
+                  <div class="text-xs text-muted">Excused</div>
+                </div>
+              </div>
+              <div class="progress-bar success"><div style="width:${attRate}%"></div></div>
+              <div class="text-xs text-muted" style="margin-top:6px;">Overall attendance rate: <strong>${attRate}%</strong></div>
+            `}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Assessment Results</h3>
+          <span class="text-xs text-muted">${lResults.length} record${lResults.length === 1 ? '' : 's'}</span>
+        </div>
+        ${lResults.length === 0
+          ? '<p class="text-sm text-muted" style="text-align:center;padding:20px;">No assessment scores recorded yet.</p>'
+          : `<div class="table-wrap">
+              <table class="data-table" style="font-size:12.5px;">
+                <thead>
+                  <tr>
+                    <th>Assessment</th>
+                    <th style="width:70px;">Category</th>
+                    <th style="width:70px;text-align:center;">Score</th>
+                    <th style="width:70px;text-align:center;">Percent</th>
+                    <th style="width:160px;">Performance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${lResults.map(r => {
+                    const pct = r.percentage;
+                    const color = pct >= 85 ? '#198754' : pct >= passing ? '#0057B8' : pct >= 50 ? '#F59E0B' : '#DC3545';
+                    return `
+                      <tr>
+                        <td>${Utils.esc(r.title)}</td>
+                        <td><span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(r.category || '—')}</span></td>
+                        <td style="text-align:center;font-weight:600;">${r.score} / ${r.max}</td>
+                        <td style="text-align:center;font-weight:700;color:${color};">${pct}%</td>
+                        <td>
+                          <div class="progress-bar" style="height:6px;">
+                            <div style="width:${pct}%;background:${color};"></div>
+                          </div>
+                        </td>
+                      </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>`}
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" id="lp-detail-print">${icon('printer')} Print Report</button>
+      <button class="btn btn-outline" id="lp-detail-profile">${icon('user')} Full Profile</button>
+      <button class="btn btn-outline" id="lp-detail-gradebook">${icon('chart')} Gradebook</button>
+      <button class="btn btn-primary" data-close>Close</button>
+    `
+  });
+
+  const profileBtn = m.overlay.querySelector('#lp-detail-profile');
+  if (profileBtn) profileBtn.onclick = () => { m.close(); App.openLearnerProfile(learner.id); };
+
+  const gradebookBtn = m.overlay.querySelector('#lp-detail-gradebook');
+  if (gradebookBtn) gradebookBtn.onclick = () => { m.close(); App.navigate('gradebook'); };
+
+  const printDetail = m.overlay.querySelector('#lp-detail-print');
+  if (printDetail) printDetail.onclick = () => Pages._perfPrintSingleLearnerReport(
+    cls, learner, grades, rank, classAvg, classAvgDelta,
+    lResults, lAtt, attRate, policy
+  );
+},
+
+/** Grade computation for a single learner (used inside the detail modal). */
+_perfComputeLearnerGradeForOne(cls, policy, learner, assessments, results) {
+  return Pages._perfComputeLearnerGrades(cls, policy, [learner], assessments, results, [])[0];
+},
+
+/** Export the class-wide performance CSV. */
+_perfExportClassCSV(cls, learnerGrades, policy) {
+  const rows = learnerGrades.map(g => ({
+    'LRN': g.learner.lrn || '',
+    'Learner': Utils.fullName(g.learner),
+    'Sex': Utils.normalizeSex(g.learner.sex) || '',
+    'Written Works %': g.wwPct ?? '',
+    'Performance Tasks %': g.ptPct ?? '',
+    'Examinations %': g.exPct ?? '',
+    'Quarterly Assessment %': g.qaPct ?? '',
+    'Initial Grade': g.initialGrade ?? '',
+    'Reported Grade': g.reportedGrade ?? '',
+    'Descriptor': g.descriptor?.label || '',
+    'Source': g.fromFinalized ? 'Finalized term grade' : 'Live assessment scores'
+  }));
+  const safe = `${cls.gradeLevel}_${cls.section}`.replace(/[^A-Za-z0-9]+/g, '_');
+  Utils.download(
+    `class-performance_${safe}_${Utils.timestampForFilename()}.csv`,
+    Utils.toCSV(rows),
+    'text/csv;charset=utf-8'
+  );
+  App.logActivity(`Class performance exported (${learnerGrades.length} learners)`, 'Reports');
+  UI.toast('Class performance exported', 'success');
+},
+
+_perfExportLearnersCSV(cls, enriched, rankMap, policy) {
+  const rows = enriched.map(e => ({
+    'Rank': rankMap[e.learner.id] || '',
+    'LRN': e.learner.lrn || '',
+    'Learner': Utils.fullName(e.learner),
+    'Sex': Utils.normalizeSex(e.learner.sex) || '',
+    'Written Works %': e.wwPct ?? '',
+    'Performance Tasks %': e.ptPct ?? '',
+    'Examinations %': e.exPct ?? '',
+    'Initial Grade': e.initialGrade ?? '',
+    'Reported Grade': e.reportedGrade ?? '',
+    'Descriptor': e.descriptor?.label || '',
+    'Attendance Rate %': e.attendance.rate ?? '',
+    'Attendance Records': e.attendance.total,
+    'Trend': e.trend.direction,
+    'Trend Delta': e.trend.delta,
+    'Flags': e.riskFlags.join('; ')
+  }));
+  const safe = `${cls.gradeLevel}_${cls.section}`.replace(/[^A-Za-z0-9]+/g, '_');
+  Utils.download(
+    `learner-performance_${safe}_${Utils.timestampForFilename()}.csv`,
+    Utils.toCSV(rows),
+    'text/csv;charset=utf-8'
+  );
+  App.logActivity(`Learner performance exported (${enriched.length} learners)`, 'Reports');
+  UI.toast('Learner performance exported', 'success');
+},
+
+/* ============================================================================
+   CLASS PERFORMANCE — printable report
+   Renders a DepEd-headed A4-landscape document into #print-area, waits for
+   the letterhead images to decode, then fires the print dialog.
+   ============================================================================ */
+_perfPrintClassReport(cls, d) {
+  const {
+    policy, learnerGrades,
+    classAvg, classMedian, classStdDev, highestGrade, lowestGrade,
+    passRate, passedCount, gradeValues,
+    distribution, catWW, catPT, catEX, catQA, isLegacy,
+    assessmentBoard, correlation, correlationLabel
+  } = d;
+
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const passing = policy.passingGrade || 75;
+  const esc = Utils.esc;
+
+  // Ranks (dense, highest = 1)
+  const ranked = learnerGrades
+    .filter(g => g.hasAny && g.reportedGrade !== '' && g.reportedGrade != null)
+    .slice()
+    .sort((a, b) => Number(b.reportedGrade) - Number(a.reportedGrade));
+  const rankMap = {};
+  let lastG = null, lastR = 0;
+  ranked.forEach((g, i) => {
+    if (Number(g.reportedGrade) !== lastG) { lastR = i + 1; lastG = Number(g.reportedGrade); }
+    rankMap[g.learner.id] = lastR;
+  });
+
+  // Sort learners alphabetically for the print sheet
+  const sorted = learnerGrades.slice().sort((a, b) =>
+    ((a.learner.lastName || '') + (a.learner.firstName || ''))
+      .toLowerCase()
+      .localeCompare(((b.learner.lastName || '') + (b.learner.firstName || '')).toLowerCase())
+  );
+
+  const distTotal = gradeValues.length || 1;
+
+  const gradeRowsHTML = sorted.map((g, i) => {
+    const grade = g.hasAny && g.reportedGrade !== '' ? Number(g.reportedGrade) : null;
+    const failStyle = grade != null && grade < passing ? 'color:#c00;font-weight:700;' : '';
+    return `<tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td style="text-align:center;font-weight:700;">${rankMap[g.learner.id] || ''}</td>
+      <td>${esc(Utils.fullName(g.learner))}</td>
+      <td style="text-align:center;font-family:monospace;">${esc(g.learner.lrn || '')}</td>
+      <td style="text-align:center;">${esc(g.learner.sex || '')}</td>
+      <td style="text-align:center;">${g.wwPct != null ? g.wwPct : ''}</td>
+      <td style="text-align:center;">${g.ptPct != null ? g.ptPct : ''}</td>
+      <td style="text-align:center;">${isLegacy
+        ? (g.qaPct != null ? g.qaPct : '')
+        : (g.exPct != null ? g.exPct : '')}</td>
+      <td style="text-align:center;">${g.initialGrade != null ? g.initialGrade : ''}</td>
+      <td style="text-align:center;font-weight:800;${failStyle}">${grade ?? ''}</td>
+      <td style="text-align:center;font-size:8pt;">${esc(g.descriptor?.label || '')}</td>
+    </tr>`;
+  }).join('');
+
+  const distRowsHTML = distribution.map(b => `<tr>
+    <td>${esc(b.label)}</td>
+    <td style="text-align:center;">${esc(b.range)}</td>
+    <td style="text-align:center;font-weight:700;">${b.count}</td>
+    <td style="text-align:center;">${Math.round((b.count / distTotal) * 100)}%</td>
+  </tr>`).join('');
+
+  const assessmentRowsHTML = assessmentBoard.map((a, i) => `<tr>
+    <td style="text-align:center;">${i + 1}</td>
+    <td>${esc(a.title)}</td>
+    <td style="text-align:center;">${esc(a.category)}</td>
+    <td style="text-align:center;">${a.maxScore}</td>
+    <td style="text-align:center;">${a.responses}</td>
+    <td style="text-align:center;font-weight:700;">${a.avg}%</td>
+    <td style="text-align:center;">${a.highest != null ? a.highest + '%' : ''}</td>
+    <td style="text-align:center;">${a.lowest != null ? a.lowest + '%' : ''}</td>
+  </tr>`).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-perf-class">
+      ${Pages._buildDepEdHeader()}
+
+      <h3 style="text-align:center;font-size:13pt;margin:8px 0 2px;text-transform:uppercase;letter-spacing:0.3px;">
+        Class Performance Report
+      </h3>
+      <p style="text-align:center;font-size:10pt;margin:0 0 12px;">
+        ${esc(cls.gradeLevel)} – ${esc(cls.section)} &middot; ${esc(cls.subject || 'No subject')} &middot; SY ${esc(cls.schoolYear || State.schoolYear)}
+      </p>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="width:25%;padding:4px 6px;"><strong>Teacher:</strong> ${esc(teacher.fullName || cls.adviser || '—')}</td>
+          <td style="width:35%;padding:4px 6px;"><strong>Grading Policy:</strong> ${esc(policy.label)}</td>
+          <td style="width:20%;padding:4px 6px;"><strong>Passing Grade:</strong> ${passing}</td>
+          <td style="width:20%;padding:4px 6px;"><strong>Date:</strong> ${Utils.formatDate(Utils.todayISO())}</td>
+        </tr>
+      </table>
+
+      <h4 style="font-size:11pt;margin:0 0 6px;">Overall Statistics</h4>
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Class Average</div>
+            <div style="font-size:15pt;font-weight:800;">${classAvg ?? '—'}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Median</div>
+            <div style="font-size:15pt;font-weight:800;">${classMedian ?? '—'}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Std Dev</div>
+            <div style="font-size:15pt;font-weight:800;">${Utils.round(classStdDev, 1)}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Highest</div>
+            <div style="font-size:15pt;font-weight:800;">${highestGrade ?? '—'}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Lowest</div>
+            <div style="font-size:15pt;font-weight:800;">${lowestGrade ?? '—'}</div>
+          </td>
+        </tr>
+      </table>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="padding:4px 6px;border:1px solid #000;"><strong>Graded Learners:</strong> ${gradeValues.length}</td>
+          <td style="padding:4px 6px;border:1px solid #000;"><strong>Passing Rate:</strong> ${passRate ?? '—'}% (${passedCount} of ${gradeValues.length})</td>
+          <td style="padding:4px 6px;border:1px solid #000;">
+            <strong>Attendance ↔ Grade Correlation:</strong>
+            ${correlation != null ? Utils.round(correlation, 2) + ' (' + esc(correlationLabel) + ')' : 'Insufficient data'}
+          </td>
+        </tr>
+      </table>
+
+      <h4 style="font-size:11pt;margin:0 0 6px;">Grade Distribution</h4>
+      <table style="width:60%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:3px 5px;">Descriptor</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Range</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Count</th>
+            <th style="border:1px solid #000;padding:3px 5px;">%</th>
+          </tr>
+        </thead>
+        <tbody>${distRowsHTML}</tbody>
+      </table>
+
+      <h4 style="font-size:11pt;margin:0 0 6px;">Category Averages</h4>
+      <table style="width:60%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:3px 5px;">Component</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Class Average (%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #000;padding:3px 5px;">Written Works</td><td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${catWW ?? '—'}</td></tr>
+          <tr><td style="border:1px solid #000;padding:3px 5px;">Performance Tasks</td><td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${catPT ?? '—'}</td></tr>
+          ${isLegacy
+            ? `<tr><td style="border:1px solid #000;padding:3px 5px;">Quarterly Assessment</td><td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${catQA ?? '—'}</td></tr>`
+            : `<tr><td style="border:1px solid #000;padding:3px 5px;">Examinations</td><td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${catEX ?? '—'}</td></tr>`}
+        </tbody>
+      </table>
+
+      ${assessmentBoard.length ? `
+        <h4 style="font-size:11pt;margin:0 0 6px;">Assessment Leaderboard</h4>
+        <table style="width:100%;font-size:8.5pt;margin-bottom:14px;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="border:1px solid #000;padding:3px 5px;width:30px;">#</th>
+              <th style="border:1px solid #000;padding:3px 5px;">Assessment</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:60px;">Category</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:50px;">Max</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:70px;">Responses</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:70px;">Class Avg</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:60px;">Highest</th>
+              <th style="border:1px solid #000;padding:3px 5px;width:60px;">Lowest</th>
+            </tr>
+          </thead>
+          <tbody>${assessmentRowsHTML}</tbody>
+        </table>` : ''}
+
+      <h4 style="font-size:11pt;margin:0 0 6px;page-break-before:always;">Learner Grade Sheet</h4>
+      <table style="width:100%;font-size:8.5pt;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:3px 5px;">#</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Rank</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Learner</th>
+            <th style="border:1px solid #000;padding:3px 5px;">LRN</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Sex</th>
+            <th style="border:1px solid #000;padding:3px 5px;">WW%</th>
+            <th style="border:1px solid #000;padding:3px 5px;">PT%</th>
+            <th style="border:1px solid #000;padding:3px 5px;">${isLegacy ? 'QA%' : 'EX%'}</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Initial</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Final</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Descriptor</th>
+          </tr>
+        </thead>
+        <tbody>${gradeRowsHTML}</tbody>
+      </table>
+
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  // Landscape A4 for the wide tables
+  const styleId = 'perf-print-css';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = `
+    @page { size: A4 landscape; margin: 0.7cm; }
+    .print-perf-class table { page-break-inside: auto; }
+    .print-perf-class tr    { page-break-inside: avoid; }
+    .print-perf-class thead { display: table-header-group; }
+  `;
+  document.head.appendChild(st);
+
+  App.logActivity('Class performance report printed — ' + cls.gradeLevel + ' - ' + cls.section, 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+},
+
+/* ============================================================================
+   LEARNER PERFORMANCE — printable report
+   A4 landscape, one row per learner, with rank, grade, attendance and flags.
+   ============================================================================ */
+_perfPrintLearnersReport(cls, rows, rankMap, ctx) {
+  const { policy, passing, classAvg, gradedCount, passingCount, atRiskCount, totalLearners } = ctx;
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const esc = Utils.esc;
+
+  // Sort alphabetically for consistency with other printed registers
+  const sorted = rows.slice().sort((a, b) =>
+    ((a.learner.lastName || '') + (a.learner.firstName || ''))
+      .toLowerCase()
+      .localeCompare(((b.learner.lastName || '') + (b.learner.firstName || '')).toLowerCase())
+  );
+
+  const rowHTML = sorted.map((e, i) => {
+    const rank  = rankMap[e.learner.id];
+    const grade = e.hasAny && e.reportedGrade !== '' ? Number(e.reportedGrade) : null;
+    const failStyle = grade != null && grade < passing ? 'color:#c00;font-weight:700;' : '';
+    const trendSym = e.trend.direction === 'up' ? '▲'
+                   : e.trend.direction === 'down' ? '▼' : '■';
+    const trendColor = e.trend.direction === 'up' ? '#198754'
+                     : e.trend.direction === 'down' ? '#DC3545' : '#666';
+    return `<tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td style="text-align:center;font-weight:700;">${rank || ''}</td>
+      <td>${esc(Utils.fullName(e.learner))}</td>
+      <td style="text-align:center;font-family:monospace;">${esc(e.learner.lrn || '')}</td>
+      <td style="text-align:center;">${esc(e.learner.sex || '')}</td>
+      <td style="text-align:center;font-weight:800;${failStyle}">${grade ?? '—'}</td>
+      <td style="text-align:center;font-size:8pt;">${esc(e.descriptor?.label || '')}</td>
+      <td style="text-align:center;">${e.attendance.rate != null ? e.attendance.rate + '%' : '—'}</td>
+      <td style="text-align:center;color:${trendColor};font-weight:700;">${trendSym} ${e.trend.delta > 0 ? '+' : ''}${e.trend.delta}</td>
+      <td style="font-size:8pt;">${esc(e.riskFlags.join(', ') || '—')}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-perf-learners">
+      ${Pages._buildDepEdHeader()}
+
+      <h3 style="text-align:center;font-size:13pt;margin:8px 0 2px;text-transform:uppercase;letter-spacing:0.3px;">
+        Learner Performance Report
+      </h3>
+      <p style="text-align:center;font-size:10pt;margin:0 0 12px;">
+        ${esc(cls.gradeLevel)} – ${esc(cls.section)} &middot; ${esc(cls.subject || 'No subject')} &middot; SY ${esc(cls.schoolYear || State.schoolYear)}
+      </p>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:12px;border-collapse:collapse;">
+        <tr>
+          <td style="width:25%;padding:4px 6px;border:1px solid #000;"><strong>Teacher:</strong> ${esc(teacher.fullName || cls.adviser || '—')}</td>
+          <td style="width:25%;padding:4px 6px;border:1px solid #000;"><strong>Policy:</strong> ${esc(policy.label)}</td>
+          <td style="width:25%;padding:4px 6px;border:1px solid #000;"><strong>Passing Grade:</strong> ${passing}</td>
+          <td style="width:25%;padding:4px 6px;border:1px solid #000;"><strong>Date:</strong> ${Utils.formatDate(Utils.todayISO())}</td>
+        </tr>
+      </table>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:12px;border-collapse:collapse;">
+        <tr>
+          <td style="width:25%;padding:5px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Total Learners</div>
+            <div style="font-size:14pt;font-weight:800;">${totalLearners}</div>
+          </td>
+          <td style="width:25%;padding:5px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Class Average</div>
+            <div style="font-size:14pt;font-weight:800;">${classAvg ?? '—'}</div>
+          </td>
+          <td style="width:25%;padding:5px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Passing</div>
+            <div style="font-size:14pt;font-weight:800;">${passingCount} / ${gradedCount}</div>
+          </td>
+          <td style="width:25%;padding:5px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Needs Attention</div>
+            <div style="font-size:14pt;font-weight:800;${atRiskCount ? 'color:#c00;' : ''}">${atRiskCount}</div>
+          </td>
+        </tr>
+      </table>
+
+      <table style="width:100%;font-size:8.5pt;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:3px 5px;">#</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Rank</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Learner</th>
+            <th style="border:1px solid #000;padding:3px 5px;">LRN</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Sex</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Grade</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Descriptor</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Attendance</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Trend</th>
+            <th style="border:1px solid #000;padding:3px 5px;">Flags</th>
+          </tr>
+        </thead>
+        <tbody>${rowHTML}</tbody>
+      </table>
+
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  const styleId = 'perf-print-css';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = `
+    @page { size: A4 landscape; margin: 0.7cm; }
+    .print-perf-learners table { page-break-inside: auto; }
+    .print-perf-learners tr    { page-break-inside: avoid; }
+    .print-perf-learners thead { display: table-header-group; }
+  `;
+  document.head.appendChild(st);
+
+  App.logActivity('Learner performance report printed — ' + cls.gradeLevel + ' - ' + cls.section, 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+},
+/* Single-learner printable report card (opened from the detail modal). */
+_perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelta, lResults, lAtt, attRate, policy) {
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const passing = policy.passingGrade || 75;
+  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+  const esc = Utils.esc;
+
+  const presentCount = lAtt.filter(a => a.status === 'Present').length;
+  const lateCount    = lAtt.filter(a => a.status === 'Late').length;
+  const absentCount  = lAtt.filter(a => a.status === 'Absent').length;
+  const excusedCount = lAtt.filter(a => a.status === 'Excused').length;
+
+  const resultsRows = lResults.map(r => `<tr>
+    <td style="border:1px solid #000;padding:3px 5px;">${esc(r.title)}</td>
+    <td style="border:1px solid #000;padding:3px 5px;text-align:center;">${esc(r.category || '—')}</td>
+    <td style="border:1px solid #000;padding:3px 5px;text-align:center;">${r.score} / ${r.max}</td>
+    <td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;${r.percentage < passing ? 'color:#c00;' : ''}">${r.percentage}%</td>
+  </tr>`).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-perf-single">
+      ${Pages._buildDepEdHeader()}
+      <h3 style="text-align:center;font-size:13pt;margin:8px 0 2px;text-transform:uppercase;">
+        Individual Learner Performance Report
+      </h3>
+      <p style="text-align:center;font-size:10pt;margin:0 0 12px;">
+        ${esc(cls.gradeLevel)} – ${esc(cls.section)} &middot; ${esc(cls.subject || '')} &middot; SY ${esc(cls.schoolYear || State.schoolYear)}
+      </p>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:12px;border-collapse:collapse;">
+        <tr>
+          <td style="border:1px solid #000;padding:4px 6px;"><strong>Name:</strong> ${esc(Utils.fullName(learner))}</td>
+          <td style="border:1px solid #000;padding:4px 6px;"><strong>LRN:</strong> ${esc(learner.lrn || '—')}</td>
+          <td style="border:1px solid #000;padding:4px 6px;"><strong>Sex:</strong> ${esc(learner.sex || '—')}</td>
+          <td style="border:1px solid #000;padding:4px 6px;"><strong>Age:</strong> ${Utils.calcAge(learner.birthDate) || '—'}</td>
+        </tr>
+      </table>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Reported Grade</div>
+            <div style="font-size:16pt;font-weight:800;${grades.hasAny && Number(grades.reportedGrade) < passing ? 'color:#c00;' : ''}">
+              ${grades.hasAny ? grades.reportedGrade : '—'}
+            </div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Descriptor</div>
+            <div style="font-size:10pt;font-weight:700;">${esc(grades.descriptor?.label || '—')}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Class Rank</div>
+            <div style="font-size:16pt;font-weight:800;">${rank ? '#' + rank : '—'}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Class Average</div>
+            <div style="font-size:16pt;font-weight:800;">${classAvg ?? '—'}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Δ vs Class</div>
+            <div style="font-size:16pt;font-weight:800;color:${classAvgDelta >= 0 ? '#198754' : '#DC3545'};">
+              ${classAvgDelta != null ? (classAvgDelta >= 0 ? '+' : '') + classAvgDelta : '—'}
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <h4 style="font-size:11pt;margin:0 0 6px;">Weighted Components</h4>
+      <table style="width:60%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="border:1px solid #000;padding:3px 5px;">Written Works</td>
+          <td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${grades.wwPct ?? '—'}%</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #000;padding:3px 5px;">Performance Tasks</td>
+          <td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">${grades.ptPct ?? '—'}%</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #000;padding:3px 5px;">${isLegacy ? 'Quarterly Assessment' : 'Examinations'}</td>
+          <td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:700;">
+            ${isLegacy ? (grades.qaPct ?? '—') : (grades.exPct ?? '—')}%
+          </td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #000;padding:3px 5px;"><strong>Initial Grade</strong></td>
+          <td style="border:1px solid #000;padding:3px 5px;text-align:center;font-weight:800;">${grades.initialGrade ?? '—'}</td>
+        </tr>
+      </table>
+
+      <h4 style="font-size:11pt;margin:0 0 6px;">Attendance Summary</h4>
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="border:1px solid #000;padding:5px;text-align:center;"><strong>Present</strong><br>${presentCount}</td>
+          <td style="border:1px solid #000;padding:5px;text-align:center;"><strong>Late</strong><br>${lateCount}</td>
+          <td style="border:1px solid #000;padding:5px;text-align:center;"><strong>Absent</strong><br>${absentCount}</td>
+          <td style="border:1px solid #000;padding:5px;text-align:center;"><strong>Excused</strong><br>${excusedCount}</td>
+          <td style="border:1px solid #000;padding:5px;text-align:center;"><strong>Rate</strong><br>${attRate != null ? attRate + '%' : '—'}</td>
+        </tr>
+      </table>
+
+      ${lResults.length ? `
+        <h4 style="font-size:11pt;margin:0 0 6px;">Assessment Results</h4>
+        <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="border:1px solid #000;padding:3px 5px;">Assessment</th>
+              <th style="border:1px solid #000;padding:3px 5px;">Category</th>
+              <th style="border:1px solid #000;padding:3px 5px;">Score</th>
+              <th style="border:1px solid #000;padding:3px 5px;">Percent</th>
+            </tr>
+          </thead>
+          <tbody>${resultsRows}</tbody>
+        </table>` : ''}
+
+      <div style="margin-top:20px;font-size:9pt;">
+        <div style="display:inline-block;text-align:center;min-width:220px;">
+          <div style="border-top:1px solid #000;padding-top:3px;">
+            ${esc(Licensing.getReportSignatory(cls) || teacher.fullName || '')}<br>
+            <span style="font-size:8pt;">${esc(Pages._getTeacherDesignation())}</span>
+          </div>
+        </div>
+      </div>
+
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  const styleId = 'perf-print-css';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = '@page { size: A4 portrait; margin: 1cm; }';
+  document.head.appendChild(st);
+
+  App.logActivity('Single learner report printed: ' + Utils.fullName(learner), 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+},
 
   async assignments(root) {
     if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'file', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
@@ -17861,66 +19854,72 @@ async printLesson(id) {
   </div>
 </div>
 
-${hasChairGrid ? `<div class="seat-editor-toolbar">
-  <div class="stb-group">
-    <span class="stb-label">Grid</span>
-    <button class="btn btn-sm btn-outline" id="seat-add-row-bottom">${icon('edit')} + Row</button>
-    <button class="btn btn-sm btn-outline" id="seat-add-col-right">${icon('edit')} + Column</button>
+  ${hasChairGrid ? `<div class="seat-editor-toolbar">
+    <div class="stb-group">
+      <span class="stb-label">Grid</span>
+      <button class="btn btn-sm btn-outline" id="seat-add-row-bottom">${icon('edit')} + Row</button>
+      <button class="btn btn-sm btn-outline" id="seat-add-col-right">${icon('edit')} + Column</button>
+    </div>
+    <div class="stb-group">
+      <span class="stb-label">Preset</span>
+      <button class="btn btn-sm btn-outline" id="seat-grid-uniform">Uniform Sizes</button>
+      <button class="btn btn-sm btn-outline" id="seat-grid-auto-fit">Auto-Fit</button>
+    </div>
+    <div class="stb-group">
+      <span class="stb-label">View</span>
+      <button class="btn btn-sm btn-outline" id="seat-orientation-toggle" title="Flip between teacher's POV and whiteboard POV">
+        ${plan.orientation === 'whiteboard' ? 'Front at Top' : 'Front at Bottom'}
+      </button>
+    </div>
+    <div style="flex:1;"></div>
+    <div class="stb-group">
+      <button class="btn btn-sm btn-outline" onclick="Pages.seatRandomize()">${icon('shuffle')} Randomize</button>
+      <button class="btn btn-sm btn-outline" onclick="Pages.seatClear()">${icon('file')} Clear Seats</button>
+    </div>
   </div>
-  <div class="stb-group">
-    <span class="stb-label">Preset</span>
-    <button class="btn btn-sm btn-outline" id="seat-grid-uniform">Uniform Sizes</button>
-    <button class="btn btn-sm btn-outline" id="seat-grid-auto-fit">Auto-Fit</button>
-  </div>
-  <div class="stb-group">
-    <span class="stb-label">View</span>
-    <button class="btn btn-sm btn-outline" id="seat-orientation-toggle" title="Flip between teacher's POV and whiteboard POV">
-      ${plan.orientation === 'whiteboard' ? 'Front at Top' : 'Front at Bottom'}
-    </button>
-  </div>
-  <div style="flex:1;"></div>
-  <div class="stb-group">
-    <button class="btn btn-sm btn-outline" onclick="Pages.seatRandomize()">${icon('shuffle')} Randomize</button>
-    <button class="btn btn-sm btn-outline" onclick="Pages.seatClear()">${icon('file')} Clear Seats</button>
-  </div>
-</div>
 
-${plan.orientation === 'whiteboard'
-  ? `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Whiteboard Side</div>`
-  : `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`}
+  <div class="seat-layout-split">
+    <div class="seat-layout-main">
+      ${plan.orientation === 'whiteboard'
+        ? `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Whiteboard Side</div>`
+        : `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`}
 
-<div class="seat-editor-wrap mb-16">
-  <table class="seat-editor" id="seat-grid-table"></table>
-</div>
-
-${plan.orientation === 'whiteboard'
-  ? `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`
-  : `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Teacher's Position</div>`}
-
-    <div class="card mb-16">
-      <div class="card-head" style="margin-bottom:6px;">
-        <h3 style="font-size:14px;">Group Tables</h3>
-        <span class="text-xs text-muted">For learners sharing a table instead of an individual armchair</span>
+      <div class="seat-editor-wrap">
+        <table class="seat-editor" id="seat-grid-table"></table>
       </div>
-      <div id="seat-tables-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:10px;"></div>
+
+      ${plan.orientation === 'whiteboard'
+        ? `<div class="seat-orientation-bar back">${icon('building')} Back of Classroom</div>`
+        : `<div class="seat-orientation-bar front">${icon('user')} Front of Classroom · Teacher's Position</div>`}
     </div>
 
-    <div class="card">
-      <div class="card-head" style="margin-bottom:10px;">
-        <h3 style="font-size:14px;">Unplaced Learners</h3>
-        <span class="text-xs text-muted">Drag a learner to any chair or table to place them</span>
+    <aside class="seat-layout-side">
+      <div class="card">
+        <div class="card-head" style="margin-bottom:6px;">
+          <h3 style="font-size:14px;">Group Tables</h3>
+          <span class="text-xs text-muted">Learners sharing a table instead of an individual armchair</span>
+        </div>
+        <div id="seat-tables-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:10px;"></div>
       </div>
-      <div id="unseated-chips" class="seat-unseated-pool"></div>
-    </div>` : `
-    <div id="seat-container" style="display:none;"></div>
-    <div id="seat-tables-container" style="display:none;"></div>
-    <div id="unseated-chips" style="display:none;"></div>
-    <div class="card">
-      <div class="card-head"><h3>No Armchair Grid</h3></div>
-      <p class="text-sm text-muted mb-12">This classroom has no armchair grid. Add one to start placing learners in rows and columns.</p>
-      <button class="btn btn-primary" onclick="Pages.seatInitializeGrid()">${icon('grid')} Create Armchair Grid</button>
+    </aside>
+  </div>
+
+  <div class="card mt-16">
+    <div class="card-head" style="margin-bottom:10px;">
+      <h3 style="font-size:14px;">Unplaced Learners</h3>
+      <span class="text-xs text-muted">Drag a learner to any chair or table to place them</span>
     </div>
-    `}
+    <div id="unseated-chips" class="seat-unseated-pool"></div>
+  </div>` : `
+  <div id="seat-container" style="display:none;"></div>
+  <div id="seat-tables-container" style="display:none;"></div>
+  <div id="unseated-chips" style="display:none;"></div>
+  <div class="card">
+    <div class="card-head"><h3>No Armchair Grid</h3></div>
+    <p class="text-sm text-muted mb-12">This classroom has no armchair grid. Add one to start placing learners in rows and columns.</p>
+    <button class="btn btn-primary" onclick="Pages.seatInitializeGrid()">${icon('grid')} Create Armchair Grid</button>
+  </div>
+  `}
     `;
 
     const addRowBtn = root.querySelector('#seat-add-row-bottom');
@@ -19970,27 +21969,20 @@ async printGroupingSet(id) {
       </div>`;
   }).join('');
 
-  document.getElementById('print-area').innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || 'Class Grouping')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-      <div class="print-line"></div>
-      <h2 style="font-size:13pt;">${Utils.esc(rec.name || 'Grouping')}</h2>
-      ${rec.purpose ? `<p style="font-size:10pt;font-style:italic;">Purpose: ${Utils.esc(rec.purpose)}</p>` : ''}
-    </div>
-    <div class="print-meta">
-      <span>Teacher: ${Utils.esc(Licensing.getReportSignatory(State.activeClass) || '—')}</span>
-      <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
-      <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
-      <span>${Utils.formatDate(Utils.todayISO())}</span>
-    </div>
-    ${rec.notes ? `<p style="font-size:10pt;font-style:italic;margin:8px 0 14px;">${Utils.esc(rec.notes)}</p>` : ''}
-    <div>${groupsHTML}</div>
-    <div class="print-footer">
-      <span>Generated by KlazAssist</span>
-      <span>${(rec.groups||[]).length} groups · ${(rec.groups||[]).reduce((n,g) => n + (g.memberIds||[]).length, 0)} learners</span>
+    document.getElementById('print-area').innerHTML = `
+    <div class="print-grouping">
+      ${Pages._buildDepEdHeader()}
+      <h3 style="text-align:center;font-size:13pt;margin:10px 0 2px;">${Utils.esc(rec.name || 'Grouping')}</h3>
+      ${rec.purpose ? `<p style="text-align:center;font-size:10pt;font-style:italic;margin-bottom:10px;">Purpose: ${Utils.esc(rec.purpose)}</p>` : ''}
+      <div style="font-size:10pt;display:flex;justify-content:space-between;margin-bottom:14px;">
+        <span>Teacher: ${Utils.esc(Licensing.getReportSignatory(State.activeClass) || '—')}</span>
+        <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+        <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+        <span>${Utils.formatDate(Utils.todayISO())}</span>
+      </div>
+      <div>${groupsHTML}</div>
+      ${Pages._buildDepEdFooter()}
     </div>`;
-
   App.logActivity('Grouping printed: ' + rec.name, 'Groupings');
   window.print();
 },
@@ -23065,72 +25057,1107 @@ async quizManager(root) {
       Pages._bindQuizPresenterControls(root);
     }
   },
-  async classList(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'list', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Class List</h2><p>Printable class list</p></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.printClassList()">${icon('printer')} Print</button>
-        <button class="btn btn-outline" onclick="Pages.exportClassListCSV()">${icon('download')} CSV</button></div></div>
-      <div class="card"><div id="cl-preview"></div></div>`;
-    const learners = State.learners;
-    const cls = State.activeClass;
-    document.getElementById('cl-preview').innerHTML = `
-      <h3 style="margin-bottom:10px;">${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</h3>
-      <div class="table-wrap"><table class="data-table">
-        <thead><tr><th>#</th><th>Photo</th><th>LRN</th><th>Name</th><th>Sex</th><th>Age</th><th>Parent/Guardian</th><th>Contact</th></tr></thead>
-        <tbody>${learners.map((l,i) => `<tr>
-          <td>${i+1}</td><td>${Utils.avatarHTML(l, 32, 12)}</td><td>${Utils.esc(l.lrn||'—')}</td><td>${Utils.esc(Utils.fullName(l))}</td>
-          <td>${Utils.esc(l.sex||'—')}</td><td>${Utils.calcAge(l.birthDate)||'—'}</td>
-          <td>${Utils.esc(l.parent||'—')}</td><td>${Utils.esc(l.parentContact||'—')}</td>
-        </tr>`).join('')}</tbody>
-      </table></div>`;
-  },
-  exportClassListCSV() {
-    if (!State.learners.length) { UI.toast('No learners', 'warning'); return; }
-    const rows = State.learners.map((l,i) => ({
-      '#': i+1, LRN: l.lrn||'', Name: Utils.fullName(l), Sex: l.sex||'',
-      Age: Utils.calcAge(l.birthDate), Parent: l.parent||'', Contact: l.parentContact||''
-    }));
-    Utils.download('class-list-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
-  },
-  printClassList() {
-    if (!State.activeClass) return;
-    const school = State.schools[0] || {};
-    const teacher = State.currentUser || {};
-    const cls = State.activeClass;
-    const rows = State.learners.map((l,i) => `<tr><td>${i+1}</td><td>${Utils.esc(l.lrn||'')}</td><td>${Utils.esc(Utils.fullName(l))}</td><td>${Utils.esc(l.sex||'')}</td><td>${Utils.calcAge(l.birthDate)||''}</td></tr>`).join('');
-    document.getElementById('print-area').innerHTML = `
-      <div class="print-header"><h1>${Utils.esc(school.name||'')}</h1><p>${Utils.esc(school.address||'')}</p>
-      <h2 style="font-size:13pt;">CLASS LIST</h2></div>
-      <div class="print-meta"><span>Teacher: ${Utils.esc(Licensing.getReportSignatory(State.activeClass))}</span><span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span><span>SY: ${Utils.esc(cls.schoolYear||State.schoolYear)}</span></div>
-      <table><thead><tr><th>#</th><th>LRN</th><th>Name</th><th>Sex</th><th>Age</th></tr></thead><tbody>${rows}</tbody></table>
-      <div class="print-footer"><span>Generated: ${Utils.formatDate(Utils.todayISO())}</span><span>KlazAssist</span></div>`;
-    window.print();
-  },
-  async masterlist(root) {
-    root.innerHTML = `<div class="page-head"><div><h2>Masterlist</h2><p>All learners across classes</p></div>
-      <div class="page-actions"><button class="btn btn-outline" onclick="Pages.exportMasterlistCSV()">${icon('download')} CSV</button></div></div>
-      <div class="card"><div id="ml-preview"></div></div>`;
-    const all = await DB.getAll('learners');
-    const classes = State.classes;
-    document.getElementById('ml-preview').innerHTML = `
-      <div class="table-wrap"><table class="data-table">
-        <thead><tr><th>#</th><th>Photo</th><th>Class</th><th>LRN</th><th>Name</th><th>Sex</th><th>Status</th></tr></thead>
-        <tbody>${all.map((l,i) => {
-          const c = classes.find(x => x.id === l.classId);
-          return `<tr><td>${i+1}</td><td>${Utils.avatarHTML(l, 28, 11)}</td><td>${c ? Utils.esc(c.gradeLevel + ' - ' + c.section) : '—'}</td><td>${Utils.esc(l.lrn||'')}</td><td>${Utils.esc(Utils.fullName(l))}</td><td>${Utils.esc(l.sex||'')}</td><td>${UI.statusBadge(l.status||'Active')}</td></tr>`;
-        }).join('')}</tbody>
-      </table></div>`;
-  },
-  async exportMasterlistCSV() {
-    const all = await DB.getAll('learners');
-    const classes = State.classes;
-    const rows = all.map(l => {
-      const c = classes.find(x => x.id === l.classId);
-      return { Class: c ? c.gradeLevel + ' - ' + c.section : '', LRN: l.lrn||'', Name: Utils.fullName(l), Sex: l.sex||'', Status: l.status||'Active' };
+async classList(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'list', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+
+  // ---- Persistent UI state (survives page switches within a session) ----
+  if (!State.classListUI) {
+    State.classListUI = {
+      query: '', sortBy: 'lastName', sortDir: 'asc',
+      filterSex: '', filterStatus: '',
+      viewMode: 'detailed',       // 'compact' | 'detailed' | 'photo-grid'
+      showPhotos: true
+    };
+  }
+  const U = State.classListUI;
+
+  const all = State.learners;
+
+  // ---- Summary stats ----
+  const sexes = { Male: 0, Female: 0, Unrecorded: 0 };
+  const statuses = {};
+  let withPhoto = 0, incomplete = 0;
+  all.forEach(l => {
+    const s = Utils.normalizeSex(l.sex);
+    if (s === 'Male')        sexes.Male++;
+    else if (s === 'Female') sexes.Female++;
+    else                     sexes.Unrecorded++;
+    const st = l.status || 'Active';
+    statuses[st] = (statuses[st] || 0) + 1;
+    if (l.photo) withPhoto++;
+    if (!l.lrn || !l.sex || !l.birthDate || !(l.parentContact || l.guardian || l.parent)) incomplete++;
+  });
+  const statusList = Object.keys(statuses).sort();
+
+  // ---- Apply filter + sort ----
+  const getters = {
+    lastName:  (l) => (l.lastName || '').toLowerCase(),
+    firstName: (l) => (l.firstName || '').toLowerCase(),
+    lrn:       (l) => String(l.lrn || '').padStart(20, '0'),
+    age:       (l) => { const a = Number(Utils.calcAge(l.birthDate)); return isNaN(a) ? 999 : a; },
+    birthDate: (l) => l.birthDate || '9999-99-99',
+    status:    (l) => (l.status || 'Active').toLowerCase()
+  };
+
+  const q = U.query.trim().toLowerCase();
+  const filtered = all.filter(l => {
+    if (q) {
+      const hay = [
+        l.firstName, l.middleName, l.lastName, l.suffix,
+        l.lrn, l.parent, l.guardian, l.parentContact, l.learnerContact
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (U.filterSex) {
+      const n = Utils.normalizeSex(l.sex);
+      if (U.filterSex === 'Unrecorded') {
+        if (n === 'Male' || n === 'Female') return false;
+      } else if (n !== U.filterSex) {
+        return false;
+      }
+    }
+    if (U.filterStatus && (l.status || 'Active') !== U.filterStatus) return false;
+    return true;
+  });
+
+  const getP = getters[U.sortBy] || getters.lastName;
+  const dir = U.sortDir === 'desc' ? -1 : 1;
+  const sorted = filtered.slice().sort((a, b) => {
+    const pa = getP(a), pb = getP(b);
+    if (pa < pb) return -1 * dir;
+    if (pa > pb) return  1 * dir;
+    const na = ((a.lastName || '') + ' ' + (a.firstName || '')).toLowerCase();
+    const nb = ((b.lastName || '') + ' ' + (b.firstName || '')).toLowerCase();
+    return na.localeCompare(nb);
+  });
+
+  const initialChips = !U.query && !U.filterSex && !U.filterStatus;
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Class List</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${all.length} learner${all.length === 1 ? '' : 's'} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="cl-print-options">${icon('printer')} Print Options</button>
+        <button class="btn btn-primary" id="cl-export-csv">${icon('download')} Export CSV</button>
+      </div>
+    </div>
+
+    <!-- ==== KPI row ==== -->
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('users')}</div>
+        <div class="stat-label">Total Learners</div>
+        <div class="stat-value">${all.length}</div>
+        <div class="text-xs text-muted">${statuses['Active'] || 0} active · ${all.length - (statuses['Active'] || 0)} other</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('user')}</div>
+        <div class="stat-label">Male / Female</div>
+        <div class="stat-value">${sexes.Male} <span style="font-size:15px;color:var(--text-muted);font-weight:500;">/</span> ${sexes.Female}</div>
+        <div class="text-xs text-muted">${sexes.Unrecorded ? sexes.Unrecorded + ' sex unrecorded' : 'All classified'}</div>
+      </div>
+      <div class="stat-card ${withPhoto < all.length ? 'accent-warning' : 'accent-success'}">
+        <div class="stat-icon">${icon('camera')}</div>
+        <div class="stat-label">With Photo</div>
+        <div class="stat-value">${withPhoto}</div>
+        <div class="text-xs text-muted">${all.length - withPhoto} missing photo</div>
+      </div>
+      <div class="stat-card ${incomplete ? 'accent-danger' : 'accent-success'}">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Incomplete Records</div>
+        <div class="stat-value">${incomplete}</div>
+        <div class="text-xs text-muted">Missing LRN, sex, DOB, or contact</div>
+      </div>
+    </div>
+
+    ${incomplete > 0 ? `
+      <div class="alert alert-warning mb-16">
+        ${icon('alert')}
+        <div>
+          <strong>${incomplete} learner${incomplete === 1 ? '' : 's'}</strong> have incomplete records.
+          Missing LRNs are the most common — open a learner and fill in the missing fields before printing SF1 or SF2.
+        </div>
+      </div>` : ''}
+
+    <!-- ==== Toolbar ==== -->
+    <div class="card mb-16">
+      <div class="flex gap-12" style="flex-wrap:wrap;align-items:flex-end;">
+        <div style="flex:1;min-width:220px;">
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Search</label>
+          <div class="search-bar" style="max-width:none;">
+            ${icon('search')}
+            <input class="form-control" id="cl-search" placeholder="Name, LRN, guardian, contact…" value="${Utils.attr(U.query)}">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Sort by</label>
+          <select class="form-control" id="cl-sort" style="min-width:150px;">
+            <option value="lastName"  ${U.sortBy === 'lastName'  ? 'selected' : ''}>Last Name</option>
+            <option value="firstName" ${U.sortBy === 'firstName' ? 'selected' : ''}>First Name</option>
+            <option value="lrn"       ${U.sortBy === 'lrn'       ? 'selected' : ''}>LRN</option>
+            <option value="age"       ${U.sortBy === 'age'       ? 'selected' : ''}>Age</option>
+            <option value="birthDate" ${U.sortBy === 'birthDate' ? 'selected' : ''}>Birth Date</option>
+            <option value="status"    ${U.sortBy === 'status'    ? 'selected' : ''}>Status</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Sex</label>
+          <select class="form-control" id="cl-fs" style="min-width:130px;">
+            <option value="" ${!U.filterSex ? 'selected' : ''}>All</option>
+            <option value="Male"       ${U.filterSex === 'Male'       ? 'selected' : ''}>Male (${sexes.Male})</option>
+            <option value="Female"     ${U.filterSex === 'Female'     ? 'selected' : ''}>Female (${sexes.Female})</option>
+            <option value="Unrecorded" ${U.filterSex === 'Unrecorded' ? 'selected' : ''}>Unrecorded (${sexes.Unrecorded})</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Status</label>
+          <select class="form-control" id="cl-fst" style="min-width:130px;">
+            <option value="">All statuses</option>
+            ${statusList.map(s => `<option value="${Utils.attr(s)}" ${U.filterStatus === s ? 'selected' : ''}>${Utils.esc(s)} (${statuses[s]})</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">View</label>
+          <div class="rz-segment" role="tablist">
+            <button type="button" data-cl-view="compact"   class="${U.viewMode === 'compact'   ? 'active' : ''}" title="Dense rows, no photos">Compact</button>
+            <button type="button" data-cl-view="detailed"  class="${U.viewMode === 'detailed'  ? 'active' : ''}" title="Full detail with photos">Detailed</button>
+            <button type="button" data-cl-view="photo-grid" class="${U.viewMode === 'photo-grid' ? 'active' : ''}" title="Photo grid for wall display">Wall</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-between mt-12" style="flex-wrap:wrap;gap:8px;">
+        <div class="text-xs text-muted">
+          Showing <strong>${sorted.length}</strong> of ${all.length} learner${all.length === 1 ? '' : 's'}
+          ${!initialChips ? ' · <button class="btn btn-ghost btn-sm" id="cl-clear-filters" style="padding:0 6px;font-size:11px;">Clear filters</button>' : ''}
+        </div>
+        <button class="btn btn-sm btn-outline" id="cl-sort-dir" title="Reverse sort direction">
+          ${U.sortDir === 'asc' ? '↑ Ascending' : '↓ Descending'}
+        </button>
+      </div>
+    </div>
+
+    <!-- ==== Main content ==== -->
+    <div class="card" id="cl-content"></div>
+  `;
+
+  // ---- Wire toolbar ----
+  const search = root.querySelector('#cl-search');
+  search.addEventListener('input', Utils.debounce(() => {
+    State.classListUI.query = search.value;
+    Pages.classList(root);
+    setTimeout(() => {
+      const s = root.querySelector('#cl-search');
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 20);
+  }, 220));
+
+  root.querySelector('#cl-sort').onchange = (e) => { State.classListUI.sortBy = e.target.value; Pages.classList(root); };
+  root.querySelector('#cl-fs').onchange  = (e) => { State.classListUI.filterSex = e.target.value; Pages.classList(root); };
+  root.querySelector('#cl-fst').onchange = (e) => { State.classListUI.filterStatus = e.target.value; Pages.classList(root); };
+  root.querySelector('#cl-sort-dir').onclick = () => {
+    State.classListUI.sortDir = State.classListUI.sortDir === 'asc' ? 'desc' : 'asc';
+    Pages.classList(root);
+  };
+  root.querySelectorAll('[data-cl-view]').forEach(b => {
+    b.onclick = () => { State.classListUI.viewMode = b.dataset.clView; Pages.classList(root); };
+  });
+  const clearBtn = root.querySelector('#cl-clear-filters');
+  if (clearBtn) clearBtn.onclick = () => {
+    State.classListUI.query = '';
+    State.classListUI.filterSex = '';
+    State.classListUI.filterStatus = '';
+    Pages.classList(root);
+  };
+
+  root.querySelector('#cl-print-options').onclick = () => Pages._openClassListPrintModal();
+  root.querySelector('#cl-export-csv').onclick = () => Pages.exportClassListCSV();
+
+  // ---- Render the content area ----
+  const content = root.querySelector('#cl-content');
+
+  if (!sorted.length) {
+    content.innerHTML = UI.emptyState({
+      icon: 'search',
+      title: 'No learners match',
+      message: initialChips ? 'This class has no learners yet.' : 'Try adjusting or clearing the filters above.',
+      actionLabel: initialChips ? '+ Add Learner' : 'Clear filters',
+      actionFn: initialChips ? 'App.openLearnerForm()' : null
     });
-    Utils.download('masterlist-' + Utils.timestamp() + '.csv', Utils.toCSV(rows), 'text/csv');
-  },
+    if (!initialChips) {
+      const b = content.querySelector('button');
+      if (b) b.onclick = () => {
+        State.classListUI.query = '';
+        State.classListUI.filterSex = '';
+        State.classListUI.filterStatus = '';
+        Pages.classList(root);
+      };
+    }
+    return;
+  }
+
+  // === View: Compact ===
+  if (U.viewMode === 'compact') {
+    content.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table cl-compact">
+          <thead>
+            <tr>
+              <th style="width:38px;">#</th>
+              <th>Name</th>
+              <th style="width:130px;">LRN</th>
+              <th style="width:60px;">Sex</th>
+              <th style="width:50px;">Age</th>
+              <th style="width:100px;">Status</th>
+              <th style="width:80px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sorted.map((l, i) => `
+              <tr data-cl-open="${Utils.attr(l.id)}" style="cursor:pointer;">
+                <td style="color:var(--text-muted);">${i + 1}</td>
+                <td><strong>${Utils.esc(Utils.displayName(l))}</strong></td>
+                <td style="font-family:ui-monospace,Consolas,monospace;font-size:12px;">${Utils.esc(l.lrn || '—')}</td>
+                <td>${Utils.esc(Utils.normalizeSex(l.sex) || '—')}</td>
+                <td>${Utils.calcAge(l.birthDate) || '—'}</td>
+                <td>${UI.statusBadge(l.status || 'Active')}</td>
+                <td onclick="event.stopPropagation();">
+                  <div class="table-actions">
+                    <button class="icon-btn" data-cl-edit="${Utils.attr(l.id)}" title="Edit">${icon('edit')}</button>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // === View: Detailed (default) ===
+  else if (U.viewMode === 'detailed') {
+    content.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table cl-detailed">
+          <thead>
+            <tr>
+              <th style="width:38px;">#</th>
+              <th style="width:52px;">Photo</th>
+              <th>Name</th>
+              <th style="width:130px;">LRN</th>
+              <th style="width:60px;">Sex</th>
+              <th style="width:50px;">Age</th>
+              <th>Guardian</th>
+              <th style="width:140px;">Contact</th>
+              <th style="width:100px;">Status</th>
+              <th style="width:80px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sorted.map((l, i) => {
+              const missing = [];
+              if (!l.lrn) missing.push('LRN');
+              if (!l.sex) missing.push('sex');
+              if (!l.birthDate) missing.push('DOB');
+              if (!(l.parentContact || l.learnerContact)) missing.push('contact');
+              return `
+              <tr data-cl-open="${Utils.attr(l.id)}" style="cursor:pointer;">
+                <td style="color:var(--text-muted);">${i + 1}</td>
+                <td>${Utils.avatarHTML(l, 34, 12)}</td>
+                <td>
+                  <strong>${Utils.esc(Utils.displayName(l))}</strong>
+                  ${missing.length ? `<div class="text-xs" style="color:var(--warning);margin-top:1px;" title="Missing: ${Utils.attr(missing.join(', '))}">⚠ Missing ${Utils.esc(missing.join(', '))}</div>` : ''}
+                </td>
+                <td style="font-family:ui-monospace,Consolas,monospace;font-size:12px;">${Utils.esc(l.lrn || '—')}</td>
+                <td>${Utils.esc(Utils.normalizeSex(l.sex) || '—')}</td>
+                <td>${Utils.calcAge(l.birthDate) || '—'}</td>
+                <td>${Utils.esc(l.guardian || l.parent || '—')}</td>
+                <td>${Utils.esc(l.parentContact || l.learnerContact || '—')}</td>
+                <td>${UI.statusBadge(l.status || 'Active')}</td>
+                <td onclick="event.stopPropagation();">
+                  <div class="table-actions">
+                    <button class="icon-btn" data-cl-view-profile="${Utils.attr(l.id)}" title="View profile">${icon('user')}</button>
+                    <button class="icon-btn" data-cl-edit="${Utils.attr(l.id)}" title="Edit">${icon('edit')}</button>
+                  </div>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // === View: Photo grid (for wall display / seating reference) ===
+  else {
+    content.innerHTML = `
+      <div class="cl-photo-grid">
+        ${sorted.map(l => {
+          const photo = l.photo
+            ? `<img src="${Utils.attr(l.photo)}" alt="">`
+            : `<span style="color:#fff;font-size:clamp(28px,4vw,42px);font-weight:800;">${Utils.esc(Utils.initials(Utils.fullName(l)))}</span>`;
+          const bg = l.photo ? 'transparent' : Utils.colorFor(Utils.fullName(l));
+          return `
+            <div class="cl-photo-tile" data-cl-open="${Utils.attr(l.id)}">
+              <div class="cl-photo-frame" style="background:${bg};">${photo}</div>
+              <div class="cl-photo-name">${Utils.esc(Utils.fullName(l))}</div>
+              <div class="cl-photo-meta">LRN ${Utils.esc(l.lrn || '—')}</div>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  // ---- Row click handlers ----
+  content.querySelectorAll('[data-cl-open]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      App.openLearnerProfile(el.dataset.clOpen);
+    });
+  });
+  content.querySelectorAll('[data-cl-edit]').forEach(el => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); App.openLearnerForm(el.dataset.clEdit); });
+  });
+  content.querySelectorAll('[data-cl-view-profile]').forEach(el => {
+    el.addEventListener('click', (e) => { e.stopPropagation(); App.openLearnerProfile(el.dataset.clViewProfile); });
+  });
+},
+
+_openClassListPrintModal() {
+  const cls = State.activeClass;
+  if (!cls) { UI.toast('No class selected.', 'warning'); return; }
+
+  const learners = State.learners;
+  if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
+
+  const layouts = [
+    { id: 'standard',  label: 'Standard Class List',        desc: 'Name, LRN, sex, age. Clean and compact.' },
+    { id: 'detailed',  label: 'Detailed Class List',        desc: 'Adds guardian, contact, and status.' },
+    { id: 'with-photos', label: 'With Photos',              desc: 'Includes each learner\'s photo — good for substitutes.' },
+    { id: 'guardian',  label: 'Guardian Contact Sheet',     desc: 'Name + guardian + contact only. For calling parents.' },
+    { id: 'signin',    label: 'Sign-in Sheet',              desc: 'Blank columns for parent signature — meetings or pickups.' },
+    { id: 'seating',   label: 'Seating Reference',          desc: 'Photo grid — useful for seating charts and wall display.' }
+  ];
+
+  const m = UI.modal({
+    title: 'Print Class List',
+    size: 'modal-lg',
+    body: `
+      <p class="text-sm text-muted mb-16">
+        Choose a layout. The preview reflects the current filter in the table view — clear the filter first if you want to print the full class.
+      </p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+        ${layouts.map(l => `
+          <label class="cl-print-option" data-print-layout="${l.id}">
+            <input type="radio" name="cl-print-layout" value="${l.id}" ${l.id === 'standard' ? 'checked' : ''} style="display:none;">
+            <div class="clpo-title">${Utils.esc(l.label)}</div>
+            <div class="clpo-desc">${Utils.esc(l.desc)}</div>
+          </label>
+        `).join('')}
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grid grid-2 mb-12">
+        <label class="auth-check"><input type="checkbox" id="cl-print-header" checked> <span>Include school header</span></label>
+        <label class="auth-check"><input type="checkbox" id="cl-print-signature" checked> <span>Include signature line</span></label>
+        <label class="auth-check"><input type="checkbox" id="cl-print-date" checked> <span>Include date printed</span></label>
+        <label class="auth-check"><input type="checkbox" id="cl-print-groupsex"> <span>Group males first, then females</span></label>
+      </div>
+
+      <div class="alert alert-info" style="font-size:12px;">
+        ${icon('info')}
+        <div>Print uses your browser's dialog. Choose <strong>Save as PDF</strong> as the destination to keep a digital copy.</div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-primary" id="cl-do-print">${icon('printer')} Print</button>
+    `
+  });
+
+  // Visual selection for the layout cards
+  m.overlay.querySelectorAll('.cl-print-option').forEach(card => {
+    card.addEventListener('click', () => {
+      m.overlay.querySelectorAll('.cl-print-option').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+      card.querySelector('input').checked = true;
+    });
+  });
+  m.overlay.querySelector('.cl-print-option[data-print-layout="standard"]').classList.add('active');
+
+  m.overlay.querySelector('#cl-do-print').onclick = () => {
+    const layout = m.overlay.querySelector('input[name="cl-print-layout"]:checked').value;
+    const opts = {
+      includeHeader:    m.overlay.querySelector('#cl-print-header').checked,
+      includeSignature: m.overlay.querySelector('#cl-print-signature').checked,
+      includeDate:      m.overlay.querySelector('#cl-print-date').checked,
+      groupBySex:       m.overlay.querySelector('#cl-print-groupsex').checked
+    };
+    m.close();
+    Pages.printClassList(layout, opts);
+  };
+},
+exportClassListCSV() {
+  const cls = State.activeClass;
+  if (!cls) { UI.toast('No class selected.', 'warning'); return; }
+  const learners = State.learners;
+  if (!learners.length) { UI.toast('No learners to export.', 'warning'); return; }
+
+  const sorted = learners.slice().sort((a, b) =>
+    ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+      .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase())
+  );
+
+  const rows = sorted.map((l, i) => ({
+    '#': i + 1,
+    'LRN': l.lrn || '',
+    'Last Name': l.lastName || '',
+    'First Name': l.firstName || '',
+    'Middle Name': l.middleName || '',
+    'Suffix': l.suffix || '',
+    'Full Name': Utils.fullName(l),
+    'Sex': Utils.normalizeSex(l.sex) || '',
+    'Birth Date': l.birthDate || '',
+    'Age': Utils.calcAge(l.birthDate) || '',
+    'Place of Birth': l.placeOfBirth || '',
+    'Barangay': l.barangay || '',
+    'Municipality': l.municipality || '',
+    'Province': l.province || '',
+    'Guardian': l.guardian || l.parent || '',
+    'Relationship': l.relationship || '',
+    'Parent Contact': l.parentContact || '',
+    'Learner Contact': l.learnerContact || '',
+    'Learner Email': l.learnerEmail || '',
+    'Religion': l.religion || '',
+    'Mother Tongue': l.motherTongue || '',
+    'Ethnic Group': l.ethnicGroup || '',
+    'Learning Modality': l.learningModality || '',
+    'Status': l.status || 'Active',
+    'Remarks': l.remarks || ''
+  }));
+
+  const safe = `${cls.gradeLevel}_${cls.section}`.replace(/[^A-Za-z0-9]+/g, '_');
+  Utils.download(`class_list_${safe}_${Utils.timestamp()}.csv`, Utils.toCSV(rows), 'text/csv');
+  App.logActivity('Class list exported as CSV (' + learners.length + ' learners)', 'Reports');
+  UI.toast(`Exported ${learners.length} learners`, 'success');
+},
+printClassList(layout = 'standard', opts = {}) {
+  const cls = State.activeClass;
+  if (!cls) { UI.toast('No class selected.', 'warning'); return; }
+  const learners = State.learners;
+  if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
+
+  const o = Object.assign({
+    includeHeader: true, includeSignature: true,
+    includeDate: true, groupBySex: false
+  }, opts || {});
+
+  const school  = State.schools[0] || {};
+  const adviser = Licensing.getReportSignatory(cls) || (State.currentUser && State.currentUser.fullName) || '';
+  const sy = cls.schoolYear || State.schoolYear;
+
+  // Sort: default last name, optional sex grouping
+  const sorted = learners.slice().sort((a, b) =>
+    ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+      .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase())
+  );
+  const maleList   = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+  const femaleList = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+  const otherList  = sorted.filter(l => {
+    const n = Utils.normalizeSex(l.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+
+  const headerHTML = o.includeHeader ? Pages._buildDepEdHeader() : '';
+  const teacherPosition = Pages._getTeacherDesignation();
+  const footerHTML = o.includeSignature ? `
+    <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:10pt;">
+      <div style="text-align:center;width:220px;">
+        <div style="border-top:1px solid #000;padding-top:3px;">
+          ${Utils.esc(adviser)}<br><span style="font-size:8pt;">${Utils.esc(teacherPosition)}</span>
+        </div>
+      </div>
+      <div style="text-align:center;width:220px;">
+        <div style="border-top:1px solid #000;padding-top:3px;">
+          ${Utils.esc(school.schoolHead || '')}<br><span style="font-size:8pt;">School Head</span>
+        </div>
+      </div>
+    </div>
+    ${Pages._buildDepEdFooter()}` : '';
+
+  const dateLine = o.includeDate
+    ? `<div style="font-size:8pt;text-align:right;margin-bottom:6px;">Printed: ${Utils.formatDate(Utils.todayISO(), { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>`
+    : '';
+
+  // ---- Build the table body per layout ----
+  const buildRows = (list) => {
+    if (layout === 'with-photos' || layout === 'seating') {
+      return list.map((l, i) => {
+        const initialBg = Utils.colorFor(Utils.fullName(l));
+        const initials  = Utils.esc(Utils.initials(Utils.fullName(l)));
+        const photo = l.photo
+          ? `<img class="cl-print-photo" src="${Utils.attr(l.photo)}" alt="">`
+          : `<div class="cl-print-photo-fallback" style="background:${initialBg};">${initials}</div>`;
+        return `<tr>
+          <td style="text-align:center;">${i + 1}</td>
+          <td class="cl-photo-cell">${photo}</td>
+          <td>${Utils.esc(Utils.fullName(l))}</td>
+          <td style="text-align:center;font-family:monospace;">${Utils.esc(l.lrn || '')}</td>
+          <td style="text-align:center;">${Utils.esc(Utils.normalizeSex(l.sex) || '')}</td>
+          <td style="text-align:center;">${Utils.calcAge(l.birthDate) || ''}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    if (layout === 'guardian') {
+      return list.map((l, i) => `<tr>
+        <td style="text-align:center;">${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        <td>${Utils.esc(l.guardian || l.parent || '')}</td>
+        <td>${Utils.esc(l.parentContact || '')}</td>
+        <td>${Utils.esc(l.learnerContact || '')}</td>
+        <td style="width:100px;"></td>
+      </tr>`).join('');
+    }
+
+    if (layout === 'signin') {
+      return list.map((l, i) => `<tr style="height:26px;">
+        <td style="text-align:center;">${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        <td style="width:140px;"></td>
+        <td style="width:100px;"></td>
+        <td style="width:100px;"></td>
+        <td style="width:100px;"></td>
+      </tr>`).join('');
+    }
+
+    if (layout === 'detailed') {
+      return list.map((l, i) => `<tr>
+        <td style="text-align:center;">${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        <td style="text-align:center;font-family:monospace;">${Utils.esc(l.lrn || '')}</td>
+        <td style="text-align:center;">${Utils.esc(Utils.normalizeSex(l.sex) || '')}</td>
+        <td style="text-align:center;">${Utils.calcAge(l.birthDate) || ''}</td>
+        <td>${Utils.esc(l.guardian || l.parent || '')}</td>
+        <td>${Utils.esc(l.parentContact || '')}</td>
+        <td style="text-align:center;">${Utils.esc(l.status || 'Active')}</td>
+      </tr>`).join('');
+    }
+
+    // standard (default)
+    return list.map((l, i) => `<tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td>${Utils.esc(Utils.fullName(l))}</td>
+      <td style="text-align:center;font-family:monospace;">${Utils.esc(l.lrn || '')}</td>
+      <td style="text-align:center;">${Utils.esc(Utils.normalizeSex(l.sex) || '')}</td>
+      <td style="text-align:center;">${Utils.calcAge(l.birthDate) || ''}</td>
+    </tr>`).join('');
+  };
+
+  const headers = {
+    standard:  ['#', 'Name', 'LRN', 'Sex', 'Age'],
+    detailed:  ['#', 'Name', 'LRN', 'Sex', 'Age', 'Guardian', 'Contact', 'Status'],
+    'with-photos': ['#', 'Photo', 'Name', 'LRN', 'Sex', 'Age'],
+    seating:   ['#', 'Photo', 'Name', 'LRN', 'Sex', 'Age'],
+    guardian:  ['#', 'Name', 'Guardian', 'Parent Contact', 'Learner Contact', 'Signature'],
+    signin:    ['#', 'Name', 'Time In', 'Time Out', 'Signature', 'Remarks']
+  };
+  const colHTML = (headers[layout] || headers.standard)
+      .map(h => `<th>${Utils.esc(h)}</th>`).join('');
+    
+    // Force a fixed width on the photo column so it never collapses in print
+  const needsPhotoCol = layout === 'with-photos' || layout === 'seating';
+  const colGroup = needsPhotoCol
+    ? `<colgroup>
+         <col style="width:6%;">
+         <col style="width:10%;">
+         <col style="width:38%;">
+         <col style="width:20%;">
+         <col style="width:8%;">
+         <col style="width:8%;">
+       </colgroup>`
+    : '';
+
+  let bodyHTML;
+  if (o.groupBySex && layout !== 'signin' && layout !== 'guardian') {
+    let runningIdx = 0;
+    const blockFor = (label, list, bg) => {
+      if (!list.length) return '';
+      const rows = list.map((l, i) => {
+        runningIdx++;
+        // Rebuild a single row (a small hack to reuse the same layout) — simpler
+        // is to regenerate per-list; but we already have running counts built in.
+        return null;
+      });
+      // The buildRows helper resets its index per call, so we render as one list
+      // with a section header row, using the sub-list's own index offset.
+      const sectionHeader = `<tr><td colspan="${(headers[layout] || headers.standard).length}" style="background:${bg};font-weight:800;text-align:center;letter-spacing:1px;">${Utils.esc(label)} · ${list.length}</td></tr>`;
+      // Simple incremental index
+      return sectionHeader + list.map((l, i) => {
+        const inner = buildRows([l]).replace(/<tr>/, '').replace(/<\/tr>/, '');
+        return `<tr>${inner}</tr>`;
+      }).join('');
+    };
+    bodyHTML = blockFor('MALE', maleList, '#dbe7fb')
+             + blockFor('FEMALE', femaleList, '#fce7f3')
+             + blockFor('UNRECORDED', otherList, '#fef3c7');
+  } else {
+    bodyHTML = buildRows(sorted);
+  }
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-class-list">
+      ${headerHTML}
+      ${dateLine}
+      <table>
+        ${colGroup}
+        <thead><tr>${colHTML}</tr></thead>
+        <tbody>${bodyHTML}</tbody>
+      </table>
+      ${footerHTML}
+    </div>`;
+
+  App.logActivity(`Class list printed (${layout}, ${learners.length} learners)`, 'Reports');
+
+  // Give the browser time to decode every base64 image before the
+  // print dialog opens — otherwise photos appear blank in the preview.
+  const images = document.querySelectorAll('#print-area img');
+  const waitForImages = Array.from(images).map(img =>
+    img.complete
+      ? Promise.resolve()
+      : new Promise(res => { img.onload = img.onerror = () => res(); })
+  );
+
+  Promise.all(waitForImages).then(() => {
+    // Extra paint frame so Firefox/Safari actually lay out the decoded images
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print();
+        // Clear only after the print dialog closes AND the DOM has settled
+        setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
+      });
+    });
+  });
+},
+async masterlist(root) {
+  if (!State.masterlistUI) {
+    State.masterlistUI = {
+      query: '', filterClass: '', filterGrade: '', filterStatus: '',
+      showInactive: true
+    };
+  }
+  const U = State.masterlistUI;
+
+  const all = await DB.getAll('learners');
+  const classes = State.classes;
+  const classById = {};
+  classes.forEach(c => { classById[c.id] = c; });
+
+  // ---- Stats across ALL classes ----
+  const totalLearners = all.length;
+  const activeLearners = all.filter(l => Utils.isActiveLearner(l)).length;
+  const inactiveLearners = totalLearners - activeLearners;
+
+  // ---- Data-quality checks ----
+  const missingLrn = all.filter(l => !l.lrn || !String(l.lrn).trim());
+
+  const lrnMap = {};
+  all.forEach(l => {
+    const k = String(l.lrn || '').trim();
+    if (!k) return;
+    (lrnMap[k] = lrnMap[k] || []).push(l);
+  });
+  const duplicateLrnGroups = Object.entries(lrnMap).filter(([_, arr]) => arr.length > 1);
+  const duplicateLrnLearners = duplicateLrnGroups.reduce((n, [, arr]) => n + arr.length, 0);
+
+  // ---- Grade-level + class options for filters ----
+  const grades = [...new Set(classes.map(c => c.gradeLevel).filter(Boolean))].sort();
+  const sortableClasses = classes.slice().sort((a, b) =>
+    (a.gradeLevel + ' ' + a.section).localeCompare(b.gradeLevel + ' ' + b.section)
+  );
+
+  // ---- Apply filters ----
+  const q = U.query.trim().toLowerCase();
+  const filtered = all.filter(l => {
+    if (q) {
+      const hay = [
+        l.firstName, l.middleName, l.lastName, l.suffix,
+        l.lrn, l.parent, l.guardian, l.parentContact
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (U.filterClass && l.classId !== U.filterClass) return false;
+    if (U.filterGrade) {
+      const c = classById[l.classId];
+      if (!c || c.gradeLevel !== U.filterGrade) return false;
+    }
+    if (U.filterStatus && (l.status || 'Active') !== U.filterStatus) return false;
+    if (!U.showInactive && !Utils.isActiveLearner(l)) return false;
+    return true;
+  });
+
+  // Sort: class → last name
+  const sorted = filtered.slice().sort((a, b) => {
+    const ca = classById[a.classId];
+    const cb = classById[b.classId];
+    const ka = ca ? (ca.gradeLevel + ' ' + ca.section).toLowerCase() : 'zzz';
+    const kb = cb ? (cb.gradeLevel + ' ' + cb.section).toLowerCase() : 'zzz';
+    if (ka !== kb) return ka.localeCompare(kb);
+    return ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+      .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase());
+  });
+
+  // Per-class counts (for the class filter chips)
+  const perClass = {};
+  all.forEach(l => { perClass[l.classId] = (perClass[l.classId] || 0) + 1; });
+
+  const hasFilters = U.query || U.filterClass || U.filterGrade || U.filterStatus || !U.showInactive;
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Masterlist</h2>
+        <p>Every learner across all your classes · SY ${Utils.esc(State.schoolYear)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="ml-print">${icon('printer')} Print</button>
+        <button class="btn btn-primary" id="ml-export-csv">${icon('download')} Export CSV</button>
+      </div>
+    </div>
+
+    <!-- ==== KPI row ==== -->
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('users')}</div>
+        <div class="stat-label">Total Learners</div>
+        <div class="stat-value">${totalLearners}</div>
+        <div class="text-xs text-muted">across ${classes.length} class${classes.length === 1 ? '' : 'es'}</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Active</div>
+        <div class="stat-value">${activeLearners}</div>
+        <div class="text-xs text-muted">${totalLearners ? Math.round((activeLearners / totalLearners) * 100) + '% of total' : '—'}</div>
+      </div>
+      <div class="stat-card ${missingLrn.length ? 'accent-warning' : 'accent-success'}">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Missing LRN</div>
+        <div class="stat-value">${missingLrn.length}</div>
+        <div class="text-xs text-muted">Needed before printing SF1 / SF2</div>
+      </div>
+      <div class="stat-card ${duplicateLrnLearners ? 'accent-danger' : 'accent-success'}">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Duplicate LRNs</div>
+        <div class="stat-value">${duplicateLrnLearners}</div>
+        <div class="text-xs text-muted">${duplicateLrnGroups.length} group${duplicateLrnGroups.length === 1 ? '' : 's'} affected</div>
+      </div>
+    </div>
+
+    <!-- ==== Data quality banners ==== -->
+    ${duplicateLrnGroups.length ? `
+      <div class="alert alert-danger mb-16">
+        ${icon('alert')}
+        <div>
+          <strong>Duplicate LRNs detected.</strong> These LRNs appear more than once, often because a learner was
+          enrolled in more than one class or imported twice. Fixing them avoids SF1/SF2 rejection.
+          <div style="margin-top:8px;font-size:12px;line-height:1.8;">
+            ${duplicateLrnGroups.slice(0, 5).map(([lrn, arr]) => {
+              const names = arr.map(l => Utils.esc(Utils.fullName(l))).join(', ');
+              return `LRN <code style="font-family:monospace;">${Utils.esc(lrn)}</code> → ${names}`;
+            }).join('<br>')}
+            ${duplicateLrnGroups.length > 5 ? `<br>…and ${duplicateLrnGroups.length - 5} more` : ''}
+          </div>
+        </div>
+      </div>` : ''}
+
+    <!-- ==== Filters ==== -->
+    <div class="card mb-16">
+      <div class="flex gap-12" style="flex-wrap:wrap;align-items:flex-end;">
+        <div style="flex:1;min-width:220px;">
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Search all classes</label>
+          <div class="search-bar" style="max-width:none;">
+            ${icon('search')}
+            <input class="form-control" id="ml-search" placeholder="Name, LRN, guardian…" value="${Utils.attr(U.query)}">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Class</label>
+          <select class="form-control" id="ml-fc" style="min-width:200px;">
+            <option value="">All classes (${totalLearners})</option>
+            ${sortableClasses.map(c => `<option value="${Utils.attr(c.id)}" ${U.filterClass === c.id ? 'selected' : ''}>
+              ${Utils.esc(c.gradeLevel)} – ${Utils.esc(c.section)} (${perClass[c.id] || 0})
+            </option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Grade Level</label>
+          <select class="form-control" id="ml-fg" style="min-width:130px;">
+            <option value="">All grades</option>
+            ${grades.map(g => `<option value="${Utils.attr(g)}" ${U.filterGrade === g ? 'selected' : ''}>${Utils.esc(g)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Status</label>
+          <select class="form-control" id="ml-fs" style="min-width:130px;">
+            <option value="">All</option>
+            ${['Active','Transferred','Dropped','Graduated','Inactive'].map(s =>
+              `<option value="${Utils.attr(s)}" ${U.filterStatus === s ? 'selected' : ''}>${Utils.esc(s)}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <label class="auth-check" style="font-size:12px;padding-bottom:8px;">
+          <input type="checkbox" id="ml-show-inactive" ${U.showInactive ? 'checked' : ''}>
+          <span>Show inactive learners</span>
+        </label>
+      </div>
+
+      <div class="flex-between mt-12" style="flex-wrap:wrap;gap:8px;">
+        <div class="text-xs text-muted">
+          Showing <strong>${sorted.length}</strong> of ${totalLearners} learner${totalLearners === 1 ? '' : 's'}
+          ${hasFilters ? ' · <button class="btn btn-ghost btn-sm" id="ml-clear-filters" style="padding:0 6px;font-size:11px;">Clear filters</button>' : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- ==== Table ==== -->
+    <div class="card">
+      ${sorted.length ? `
+        <div class="table-wrap">
+          <table class="data-table ml-table">
+            <thead>
+              <tr>
+                <th style="width:38px;">#</th>
+                <th style="width:44px;">Photo</th>
+                <th>Name</th>
+                <th style="width:130px;">LRN</th>
+                <th style="width:180px;">Class</th>
+                <th style="width:60px;">Sex</th>
+                <th style="width:50px;">Age</th>
+                <th style="width:100px;">Status</th>
+                <th style="width:60px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map((l, i) => {
+                const c = classById[l.classId];
+                const hasDup = l.lrn && duplicateLrnGroups.some(([k]) => k === String(l.lrn).trim());
+                const noLrn = !l.lrn || !String(l.lrn).trim();
+                return `<tr data-ml-open="${Utils.attr(l.id)}" style="cursor:pointer;${hasDup ? 'background:rgba(220,53,69,0.05);' : ''}">
+                  <td style="color:var(--text-muted);">${i + 1}</td>
+                  <td>${Utils.avatarHTML(l, 32, 12)}</td>
+                  <td>
+                    <strong>${Utils.esc(Utils.displayName(l))}</strong>
+                    ${hasDup ? `<span class="badge badge-danger" style="font-size:9px;margin-left:6px;" title="Duplicate LRN">Duplicate LRN</span>` : ''}
+                    ${noLrn ? `<span class="badge badge-warning" style="font-size:9px;margin-left:6px;">No LRN</span>` : ''}
+                  </td>
+                  <td style="font-family:ui-monospace,Consolas,monospace;font-size:12px;">${Utils.esc(l.lrn || '—')}</td>
+                  <td>${c ? `<span style="font-weight:600;">${Utils.esc(c.gradeLevel)} – ${Utils.esc(c.section)}</span>${c.subject ? `<div class="text-xs text-muted">${Utils.esc(c.subject)}</div>` : ''}` : '<span class="text-muted">—</span>'}</td>
+                  <td>${Utils.esc(Utils.normalizeSex(l.sex) || '—')}</td>
+                  <td>${Utils.calcAge(l.birthDate) || '—'}</td>
+                  <td>${UI.statusBadge(l.status || 'Active')}</td>
+                  <td onclick="event.stopPropagation();">
+                    <div class="table-actions">
+                      <button class="icon-btn" data-ml-edit="${Utils.attr(l.id)}" title="Edit">${icon('edit')}</button>
+                    </div>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : UI.emptyState({
+        icon: hasFilters ? 'search' : 'users',
+        title: hasFilters ? 'No learners match' : 'No learners yet',
+        message: hasFilters
+          ? 'Try adjusting or clearing the filters above.'
+          : 'Add learners to any class and they will appear here.',
+        actionLabel: hasFilters ? 'Clear filters' : '+ Create Class',
+        actionFn: hasFilters ? 'Pages._clearMasterlistFilters()' : 'App.openClassForm()'
+      })}
+    </div>
+  `;
+
+  // ---- Wire toolbar ----
+  const search = root.querySelector('#ml-search');
+  search.addEventListener('input', Utils.debounce(() => {
+    State.masterlistUI.query = search.value;
+    Pages.masterlist(root);
+    setTimeout(() => {
+      const s = root.querySelector('#ml-search');
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 20);
+  }, 220));
+
+  root.querySelector('#ml-fc').onchange = (e) => { State.masterlistUI.filterClass = e.target.value; Pages.masterlist(root); };
+  root.querySelector('#ml-fg').onchange = (e) => { State.masterlistUI.filterGrade = e.target.value; Pages.masterlist(root); };
+  root.querySelector('#ml-fs').onchange = (e) => { State.masterlistUI.filterStatus = e.target.value; Pages.masterlist(root); };
+  root.querySelector('#ml-show-inactive').onchange = (e) => { State.masterlistUI.showInactive = e.target.checked; Pages.masterlist(root); };
+
+  const clearBtn = root.querySelector('#ml-clear-filters');
+  if (clearBtn) clearBtn.onclick = () => Pages._clearMasterlistFilters();
+
+  // ---- Wire row actions ----
+  root.querySelectorAll('[data-ml-open]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      // Switch to the learner's class so their profile loads correctly
+      const learner = all.find(l => l.id === el.dataset.mlOpen);
+      if (learner && learner.classId && (!State.activeClass || State.activeClass.id !== learner.classId)) {
+        App.setActiveClass(learner.classId).then(() => App.openLearnerProfile(learner.id));
+      } else {
+        App.openLearnerProfile(el.dataset.mlOpen);
+      }
+    });
+  });
+  root.querySelectorAll('[data-ml-edit]').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const learner = all.find(l => l.id === el.dataset.mlEdit);
+      if (learner && learner.classId && (!State.activeClass || State.activeClass.id !== learner.classId)) {
+        await App.setActiveClass(learner.classId);
+      }
+      App.openLearnerForm(el.dataset.mlEdit);
+    });
+  });
+
+  // ---- Top actions ----
+  root.querySelector('#ml-export-csv').onclick = () => Pages.exportMasterlistCSV(sorted);
+  root.querySelector('#ml-print').onclick = () => Pages._printMasterlist(sorted, classById);
+},
+
+_clearMasterlistFilters() {
+  State.masterlistUI = { query: '', filterClass: '', filterGrade: '', filterStatus: '', showInactive: true };
+  App.navigate('masterlist');
+},
+
+_printMasterlist(learners, classById) {
+  if (!learners.length) { UI.toast('Nothing to print with the current filters.', 'warning'); return; }
+  const school = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+
+  // Group by class for the print layout
+  const grouped = {};
+  learners.forEach(l => {
+    const key = l.classId || '__unassigned__';
+    (grouped[key] = grouped[key] || []).push(l);
+  });
+
+  const sectionsHTML = Object.entries(grouped).map(([classId, list]) => {
+    const c = classById[classId];
+    const classLabel = c ? `${c.gradeLevel} – ${c.section}` : 'Unassigned';
+    const rows = list.slice().sort((a, b) =>
+      ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+        .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase())
+    ).map((l, i) => `
+      <tr>
+        <td style="text-align:center;">${i + 1}</td>
+        <td>${Utils.esc(Utils.fullName(l))}</td>
+        <td style="text-align:center;font-family:monospace;">${Utils.esc(l.lrn || '')}</td>
+        <td style="text-align:center;">${Utils.esc(Utils.normalizeSex(l.sex) || '')}</td>
+        <td style="text-align:center;">${Utils.calcAge(l.birthDate) || ''}</td>
+        <td>${Utils.esc(l.guardian || l.parent || '')}</td>
+        <td>${Utils.esc(l.parentContact || '')}</td>
+      </tr>`).join('');
+    return `
+      <h3 style="font-size:11pt;margin:14px 0 6px;font-weight:700;">${Utils.esc(classLabel)} <span style="font-weight:400;color:#555;">(${list.length} learner${list.length === 1 ? '' : 's'})</span></h3>
+      <table>
+        <thead><tr>
+          <th style="width:5%;">#</th><th style="width:24%;">Name</th>
+          <th style="width:14%;">LRN</th><th style="width:7%;">Sex</th>
+          <th style="width:7%;">Age</th><th style="width:20%;">Guardian</th>
+          <th style="width:23%;">Contact</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-masterlist">
+      ${Pages._buildDepEdHeader()}
+      <div style="font-size:8pt;text-align:right;margin-bottom:6px;">
+        Printed: ${Utils.formatDate(Utils.todayISO(), { weekday:'long', year:'numeric', month:'long', day:'numeric' })}
+      </div>
+      ${sectionsHTML}
+      <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:10pt;">
+        <div style="text-align:center;width:220px;">
+          <div style="border-top:1px solid #000;padding-top:3px;">
+            ${Utils.esc(teacher.fullName || '')}<br><span style="font-size:8pt;">${Utils.esc(Pages._getTeacherDesignation())}</span>
+          </div>
+        </div>
+        <div style="text-align:center;width:220px;">
+          <div style="border-top:1px solid #000;padding-top:3px;">
+            ${Utils.esc(school.schoolHead || '')}<br><span style="font-size:8pt;">School Head</span>
+          </div>
+        </div>
+      </div>
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  App.logActivity(`Masterlist printed (${learners.length} learners)`, 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    // Clear only after the print dialog closes AND the DOM has settled.
+    setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
+  });
+},
+async exportMasterlistCSV(learners) {
+  const all = learners && learners.length ? learners : (await DB.getAll('learners'));
+  if (!all.length) { UI.toast('No learners to export.', 'warning'); return; }
+
+  const classById = {};
+  State.classes.forEach(c => { classById[c.id] = c; });
+
+  const rows = all
+    .slice()
+    .sort((a, b) => {
+      const ca = classById[a.classId];
+      const cb = classById[b.classId];
+      const ka = ca ? (ca.gradeLevel + ' ' + ca.section).toLowerCase() : 'zzz';
+      const kb = cb ? (cb.gradeLevel + ' ' + cb.section).toLowerCase() : 'zzz';
+      if (ka !== kb) return ka.localeCompare(kb);
+      return ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+        .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase());
+    })
+    .map(l => {
+      const c = classById[l.classId];
+      return {
+        'Class': c ? `${c.gradeLevel} - ${c.section}` : '',
+        'Subject': c ? (c.subject || '') : '',
+        'LRN': l.lrn || '',
+        'Full Name': Utils.fullName(l),
+        'Last Name': l.lastName || '',
+        'First Name': l.firstName || '',
+        'Middle Name': l.middleName || '',
+        'Suffix': l.suffix || '',
+        'Sex': Utils.normalizeSex(l.sex) || '',
+        'Birth Date': l.birthDate || '',
+        'Age': Utils.calcAge(l.birthDate) || '',
+        'Guardian': l.guardian || l.parent || '',
+        'Relationship': l.relationship || '',
+        'Parent Contact': l.parentContact || '',
+        'Learner Contact': l.learnerContact || '',
+        'Learner Email': l.learnerEmail || '',
+        'Barangay': l.barangay || '',
+        'Municipality': l.municipality || '',
+        'Province': l.province || '',
+        'Status': l.status || 'Active'
+      };
+    });
+
+  Utils.download(`masterlist_${Utils.timestamp()}.csv`, Utils.toCSV(rows), 'text/csv');
+  App.logActivity(`Masterlist exported (${rows.length} learners)`, 'Reports');
+  UI.toast(`Exported ${rows.length} learners`, 'success');
+},
 /* ---------- GRADE SUMMARY (Enhanced · 3-Term · All Subjects) ---------- */
 async gradeSummary(root) {
   const cls = State.activeClass;
@@ -23825,47 +26852,50 @@ _gsPrintLearnerReport(learner, subjectRows, terms, gwa, gwaDescriptor, gwaRemark
       <td style="text-align:center;">${Utils.esc(r.remarks)}</td>
     </tr>`).join('');
 
-  document.getElementById('print-area').innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || '')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-      <div class="print-line"></div>
-      <h2 style="font-size:13pt;">LEARNER GRADE REPORT</h2>
-    </div>
-    <div class="print-meta">
-      <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
-      <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
-      <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
-    </div>
-    <table style="margin-bottom:10px;">
-      <tr><th style="width:150px;">Learner</th><td>${Utils.esc(Utils.fullName(learner))}</td>
-          <th style="width:100px;">LRN</th><td>${Utils.esc(learner.lrn || '—')}</td></tr>
-      <tr><th>Sex</th><td>${Utils.esc(learner.sex || '—')}</td>
-          <th>Age</th><td>${Utils.calcAge(learner.birthDate) || '—'}</td></tr>
-    </table>
-    <table>
-      <thead>
-        <tr>
-          <th>Subject</th>
-          ${terms.map(t => `<th style="text-align:center;">${Utils.esc(t)}</th>`).join('')}
-          <th style="text-align:center;">Final Grade</th>
-          <th>Descriptor</th>
-          <th style="text-align:center;">Remarks</th>
-        </tr>
-      </thead>
-      <tbody>${rowsHTML}</tbody>
-      <tfoot>
-        <tr style="background:#eef3fa;font-weight:700;">
-          <td colspan="${terms.length + 1}" style="text-align:right;">General Weighted Average</td>
-          <td style="text-align:center;">${gwa ?? ''}</td>
-          <td>${Utils.esc(gwaDescriptor.label)}</td>
-          <td style="text-align:center;">${Utils.esc(gwaRemarks)}</td>
-        </tr>
-      </tfoot>
-    </table>
-    <div class="print-footer">
-      <span>Prepared by: ${Utils.esc(teacher.fullName || cls.adviser || '—')}</span>
-      <span>KlazAssist · ${Utils.formatDate(Utils.todayISO())}</span>
+    document.getElementById('print-area').innerHTML = `
+    <div class="print-learner-report">
+      ${Pages._buildDepEdHeader()}
+      <h3 style="text-align:center;font-size:13pt;margin:10px 0;">LEARNER GRADE REPORT</h3>
+      <div style="font-size:10pt;display:flex;justify-content:space-between;margin-bottom:10px;">
+        <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+        <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+        <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
+      </div>
+      <table style="margin-bottom:10px;">
+        <tr><th style="width:150px;">Learner</th><td>${Utils.esc(Utils.fullName(learner))}</td>
+            <th style="width:100px;">LRN</th><td>${Utils.esc(learner.lrn || '—')}</td></tr>
+        <tr><th>Sex</th><td>${Utils.esc(learner.sex || '—')}</td>
+            <th>Age</th><td>${Utils.calcAge(learner.birthDate) || '—'}</td></tr>
+      </table>
+      <table>
+        <thead>
+          <tr>
+            <th>Subject</th>
+            ${terms.map(t => `<th style="text-align:center;">${Utils.esc(t)}</th>`).join('')}
+            <th style="text-align:center;">Final Grade</th>
+            <th>Descriptor</th>
+            <th style="text-align:center;">Remarks</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHTML}</tbody>
+        <tfoot>
+          <tr style="background:#eef3fa;font-weight:700;">
+            <td colspan="${terms.length + 1}" style="text-align:right;">General Weighted Average</td>
+            <td style="text-align:center;">${gwa ?? ''}</td>
+            <td>${Utils.esc(gwaDescriptor.label)}</td>
+            <td style="text-align:center;">${Utils.esc(gwaRemarks)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="margin-top:24px;font-size:10pt;">
+        <div style="display:inline-block;text-align:center;min-width:260px;">
+          <div style="font-weight:700;">${Utils.esc(teacher.fullName || cls.adviser || '—')}</div>
+          <div style="border-top:1px solid #000;margin-top:2px;padding-top:2px;font-size:9pt;">
+            ${Utils.esc(Pages._getTeacherDesignation())}
+          </div>
+        </div>
+      </div>
+      ${Pages._buildDepEdFooter()}
     </div>`;
 
   App.logActivity('Printed grade report for ' + Utils.fullName(learner), 'Reports');
@@ -24397,6 +27427,110 @@ async _renderTermSummarySheet(root, subjects, terms, policy) {
   });
 
 },
+/* ============================================================================
+   DEPED STANDARD LETTERHEAD & FOOTER
+   Complies with DepEd Order No. 031, s. 2019 (Visual Identity Manual).
+   Excludes SF1, SF2, SF9 (which use their own mandated templates).
+   ============================================================================ */
+_buildDepEdHeader() {
+  const school = State.schools[0] || {};
+  // Use fallbacks only if the user hasn't configured their School Profile
+  const region = school.region || 'Region V - Bicol Region';
+  const division = school.division || 'Schools Division of Camarines Sur';
+  const schoolName = school.name || 'Cabalinadan High School';
+  const address = school.address || 'Cabalinadan, Tigaon, Camarines Sur';
+
+  return `
+    <div class="print-deped-header">
+      <div class="pdh-seal">
+        <img src="${DEPED_SEAL_PATH}" alt="DepEd Seal"
+             onerror="this.onerror=null; this.style.visibility='hidden';">
+      </div>
+      <div class="pdh-text">
+        <div class="pdh-republic">Republic of the Philippines</div>
+        <div class="pdh-department">Department of Education</div>
+        <div class="pdh-region">${Utils.esc(region)}</div>
+        <div class="pdh-division">${Utils.esc(division)}</div>
+        <div class="pdh-school">${Utils.esc(schoolName)}</div>
+        <div class="pdh-address">${Utils.esc(address)}</div>
+      </div>
+      <div class="pdh-line"></div>
+    </div>`;
+},
+
+_buildDepEdFooter() {
+  const school = State.schools[0] || {};
+  const schoolName = school.name || 'Cabalinadan High School';
+  const address = school.address || 'Cabalinadan, Tigaon, Camarines Sur';
+  const contact = school.contact || '(045) 123-4567';
+  const email = school.email || '309766l@deped.gov.ph';
+  const schoolLogo = school.schoolLogo || './icon/icon.svg';
+
+  return `
+    <div class="print-deped-footer">
+      <div class="pdf-seal">
+        <img src="${Utils.attr(schoolLogo)}" alt="School Seal"
+             onerror="this.onerror=null; this.src='./icon/icon.svg';">
+      </div>
+      <div class="pdf-text">
+        <div style="font-weight:bold;">${Utils.esc(schoolName)}</div>
+        <div>${Utils.esc(address)} &middot; ${Utils.esc(contact)} &middot; ${Utils.esc(email)}</div>
+      </div>
+    </div>`;
+},
+/* ============================================================================
+   Returns the teacher's designation (position) for report sign-off blocks.
+   Falls back gracefully if the position field is empty.
+   ============================================================================ */
+_getTeacherDesignation() {
+  const t = State.currentUser || {};
+  const position = (t.position || '').trim();
+  if (position) return position;
+
+  // Sensible fallbacks if the profile hasn't been filled in yet
+  if (Licensing.isPro()) {
+    const lic = Licensing.getLicense();
+    if (lic && lic.payload && lic.payload.tier === 'school') return 'School Personnel';
+  }
+  return 'Teacher';
+},
+/* ============================================================================
+   Wait for every <img> inside #print-area to finish decoding, then print.
+   Required for external image files (DepEd seal, school logo) whose load
+   can lag behind window.print() in Chrome/Edge's separate print process.
+   ============================================================================ */
+_waitForPrintImagesThen(callback) {
+  const area = document.getElementById('print-area');
+  if (!area) { if (callback) callback(); return; }
+
+  const images = area.querySelectorAll('img');
+  if (!images.length) {
+    requestAnimationFrame(() => requestAnimationFrame(() => callback && callback()));
+    return;
+  }
+
+  const waits = Array.from(images).map(img => {
+    // Already decoded and laid out? Done.
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+
+    // Otherwise wait for load OR error, whichever comes first.
+    return new Promise(resolve => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      img.addEventListener('load',  done, { once: true });
+      img.addEventListener('error', done, { once: true });
+      // Hard ceiling so a stuck image never blocks the print dialog.
+      setTimeout(done, 2500);
+    });
+  });
+
+  Promise.all(waits).then(() => {
+    // Give the print pipeline one extra paint cycle to see the decoded pixels.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (callback) callback();
+    }));
+  });
+},
 
 /* -- Live reflow of avg + rank without re-rendering the whole page ----- */
 /* -- Live reflow of MAPEH + average + rank, reading straight from the DOM -- */
@@ -24656,8 +27790,13 @@ _tsPrintSheet(rowData, areas, term, cls, policy) {
           </tr>
         </tfoot>
       </table>
-      <div style="margin-top:14px;font-size:9pt;display:flex;justify-content:space-between;">
-            <div>Prepared by: <strong>${Utils.esc(Licensing.getReportSignatory(cls))}</strong></div>
+      <div style="margin-top:14px;font-size:9pt;display:flex;justify-content:space-between;align-items:flex-end;">
+        <div style="text-align:center;min-width:220px;">
+          <div style="font-weight:700;">${Utils.esc(Licensing.getReportSignatory(cls))}</div>
+          <div style="border-top:1px solid #000;margin-top:2px;padding-top:2px;">
+            ${Utils.esc(Pages._getTeacherDesignation())}
+          </div>
+        </div>
         <div>Generated by KlazAssist · ${Utils.formatDate(Utils.todayISO())}</div>
       </div>
     </div>`;
@@ -25182,11 +28321,23 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
     const school = State.schools[0] || {};
     const teacher = State.currentUser || {};
     const cls = State.activeClass;
-    document.getElementById('print-area').innerHTML = `
-      <div class="print-header"><h1>${Utils.esc(school.name||'')}</h1><h2 style="font-size:13pt;">GRADE SUMMARY</h2></div>
-      <div class="print-meta"><span>Teacher: ${Utils.esc(teacher.fullName||'')}</span><span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span></div>
-      <p style="text-align:center;">Grade Summary available in the Gradebook module. Please export from the Gradebook.</p>
-      <div class="print-footer"><span>${Utils.formatDate(Utils.todayISO())}</span><span>KlazAssist</span></div>`;
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-grade-summary">
+      ${Pages._buildDepEdHeader()}
+      <h3 style="text-align:center;font-size:13pt;margin:10px 0 4px;">${Utils.esc(titleLine)}</h3>
+      <div style="font-size:10pt;display:flex;justify-content:space-between;margin-bottom:10px;">
+        <span>Teacher: ${Utils.esc(teacher.fullName || '—')}</span>
+        <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+        <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+        <span>${Utils.formatDate(Utils.todayISO())}</span>
+      </div>
+      <table>
+        <thead>${headerHTML}</thead>
+        <tbody>${rowsHTML}</tbody>
+        <tfoot>${footerHTML}</tfoot>
+      </table>
+      ${Pages._buildDepEdFooter()}
+    </div>`;
     window.print();
   },
   /* ============================================================================
@@ -26558,6 +29709,133 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
       </div>`;
     root.querySelectorAll('[data-goto-page]').forEach(el => el.addEventListener('click', () => App.navigate(el.dataset.gotoPage)));
   },
+  /* ============================================================================
+   TEACHING TOOLS — hub page
+   Single entry point for the six interactive classroom utilities.
+   ============================================================================ */
+async teachingToolsHub(root) {
+  const tools = [
+    { id: 'random-picker', label: 'Random Student Picker', icon: 'shuffle',
+      desc: 'Fairly pick a learner. Optionally avoids repeating until the whole class has been called.' },
+    { id: 'wheel',         label: 'Wheel of Names',        icon: 'wheel',
+      desc: 'Spin a colorful wheel to select a learner. Includes an optional recitation timer.' },
+    { id: 'timer',         label: 'Timer & Stopwatch',     icon: 'timer',
+      desc: 'Countdown timers with quick presets, plus a stopwatch for activities and drills.' },
+    { id: 'randomizer',    label: 'Randomizer',            icon: 'dice',
+      desc: 'Random numbers, dice rolls, coin flips, and yes/no decisions — all in one place.' },
+    { id: 'noise-meter',   label: 'Noise Meter',           icon: 'volume',
+      desc: 'Visualize classroom noise with bouncing balls or a classic linear meter.' },
+    { id: 'signal',        label: 'Classroom Signal',      icon: 'signal',
+      desc: 'Display the expected noise level for the current activity on your projector.' }
+  ];
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Teaching Tools</h2>
+        <p>Interactive utilities for engagement, timing, and classroom management</p>
+      </div>
+    </div>
+
+    <div class="card mb-16" style="background:var(--gradient-card);">
+      <div class="flex gap-12" style="align-items:flex-start;">
+        <div style="flex-shrink:0;width:36px;height:36px;border-radius:10px;background:var(--light-blue);color:var(--deped-blue);display:flex;align-items:center;justify-content:center;">
+          ${icon('play')}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">Built for the projector</div>
+          <p class="text-sm text-muted" style="margin:0;line-height:1.55;">
+            Every tool has an <strong>Open Learner View</strong> button that sends it to a second
+            screen — perfect for a projector, TV, or extended display. The teacher keeps the
+            controls; learners see only the visual.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-3">
+      ${tools.map(t => {
+        const gate = PRO_FEATURES[t.id];
+        const isLocked = gate && gate.tier === 'pro' && !Licensing.isPro();
+        return `
+          <div class="quick-tool-card hub-tool-card" data-hub-open="${Utils.attr(t.id)}">
+            <div class="qt-icon">${icon(t.icon)}</div>
+            <div class="hub-tool-title">
+              <span>${Utils.esc(t.label)}</span>
+              ${isLocked ? '<span class="nav-pro-badge">PRO</span>' : ''}
+            </div>
+            <p class="hub-tool-desc">${Utils.esc(t.desc)}</p>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  root.querySelectorAll('[data-hub-open]').forEach(el => {
+    el.onclick = () => App.navigate(el.dataset.hubOpen);
+  });
+},
+
+/* ============================================================================
+   LESSON & PLANNING — hub page
+   Single entry point for the planning and content-generation tools.
+   ============================================================================ */
+  async planningHub(root) {
+  const tools = [
+    { id: 'lesson-planner',       label: 'Lesson Planner (AI)',   icon: 'book-open',
+      desc: 'Generate DepEd ILAW weekly lesson plans with Gemini. Unpacks a competency across multiple sessions.' },
+    { id: 'tos-generator',        label: 'TOS & Exam Generator',  icon: 'file',
+      desc: 'Build a Table of Specifications, then generate a complete exam with answer key and rubrics.' },
+    { id: 'powerpoint-generator', label: 'PowerPoint Generator',  icon: 'play',
+      desc: 'Convert a lesson plan into a ready-to-present slide deck with images and speaker notes.' },
+    { id: 'weekly-planner',       label: 'Weekly Planner',        icon: 'calendar',
+      desc: 'Your week at a glance — classes, preparations, meetings, breaks, and reminders.' },
+    { id: 'calendar',             label: 'Calendar',              icon: 'calendar',
+      desc: 'Deadlines, school events, meetings, and the official DepEd calendar of activities.' }
+  ];
+
+  const aiTools = tools.filter(t => PRO_FEATURES[t.id]);
+  const generalTools = tools.filter(t => !PRO_FEATURES[t.id]);
+
+  const renderCard = (t) => {
+    const gate = PRO_FEATURES[t.id];
+    const isLocked = gate && gate.tier === 'pro' && !Licensing.isPro();
+    return `
+      <div class="quick-tool-card hub-tool-card" data-hub-open="${Utils.attr(t.id)}">
+        <div class="qt-icon">${icon(t.icon)}</div>
+        <div class="hub-tool-title">
+          <span>${Utils.esc(t.label)}</span>
+          ${isLocked ? '<span class="nav-pro-badge">PRO</span>' : ''}
+        </div>
+        <p class="hub-tool-desc">${Utils.esc(t.desc)}</p>
+      </div>`;
+  };
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Lesson &amp; Planning</h2>
+        <p>Plan lessons, build assessments, generate content, and track your schedule</p>
+      </div>
+    </div>
+
+    <h4 style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:4px 0 10px;">
+      AI-powered
+    </h4>
+    <div class="grid grid-3 mb-20">
+      ${aiTools.map(renderCard).join('')}
+    </div>
+
+    <h4 style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:4px 0 10px;">
+      General
+    </h4>
+    <div class="grid grid-3">
+      ${generalTools.map(renderCard).join('')}
+    </div>`;
+
+  root.querySelectorAll('[data-hub-open]').forEach(el => {
+    el.onclick = () => App.navigate(el.dataset.hubOpen);
+  });
+},
+
   async exportCenter(root) {
     root.innerHTML = `
       <div class="page-head"><div><h2>Export Center</h2><p>Backup and export your data</p></div></div>
@@ -32970,7 +36248,7 @@ const aliases = {
   'assessment-builder': 'assessmentBuilder',
   'quiz-manager': 'quizManager',
   'tos-generator': 'tosGenerator',
-  'powerpoint-generator': 'pptxGenerator',   /* NEW */
+  'powerpoint-generator': 'pptxGenerator',
   'item-analysis': 'itemAnalysis',
   'class-performance': 'classPerformance',
   'learner-performance': 'learnerPerformance',
@@ -32990,7 +36268,9 @@ const aliases = {
   'activity-log': 'activityLog',
   'parent-notes': 'parentNotes',
   'security-settings': 'securitySettings',
-  'teaching-load': 'teachingLoad'
+  'teaching-load': 'teachingLoad',
+  'teaching-tools': 'teachingToolsHub',   // ← ADD
+  'planning': 'planningHub'               // ← ADD
 };
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
