@@ -1974,6 +1974,24 @@ const Session = {
   _warningShownFor: 0,
   STORAGE_KEY: 'klazassist.session.v1',
 
+    /* ----------------------------------------------------------------
+   Persist the current session state to localStorage.
+   Only remembered sessions are saved — non-remembered sessions
+   already require a fresh sign-in on reload, which is stricter.
+   ---------------------------------------------------------------- */
+_persist() {
+  if (!this.state.remember || !this.state.expiresAt) return;
+  try {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify({
+      sessionId: this.state.sessionId,
+      createdAt: this.state.createdAt,
+      expiresAt: this.state.expiresAt,
+      user: Auth._account ? Auth._account.username : null,
+      locked: this.state.locked === true    // ← the new bit
+    }));
+  } catch (e) { /* localStorage disabled — session is memory-only this run */ }
+},
+
   start({ remember }) {
     const now = Date.now();
     this.state.authenticated = true;
@@ -1984,18 +2002,11 @@ const Session = {
     this.state.sessionId = Utils.uid('sess-');
     if (remember) {
       this.state.expiresAt = now + CONFIG.SESSION_HOURS * 3600 * 1000;
-      try {
-        localStorage.setItem(this.STORAGE_KEY, JSON.stringify({
-          sessionId: this.state.sessionId,
-          createdAt: this.state.createdAt,
-          expiresAt: this.state.expiresAt,
-          user: Auth._account ? Auth._account.username : null
-        }));
-      } catch (e) {}
     } else {
       this.state.expiresAt = 0;
       try { localStorage.removeItem(this.STORAGE_KEY); } catch (e) {}
     }
+    this._persist();          // ← was inline localStorage.setItem
     this.startTicker();
     this.updateUI();
   },
@@ -2013,9 +2024,9 @@ const Session = {
       if (!Auth._account || Auth._account.username !== s.user) {
         try { localStorage.removeItem(this.STORAGE_KEY); } catch (e) {}
         return false;
-      }
+      } 
       this.state.authenticated = true;
-      this.state.locked = false;
+      this.state.locked = s.locked === true;    // ← was `false`
       this.state.createdAt = s.createdAt || Date.now();
       this.state.lastActivity = Date.now();
       this.state.expiresAt = s.expiresAt;
@@ -2040,12 +2051,14 @@ const Session = {
   lock(reason) {
     if (!this.state.authenticated) return;
     this.state.locked = true;
+    this._persist();
     AuthUI.showLock(reason);
     App.logActivity('Application locked' + (reason ? ' (' + reason + ')' : ''), 'Security');
     this.updateUI();
   },
   unlock() {
     this.state.locked = false;
+    this._persist();
     this.touch();
     AuthUI.hideLock();
     this.updateUI();
@@ -2059,15 +2072,8 @@ const Session = {
       const windowMs = CONFIG.SESSION_HOURS * 3600 * 1000;
       if (remaining < windowMs * 0.5) {
         this.state.expiresAt = now + windowMs;
-        try {
-          localStorage.setItem(this.STORAGE_KEY, JSON.stringify({
-            sessionId: this.state.sessionId,
-            createdAt: this.state.createdAt,
-            expiresAt: this.state.expiresAt,
-            user: Auth._account ? Auth._account.username : null
-          }));
-        } catch (e) {}
-      }
+        this._persist();
+       }
     }
     this.updateUI();
   },
@@ -2880,20 +2886,40 @@ const AuthUI = {
     App.applyTheme(State.theme);
     Pages.showSafariInstallNotice();
   },
-  showLock(reason) {
-    const lock = document.getElementById('lock-screen');
-    lock.classList.add('show');
-    this._currentView = 'lock';
-    const acc = Auth._account || {};
-    const avatarEl = document.getElementById('lock-avatar');
-    avatarEl.innerHTML = Utils.esc(Utils.initials(acc.name || acc.username || '?'));
-    document.getElementById('lock-name').textContent = acc.name || acc.username || 'Session Locked';
-    document.getElementById('lock-error').classList.remove('show');
-    document.getElementById('lock-password').value = '';
-    document.getElementById('lock-submit').disabled = false;
-    document.getElementById('lock-submit-label').textContent = 'Unlock';
-    setTimeout(() => { document.getElementById('lock-password').focus(); }, 80);
-  },
+showLock(reason) {
+  const lock = document.getElementById('lock-screen');
+  lock.classList.add('show');
+  this._currentView = 'lock';
+
+  const acc = Auth._account || {};
+  const teacher = State.currentUser || {};
+
+  // Name precedence: teacher profile → auth account → fallback
+  const name = (teacher.fullName && teacher.fullName.trim())
+    || acc.name
+    || acc.username
+    || 'Session Locked';
+
+  // Photo precedence: teacher profile photo → initials fallback
+  const photo = (teacher.photo && String(teacher.photo).trim()) || '';
+
+  const avatarEl = document.getElementById('lock-avatar');
+  if (photo) {
+    avatarEl.innerHTML = `<img src="${Utils.attr(photo)}" alt="${Utils.attr(name)}">`;
+    avatarEl.style.background = 'transparent';
+  } else {
+    avatarEl.innerHTML = Utils.esc(Utils.initials(name));
+    avatarEl.style.background = Utils.colorFor(name);
+  }
+
+  document.getElementById('lock-name').textContent = name;
+  document.getElementById('lock-error').classList.remove('show');
+  document.getElementById('lock-password').value = '';
+  document.getElementById('lock-submit').disabled = false;
+  document.getElementById('lock-submit-label').textContent = 'Unlock';
+
+  setTimeout(() => { document.getElementById('lock-password').focus(); }, 80);
+},
   hideLock() {
     document.getElementById('lock-screen').classList.remove('show');
     this._currentView = 'app';
@@ -3415,14 +3441,23 @@ function setupLoginBindings() {
         lockLabel.textContent = 'Unlock';
         return;
       }
-      await Auth.recordSuccessfulLogin();
-      // Fire-and-forget: re-hash with lower iterations if this account
-      // was created before the adaptive-iterations change.
-      lockPass.value = '';
-      Session.unlock();
-      App.logActivity('Session unlocked', 'Security');
+    await Auth.recordSuccessfulLogin();
+    lockPass.value = '';
+    Session.unlock();
+    App.logActivity('Session unlocked', 'Security');
+
+    // If the lock was restored at bootstrap rather than triggered during a
+    // live session, App.initApplication() was never called — which means the
+    // app shell (#app) is still hidden, the sidebar is empty, activity
+    // tracking isn't bound, and the topbar has no class name. Re-running
+    // the full initialization path here handles both cases cleanly.
+    const appEl = document.getElementById('app');
+    if (appEl && appEl.classList.contains('hidden')) {
+      await App.initApplication();
+    } else {
       App.updateTopbarClass();
       App.navigate(State.currentModule || 'dashboard');
+    }
     } catch (ex) {
       console.error('Unlock error:', ex);
       lockErr.textContent = 'An unexpected error occurred.';
@@ -3522,11 +3557,19 @@ const App = {
 
       if (accountExists) {
         if (await Session.tryResume()) {
-          await this.initApplication();
-          App.logActivity('Session resumed (remembered device)', 'Security');
+          if (Session.state.locked) {
+            // Session was locked before reload — do NOT auto-init the app.
+            // Show the lock screen and wait for the password.
+            App.logActivity('Locked session restored — awaiting unlock', 'Security');
+            AuthUI.showLock('restored');
+          } else {
+            await this.initApplication();
+            App.logActivity('Session resumed (remembered device)', 'Security');
+          }
         } else {
           AuthUI.showLogin();
         }
+      
       } else if (hasExistingData || shadow) {
         // The account is missing, but there IS data — the setup wizard
         // would overwrite everything. Show a recovery prompt instead.
@@ -3546,6 +3589,13 @@ const App = {
   },
 
   async initApplication() {
+    // Never render the app while the session is locked — this catches any
+    // future call path that forgets to check the lock state.
+    if (Session.state.locked) {
+      AuthUI.showLock('restored');
+      return;
+    }
+
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('setup-screen').classList.add('hidden');
     document.getElementById('lock-screen').classList.remove('show');
@@ -3651,22 +3701,40 @@ const App = {
       localStorage.setItem('klazassist.schoolYear', State.schoolYear);
     } catch (e) {}
   },
-  applyTheme(t) {
-    document.documentElement.setAttribute('data-theme', t);
-    const iconEl = document.getElementById('theme-icon');
-    if (iconEl) {
-      iconEl.innerHTML = t === 'dark'
-        ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>'
-        : '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>';
-    }
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', t === 'dark' ? '#0B1729' : '#0038A8');
-  },
-  toggleTheme() {
-    State.theme = State.theme === 'light' ? 'dark' : 'light';
-    this.applyTheme(State.theme);
-    this.savePreferences();
-  },
+applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+
+  const iconEl = document.getElementById('theme-icon');
+  if (iconEl) {
+    const isDark = (t === 'dark' || t === 'navy' || t === 'noir');
+    iconEl.innerHTML = isDark
+      ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>'
+      : '<path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>';
+  }
+
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    const colors = {
+      light: '#0038A8',
+      sepia: '#6b4423',
+      'deped-green': '#0f5132',
+      dark:  '#0B1729',
+      navy:  '#0a1628',
+      noir:  '#0a0a0a'
+    };
+    meta.setAttribute('content', colors[t] || '#0038A8');
+  }
+},
+
+toggleTheme() {
+  // Six themes, ordered light → dark
+  const order = ['light', 'sepia', 'deped-green', 'dark', 'navy', 'noir'];
+  const i = order.indexOf(State.theme);
+  State.theme = order[(i + 1) % order.length];
+  this.applyTheme(State.theme);
+  this.savePreferences();
+},
+
   async loadState() {
   // Load any persisted grading-policy customizations BEFORE anything reads policy
   await GradingEngine.loadOverrides();
@@ -3929,9 +3997,10 @@ const App = {
       section.items.forEach(item => {
         const isPro      = PRO_FEATURES[item.id] && PRO_FEATURES[item.id].tier === 'pro';
         const isLocked   = isPro && !Licensing.isPro();
-        const proBadge   = isLocked ? '<span class="nav-pro-badge">PRO</span>'
-                         : isPro    ? '<span class="nav-pro-badge active">PRO</span>'
-                                    : '';
+        // The gold "PRO" tag on sidebar items is only a hint that a feature is
+        // still locked. Once the license is active, the dashboard hero badge is
+        // the single PRO marker in the UI — no per-item clutter.
+        const proBadge   = isLocked ? '<span class="nav-pro-badge">PRO</span>' : '';
         html += `<button class="nav-item${isLocked ? ' is-locked' : ''}" data-nav="${item.id}" onclick="App.navigate('${item.id}')">
           ${icon(item.icon)}
           <span>${item.label}</span>
@@ -30250,247 +30319,613 @@ Notes:
   },
 
   /* ---------- SETTINGS ---------- */
-  async settings(root) {
-    const school = State.schools[0] || {};
-    const teacher = State.currentUser || {};
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Settings</h2><p>Configure the toolkit</p></div></div>
-      <div class="tabs">
-        <button class="tab active" data-st="general">General</button>
-        <button class="tab" data-st="academic">Academic / Grading</button>
-        <button class="tab" data-st="appearance">Appearance</button>
-        <button class="tab" data-st="license">License</button>
-        <button class="tab" data-st="data">Data Management</button>
-        <button class="tab" data-st="about">About</button>
+async settings(root) {
+  const school = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+
+  // Persist active tab across navigations
+  if (!State._settingsTab) State._settingsTab = 'general';
+
+  const tabs = [
+    { id: 'general',  label: 'General',         icon: 'settings', desc: 'School year, theme, profiles' },
+    { id: 'academic', label: 'Academics',        icon: 'chart',    desc: 'Grading policy and benchmarks' },
+    { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
+    { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' }
+  ];
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Settings</h2>
+        <p>Configure your workspace, academic policy, and data</p>
       </div>
-      <div id="settings-content"></div>`;
-    const content = document.getElementById('settings-content');
-    const renderTab = (tab) => {
-      if (tab === 'general') {
-        content.innerHTML = `
-          <div class="card mb-16"><div class="card-head"><h3>General</h3></div>
-            <div class="form-row">
-              <div class="form-group"><label>School Year</label><input class="form-control" id="st-sy" value="${Utils.attr(State.schoolYear)}"></div>
-              <div class="form-group"><label>Theme</label>
-                <select class="form-control" id="st-theme">
-                  <option value="light" ${State.theme==='light'?'selected':''}>Light</option>
-                  <option value="dark" ${State.theme==='dark'?'selected':''}>Dark</option>
-                </select></div>
+    </div>
+
+    <div class="settings-layout">
+      <aside class="settings-nav">
+        ${tabs.map(t => `
+          <button class="settings-nav-item ${State._settingsTab === t.id ? 'active' : ''}" data-st="${t.id}">
+            <span class="sn-icon">${icon(t.icon)}</span>
+            <span class="sn-body">
+              <span class="sn-label">${Utils.esc(t.label)}</span>
+              <span class="sn-desc">${Utils.esc(t.desc)}</span>
+            </span>
+            <span class="sn-chevron">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+            </span>
+          </button>`).join('')}
+
+        <button class="settings-nav-item settings-nav-item-subtle" onclick="App.navigate('about')">
+          <span class="sn-icon">${icon('info')}</span>
+          <span class="sn-body">
+            <span class="sn-label">About KlazAssist</span>
+            <span class="sn-desc">Version, developer, license text</span>
+          </span>
+          <span class="sn-chevron">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+          </span>
+        </button>
+      </aside>
+
+      <section class="settings-panel" id="settings-content"></section>
+    </div>
+  `;
+
+  const content = root.querySelector('#settings-content');
+
+  /* ══════════════════════════════════════════════════════════
+     GENERAL
+     ══════════════════════════════════════════════════════════ */
+  const renderGeneral = () => {
+    const schoolName = school.name || 'Not configured';
+    const teacherName = teacher.fullName || (Auth._account && Auth._account.name) || 'Not configured';
+    const sy = State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
+
+    content.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>School Year</h3>
+          <p>Used as the default for new classes, exports, and reports.</p>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">Active School Year</label>
+          <input class="form-control" id="st-sy" value="${Utils.attr(sy)}"
+                 placeholder="e.g. 2026-2027" style="max-width:180px;">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Appearance</h3>
+          <p>Applies immediately — no save required.</p>
+        </div>
+        <div class="theme-grid">
+          <label class="theme-card ${State.theme === 'light' ? 'active' : ''}" data-theme-pick="light">
+            <input type="radio" name="st-theme" value="light" ${State.theme === 'light' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-light">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
             </div>
-            <button class="btn btn-primary" id="st-save">Save</button>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              <span>Light</span>
+              ${State.theme === 'light' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+
+          <label class="theme-card ${State.theme === 'sepia' ? 'active' : ''}" data-theme-pick="sepia">
+            <input type="radio" name="st-theme" value="sepia" ${State.theme === 'sepia' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-sepia">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
+            </div>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+              <span>Sepia</span>
+              ${State.theme === 'sepia' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+
+          <label class="theme-card ${State.theme === 'dark' ? 'active' : ''}" data-theme-pick="dark">
+            <input type="radio" name="st-theme" value="dark" ${State.theme === 'dark' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-dark">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
+            </div>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+              <span>Dark</span>
+              ${State.theme === 'dark' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+
+          <label class="theme-card ${State.theme === 'navy' ? 'active' : ''}" data-theme-pick="navy">
+            <input type="radio" name="st-theme" value="navy" ${State.theme === 'navy' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-navy">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
+            </div>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Navy</span>
+              ${State.theme === 'navy' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+
+          <label class="theme-card ${State.theme === 'deped-green' ? 'active' : ''}" data-theme-pick="deped-green">
+            <input type="radio" name="st-theme" value="deped-green" ${State.theme === 'deped-green' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-deped-green">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
+            </div>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+              <span>DepEd Green</span>
+              ${State.theme === 'deped-green' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+
+          <label class="theme-card ${State.theme === 'noir' ? 'active' : ''}" data-theme-pick="noir">
+            <input type="radio" name="st-theme" value="noir" ${State.theme === 'noir' ? 'checked' : ''} style="display:none;">
+            <div class="theme-preview theme-preview-noir">
+              <div class="tp-topbar"></div>
+              <div class="tp-sidebar"></div>
+              <div class="tp-body"><span></span><span></span><span></span></div>
+            </div>
+            <div class="theme-label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 006 6v3a6 6 0 01-6 6v-3a3 3 0 01-3-3h3V3z"/><circle cx="12" cy="12" r="10"/></svg>
+              <span>Noir Black</span>
+              ${State.theme === 'noir' ? '<span class="theme-check">' + icon('check') + '</span>' : ''}
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Profiles</h3>
+          <p>Appear on printed reports, certificates, and class posters.</p>
+        </div>
+
+        <div class="profile-summary" id="profile-teacher">
+          <div class="ps-avatar" style="background:${teacher.photo ? 'transparent' : Utils.colorFor(teacherName)};">
+            ${teacher.photo
+              ? `<img src="${Utils.attr(teacher.photo)}" alt="">`
+              : Utils.esc(Utils.initials(teacherName))}
           </div>
-          <div class="card mb-16"><div class="card-head"><h3>Teacher Profile</h3><button class="btn btn-sm btn-outline" data-goto="teacher-profile">Edit</button></div>
-            <p class="text-sm">${Utils.esc(teacher.fullName || 'Not set')}</p></div>
-          <div class="card"><div class="card-head"><h3>School Profile</h3><button class="btn btn-sm btn-outline" data-goto="school-profile">Edit</button></div>
-            <p class="text-sm">${Utils.esc(school.name || 'Not set')}</p></div>`;
-        content.querySelector('#st-save').addEventListener('click', () => Pages.saveGeneralSettings());
-              } else if (tab === 'license') {
-        const lic = Licensing.getLicense();
-        const isPro = Licensing.isPro();
-        content.innerHTML = `
-          <div class="card mb-16">
-            <div class="card-head"><h3>KlazAssist Pro</h3></div>
-            ${isPro ? `
-              <div class="alert alert-success">
-                ${icon('check')}<div>
-                  <strong>Pro is active on this device.</strong>
-                  ${lic && lic.payload.name ? `Licensed to <strong>${Utils.esc(lic.payload.name)}</strong>.` : ''}
-                  ${lic && lic.payload.email ? `<br><span class="text-xs">${Utils.esc(lic.payload.email)}</span>` : ''}
-                </div>
-              </div>
-              <table style="width:100%;font-size:13px;">
-                <tr><td class="text-muted" style="padding:6px 0;width:180px;">Tier</td><td><span class="badge badge-gold">${Utils.esc(lic.payload.tier.toUpperCase())}</span></td></tr>
-                <tr><td class="text-muted" style="padding:6px 0;">Issued</td><td>${Utils.formatDate(lic.payload.issued)}</td></tr>
-                <tr><td class="text-muted" style="padding:6px 0;">Expires</td><td>${lic.payload.expires ? Utils.formatDate(lic.payload.expires) : 'Never (lifetime)'}</td></tr>
-                ${lic.payload.school ? `<tr><td class="text-muted" style="padding:6px 0;">School</td><td>${Utils.esc(lic.payload.school)}</td></tr>` : ''}
-              </table>
-              <div class="divider"></div>
-              <button class="btn btn-danger" id="lic-deactivate">${icon('xCircle')} Deactivate on This Device</button>
-              <p class="text-xs text-muted mt-8">You can move your license to another device by deactivating here, then activating there.</p>
-            ` : `
-              <div class="alert alert-info">
-                ${icon('info')}<div>
-                  You are using the <strong>free version</strong> of KlazAssist.
-                  Unlock AI tools, DepEd forms, and advanced analytics with a one-time purchase.
-                </div>
-              </div>
-              <div class="flex gap-8" style="flex-wrap:wrap;">
-                <button class="btn btn-primary btn-lg" id="lic-open-upgrade">${icon('star')} Upgrade to Pro</button>
-                <button class="btn btn-outline btn-lg" id="lic-enter-key">${icon('key')} I Have a License Key</button>
-              </div>
-            `}
+          <div class="ps-body">
+            <div class="ps-label">Teacher Profile</div>
+            <div class="ps-name">${Utils.esc(teacherName)}</div>
+            <div class="ps-meta">${Utils.esc(teacher.position || 'Position not set')}${teacher.email ? ' · ' + Utils.esc(teacher.email) : ''}</div>
           </div>
-          ${isPro ? `
-            <div class="card">
-              <div class="card-head"><h3>Need another license?</h3></div>
-              <p class="text-sm text-muted mb-12">Buying a license for a colleague or another school?</p>
-              <button class="btn btn-outline" id="lic-open-upgrade-2">${icon('star')} Buy Another</button>
+          <button class="btn btn-sm btn-outline" onclick="App.navigate('teacher-profile')">
+            ${icon('edit')} Edit
+          </button>
+        </div>
+
+        <div class="profile-summary" id="profile-school">
+          <div class="ps-avatar ps-avatar-school">
+            ${school.schoolLogo
+              ? `<img src="${Utils.attr(school.schoolLogo)}" alt="">`
+              : icon('building')}
+          </div>
+          <div class="ps-body">
+            <div class="ps-label">School Profile</div>
+            <div class="ps-name">${Utils.esc(schoolName)}</div>
+            <div class="ps-meta">${school.schoolId ? 'School ID ' + Utils.esc(school.schoolId) : 'No school ID'}${school.division ? ' · ' + Utils.esc(school.division) : ''}</div>
+          </div>
+          <button class="btn btn-sm btn-outline" onclick="App.navigate('school-profile')">
+            ${icon('edit')} Edit
+          </button>
+        </div>
+      </div>
+    `;
+
+    // School year — auto-save on blur
+    const syInput = content.querySelector('#st-sy');
+    syInput.addEventListener('blur', () => {
+      const v = syInput.value.trim();
+      if (!v || v === State.schoolYear) return;
+      State.schoolYear = v;
+      App.savePreferences();
+      App.logActivity('School year changed to ' + v, 'Settings');
+      UI.toast('School year updated', 'success', 2000);
+    });
+
+    // Theme cards — apply immediately
+    content.querySelectorAll('[data-theme-pick]').forEach(card => {
+      card.onclick = () => {
+        const t = card.dataset.themePick;
+        if (t === State.theme) return;
+        State.theme = t;
+        App.applyTheme(t);
+        App.savePreferences();
+        App.logActivity('Theme changed to ' + t, 'Settings');
+        renderGeneral();     // refresh checkmark
+      };
+    });
+  };
+
+  /* ══════════════════════════════════════════════════════════
+     ACADEMICS
+     ══════════════════════════════════════════════════════════ */
+  const renderAcademic = () => {
+    const cls = State.activeClass;
+    const policy = cls
+      ? (GRADING_POLICIES[cls.gradingPolicyVersion] || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear }))
+      : GradingEngine.resolvePolicy({});
+    const isLegacy = policy.version === 'LEGACY-DO8-2015';
+    const weights = cls
+      ? (isLegacy ? null : (cls.resolvedWeights || policy.weights['KS2_CORE']))
+      : null;
+
+    const hw = State.healthWeights || { attendance: 50, grade: 50 };
+    const bm = State.divisionBenchmarks || { attendance: 90, passing: 80 };
+
+    content.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Active Grading Policy</h3>
+          <p>The rules currently applied to your classes.</p>
+        </div>
+        <div class="info-grid">
+          <div class="info-row">
+            <span class="info-key">Policy</span>
+            <span class="info-val">${Utils.esc(policy.label)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Effective SY</span>
+            <span class="info-val">${Utils.esc(policy.effectiveSchoolYear)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Term Structure</span>
+            <span class="info-val">${(policy.terms || []).join(' · ')}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Passing Grade</span>
+            <span class="info-val"><strong>${policy.passingGrade}</strong></span>
+          </div>
+          ${!isLegacy ? `
+            <div class="info-row">
+              <span class="info-key">Examination Structure</span>
+              <span class="info-val">${policy.examinationSubstructure
+                ? `ST1 ${policy.examinationSubstructure.ST1}% · ST2 ${policy.examinationSubstructure.ST2}% · TE ${policy.examinationSubstructure.TE}%`
+                : '—'}</span>
             </div>` : ''}
-        `;
-        const openUpgrade = content.querySelector('#lic-open-upgrade');
-        if (openUpgrade) openUpgrade.onclick = () => Pages.openUpgradeModal();
-        const openUpgrade2 = content.querySelector('#lic-open-upgrade-2');
-        if (openUpgrade2) openUpgrade2.onclick = () => Pages.openUpgradeModal();
-        const enterKey = content.querySelector('#lic-enter-key');
-        if (enterKey) enterKey.onclick = () => Pages.openUpgradeModal();
-        const deactivate = content.querySelector('#lic-deactivate');
-        if (deactivate) deactivate.onclick = () => {
-          UI.confirm({
-            title: 'Deactivate License?',
-            message: 'This will remove the Pro license from this device. Your data stays. You can reactivate anytime with the same key.',
-            confirmText: 'Deactivate',
-            confirmClass: 'btn-danger',
-            onConfirm: async () => {
-              await Licensing.deactivate();
-              App.renderSidebar();
-              UI.toast('License deactivated', 'success');
-              Pages.settings(root);
-            }
-          });
-        };
-      } else if (tab === 'appearance') {
-        content.innerHTML = `
-          <div class="card"><div class="card-head"><h3>Appearance</h3></div>
-            <div class="form-group"><label>Theme</label>
-              <select class="form-control" id="st2-theme">
-                <option value="light" ${State.theme==='light'?'selected':''}>Light</option>
-                <option value="dark" ${State.theme==='dark'?'selected':''}>Dark</option>
-              </select></div>
-          </div>`;
-        content.querySelector('#st2-theme').addEventListener('change', (e) => {
-          State.theme = e.target.value; App.applyTheme(State.theme); App.savePreferences();
-        });
-      } else if (tab === 'academic') {
-        const cls = State.activeClass;
-        const policy = cls ? (GRADING_POLICIES[cls.gradingPolicyVersion] || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear })) : GradingEngine.resolvePolicy({});
-        const weights = cls ? (policy.version === 'LEGACY-DO8-2015' ? null : (cls.resolvedWeights || policy.weights['KS2_CORE'])) : null;
-        content.innerHTML = `
-          <div class="alert alert-info mb-16">${icon('info')}<div>KlazAssist is <strong>designed to support DepEd-aligned teacher recordkeeping</strong>. It is not an official DepEd system. Always verify official school/division requirements before submission — see the sourcing notes below.</div></div>
-          <div class="card mb-16"><div class="card-head"><h3>Current Configuration</h3></div>
-            <table class="data-table" style="font-size:13px;">
-              <tr><td class="text-muted" style="width:220px;padding:6px 0;">School Year</td><td><strong>${Utils.esc(State.schoolYear)}</strong></td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Active Class</td><td>${cls ? Utils.esc(cls.gradeLevel + ' - ' + cls.section + ' (' + (cls.subject||'—') + ')') : '—'}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Grading Policy</td><td>${Utils.esc(policy.label)}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Term Structure</td><td>${(policy.terms||[]).join(' · ')}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Component Weights</td><td>${weights ? `Written/Oral Works ${weights.WW}% · Product/Performance Tasks ${weights.PT}% · Examinations ${weights.EX}%` : (cls && cls.weights ? `Written Works ${cls.weights.ww}% · Performance Tasks ${cls.weights.pt}% · Quarterly Assessment ${cls.weights.qa}%` : '—')}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Examination Structure</td><td>${policy.examinationSubstructure ? `Summative Test 1 ${policy.examinationSubstructure.ST1}% + Summative Test 2 ${policy.examinationSubstructure.ST2}% + Term Exam ${policy.examinationSubstructure.TE}% (of the Examinations weight)` : '—'}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Transmutation Policy</td><td>${policy.transmutation ? Utils.esc(policy.transmutation.label) : 'None — Initial Grade is reported directly'}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Descriptor Policy</td><td>${Utils.esc(policy.label)}</td></tr>
-              <tr><td class="text-muted" style="padding:6px 0;">Custom Configuration</td><td>${cls && cls.gradingOverride ? '<span class="badge badge-warning">Yes — Custom Grading Configuration</span>' : 'No — using prescribed DepEd weights'}</td></tr>
-            </table>
-            <button class="btn btn-sm btn-outline mt-12" id="st-view-policy">${icon('info')} View Full Policy Details</button>
-            <div class="divider" style="margin:14px 0;"></div>
-            <h4 style="font-size:13px;margin-bottom:8px;">Class Health Weights</h4>
-            <p class="text-xs text-muted mb-12">Controls how the composite health score is calculated on the Class Profile.</p>
-            <button class="btn btn-sm btn-outline" id="st-health-weights">${icon('settings')} Adjust Weights</button>
-            <div class="divider" style="margin:14px 0;"></div>
-            <h4 style="font-size:13px;margin-bottom:8px;">Division Benchmark Targets</h4>
-            <p class="text-xs text-muted mb-12">Set the target attendance and passing rates for comparison.</p>
-            <button class="btn btn-sm btn-outline" id="st-benchmarks">${icon('chart')} Set Targets</button>
+          <div class="info-row">
+            <span class="info-key">Transmutation</span>
+            <span class="info-val">${policy.transmutation ? Utils.esc(policy.transmutation.label) : 'None — Initial Grade reported directly'}</span>
           </div>
-          <div class="card"><div class="card-head"><h3>Sourcing &amp; Verification Notes</h3></div>
-            <p class="text-sm text-muted">DepEd Order No. 015, s. 2026 and its three-term / Written-Oral-Works / Product-Performance-Tasks / Examinations structure were corroborated across independent secondary summaries. The <strong>descriptor labels and the adjusted transmutation table</strong> shown here were supplied by the school directly and are not independently re-derived from the primary DepEd PDF by this app — please keep the source document on file and re-check this table if your division issues an updated version.</p>
-          </div>`;
-        const viewBtn = content.querySelector('#st-view-policy');
-        if (viewBtn) viewBtn.onclick = () => Pages.viewPolicyDetails(policy);
+          ${cls ? `
+            <div class="info-row">
+              <span class="info-key">Active Class</span>
+              <span class="info-val">${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}${cls.subject ? ' · ' + Utils.esc(cls.subject) : ''}</span>
+            </div>` : ''}
+          ${weights ? `
+            <div class="info-row">
+              <span class="info-key">Component Weights</span>
+              <span class="info-val">WW ${weights.WW}% · PT ${weights.PT}% · EX ${weights.EX}%</span>
+            </div>` : (cls && cls.weights ? `
+            <div class="info-row">
+              <span class="info-key">Legacy Weights</span>
+              <span class="info-val">WW ${cls.weights.ww}% · PT ${cls.weights.pt}% · QA ${cls.weights.qa}%</span>
+            </div>` : '')}
+          ${cls && cls.gradingOverride ? `
+            <div class="info-row">
+              <span class="info-key">Custom Configuration</span>
+              <span class="info-val"><span class="badge badge-warning">Active — deviates from prescribed weights</span></span>
+            </div>` : ''}
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-outline" id="st-view-policy">
+            ${icon('info')} View Full Policy Details
+          </button>
+        </div>
+      </div>
 
-        // ▼▼▼ PASTE HERE ▼▼▼
-        const hwBtn = content.querySelector('#st-health-weights');
-        if (hwBtn) hwBtn.onclick = () => Pages.openHealthWeightsModal();
-        const bmBtn = content.querySelector('#st-benchmarks');
-        if (bmBtn) bmBtn.onclick = () => Pages.openDivisionBenchmarksModal();
-        // ▲▲▲ END PASTE ▲▲▲
-      } else if (tab === 'data') {
-        content.innerHTML = `
-          <div class="card mb-16" id="st-storage-card">
-            <div class="card-head">
-              <h3>Storage Health</h3>
-              <button class="btn btn-sm btn-outline" id="st-refresh-storage">${icon('history')} Refresh</button>
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Class Health Score</h3>
+          <p>How the composite health score is calculated on the Class Profile.</p>
+        </div>
+        <div class="info-grid">
+          <div class="info-row">
+            <span class="info-key">Attendance weight</span>
+            <span class="info-val"><strong>${hw.attendance}</strong></span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Grade weight</span>
+            <span class="info-val"><strong>${hw.grade}</strong></span>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-outline" id="st-health-weights">
+            ${icon('settings')} Adjust Weights
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Division Benchmark Targets</h3>
+          <p>Used to compare your class against your Division's goals.</p>
+        </div>
+        <div class="info-grid">
+          <div class="info-row">
+            <span class="info-key">Attendance target</span>
+            <span class="info-val"><strong>${bm.attendance}%</strong></span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Passing-rate target</span>
+            <span class="info-val"><strong>${bm.passing}%</strong></span>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-outline" id="st-benchmarks">
+            ${icon('chart')} Set Targets
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-section settings-section-note">
+        <div class="settings-section-head">
+          <h3>Sourcing &amp; Verification</h3>
+        </div>
+        <p class="text-sm text-muted" style="margin:0;line-height:1.7;">
+          DO 015, s. 2026 and its three-term / WW-PT-EX structure were corroborated across independent secondary
+          summaries. The <strong>descriptor labels and adjusted transmutation table</strong> were supplied directly
+          by the school and encoded as given — not independently re-derived from the primary DepEd PDF.
+          Keep the source document on file and re-check this table if your division issues an updated version.
+        </p>
+      </div>
+    `;
+
+    const viewBtn = content.querySelector('#st-view-policy');
+    if (viewBtn) viewBtn.onclick = () => Pages.viewPolicyDetails(policy);
+
+    const hwBtn = content.querySelector('#st-health-weights');
+    if (hwBtn) hwBtn.onclick = () => Pages.openHealthWeightsModal();
+
+    const bmBtn = content.querySelector('#st-benchmarks');
+    if (bmBtn) bmBtn.onclick = () => Pages.openDivisionBenchmarksModal();
+  };
+
+  /* ══════════════════════════════════════════════════════════
+     LICENSE
+     ══════════════════════════════════════════════════════════ */
+  const renderLicense = () => {
+    const lic = Licensing.getLicense();
+    const isPro = Licensing.isPro();
+    const tier = isPro && lic ? lic.payload.tier : null;
+
+    content.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>KlazAssist Pro</h3>
+          <p>One-time purchase. Yours forever. No subscriptions, no tracking.</p>
+        </div>
+
+        ${isPro ? `
+          <div class="license-active-card">
+            <div class="lac-badge">
+              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <path d="M2.5 7.5l4.5 4 5-7 5 7 4.5-4-2 12.5H4.5L2.5 7.5z"/>
+              </svg>
+              <span>${tier === 'school' ? 'SCHOOL' : 'PRO'}</span>
             </div>
-            <div id="st-storage-body">
-              <p class="text-sm text-muted" style="text-align:center;padding:20px;">Checking storage…</p>
+            <div class="lac-body">
+              <div class="lac-title">License active on this device</div>
+              ${lic.payload.name ? `<div class="lac-line">Licensed to <strong>${Utils.esc(lic.payload.name)}</strong></div>` : ''}
+              ${lic.payload.email ? `<div class="lac-line">${Utils.esc(lic.payload.email)}</div>` : ''}
+              ${lic.payload.school ? `<div class="lac-line">${Utils.esc(lic.payload.school)}</div>` : ''}
             </div>
           </div>
 
-          <div class="card mb-16"><div class="card-head"><h3>Backup &amp; Restore</h3></div>
-            <div class="alert alert-warning" style="font-size:12px;">${icon('alert')}<div>Backups may contain personal and learner information. Store them securely.</div></div>
-            <div class="flex gap-8" style="flex-wrap:wrap;">
-              <button class="btn btn-primary" onclick="Pages.backupAll()">${icon('download')} Backup All Data</button>
-              <button class="btn btn-outline" onclick="Pages.backupWithHint()">${icon('file')} Backup + Account Hint</button>
-              <button class="btn btn-outline" onclick="Pages.restoreFromJSON()">${icon('download')} Restore</button>
-            </div></div>
-          <div class="card mb-16"><div class="card-head"><h3>Sample Data</h3></div>
-            <p class="text-sm text-muted mb-12">Create or remove realistic sample data for demonstration.</p>
-            <div class="flex gap-8">
-              <button class="btn btn-secondary" onclick="Pages.addSampleData()">${icon('star')} Add Sample Data</button>
-              <button class="btn btn-outline" onclick="Pages.removeSampleData()">${icon('trash')} Remove Sample Data</button>
-            </div></div>
-            
-          <div class="card mb-16">
-            <div class="card-head"><h3>DepEd Calendar</h3></div>
-            <p class="text-sm text-muted mb-12">
-              A DepEd School Calendar ships with the app and updates automatically on launch.
-              You can force a re-import here if events are missing.
-            </p>
-            <button class="btn btn-outline" id="st-resync-calendar">
-              ${icon('history')} Re-import bundled calendar
+          <div class="info-grid">
+            <div class="info-row">
+              <span class="info-key">Tier</span>
+              <span class="info-val">${Utils.esc(tier.toUpperCase())}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-key">Issued</span>
+              <span class="info-val">${Utils.formatDate(lic.payload.issued)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-key">Expires</span>
+              <span class="info-val">${lic.payload.expires ? Utils.formatDate(lic.payload.expires) : 'Never (lifetime)'}</span>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button class="btn btn-outline" id="lic-open-upgrade">
+              ${icon('star')} View Upgrade Options
+            </button>
+            <button class="btn btn-danger-outline" id="lic-deactivate">
+              ${icon('xCircle')} Deactivate on This Device
             </button>
           </div>
 
-          <div class="card"><div class="card-head"><h3>Reset Local Database</h3></div>
-            <div class="alert alert-danger">${icon('alert')}<div><strong>Danger zone.</strong> This will permanently delete ALL local data including your local account.</div></div>
-            <button class="btn btn-danger" onclick="Pages.confirmReset()">Reset Local Database</button></div>`;
+          <p class="text-xs text-muted" style="margin:14px 0 0;line-height:1.6;">
+            Deactivating frees the license to be used on another device. Your data stays intact.
+          </p>
+        ` : `
+          <div class="license-empty-card">
+            <div class="lec-icon">${icon('star')}</div>
+            <div class="lec-body">
+              <div class="lec-title">You are on the Free plan</div>
+              <p class="lec-text">
+                Unlock AI tools, DepEd forms, and advanced analytics with a one-time purchase.
+                Free features stay free forever — Pro adds new capabilities.
+              </p>
+            </div>
+          </div>
 
-            const resyncBtn = content.querySelector('#st-resync-calendar');
-            if (resyncBtn) resyncBtn.onclick = async () => {
-              await DB.setSetting(Pages.DEPED_CALENDAR_HASH_KEY, null);
-              const r = await Pages.syncBundledDepEdCalendar();
-              if (r && r.added > 0) {
-                UI.toast(`Re-imported ${r.added} event${r.added === 1 ? '' : 's'}.`, 'success');
-              } else if (r && r.skipped === 'no-events') {
-                UI.toast('The bundled calendar has no events to import.', 'warning', 5000);
-              } else {
-                UI.toast('Bundled calendar is already up to date.', 'info');
-              }
-            };
+          <div class="settings-actions">
+            <button class="btn btn-primary btn-lg" id="lic-open-upgrade">
+              ${icon('star')} Upgrade to Pro
+            </button>
+            <button class="btn btn-outline btn-lg" id="lic-enter-key">
+              ${icon('key')} I Have a License Key
+            </button>
+          </div>
+        `}
+      </div>
+    `;
 
-      } else if (tab === 'about') {
-        content.innerHTML = `
-          <div class="card"><div style="text-align:center;padding:20px 0;">
-            <img class="brand-logo fixed" src="./icon/icon.svg" alt="KlazAssist" style="width:64px;height:64px;margin:0 auto 12px;">
-            <h3>KlazAssist</h3><p class="text-muted">Version ${CONFIG.VERSION}</p>
-            <p class="text-sm text-muted mt-12" style="max-width:480px;margin:12px auto;">Offline-first classroom management toolkit designed for teachers. Everything a teacher needs for an organized, engaging, and data-driven classroom.</p>
-            <div class="alert alert-info" style="max-width:520px;margin:16px auto;text-align:left;">${icon('info')}<div>This tool is <strong>not an official DepEd system</strong> unless officially authorized. All data stays local in this browser.</div></div>
-            <p class="text-xs text-muted mt-12">&copy; 2026 KlazAssist | pydjianPH. Simplify Teaching. Empower Learning.</p>
-          </div></div>`;
-      }
+    const openUp = content.querySelector('#lic-open-upgrade');
+    if (openUp) openUp.onclick = () => Pages.openUpgradeModal();
+    const enterKey = content.querySelector('#lic-enter-key');
+    if (enterKey) enterKey.onclick = () => Pages.openUpgradeModal();
+
+    const deactivate = content.querySelector('#lic-deactivate');
+    if (deactivate) deactivate.onclick = () => {
+      UI.confirm({
+        title: 'Deactivate License?',
+        message: 'This removes the Pro license from this device. Your data stays. You can reactivate anytime with the same key.',
+        confirmText: 'Deactivate',
+        confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          await Licensing.deactivate();
+          App.renderSidebar();
+          UI.toast('License deactivated', 'success');
+          renderLicense();
+        }
+      });
     };
-    // Single renderTab that also handles the "post-render" work
-    // that used to live in a reassignment wrapper.
-    const renderTabWithExtras = (tab) => {
-      renderTab(tab);
+  };
 
-      // Refresh the storage card whenever the "data" tab is opened
-      if (tab === 'data') {
-        setTimeout(() => Pages.renderStorageHealth(), 0);
-        const refreshBtn = content.querySelector('#st-refresh-storage');
-        if (refreshBtn) refreshBtn.onclick = () => Pages.renderStorageHealth(true);
-      }
-        
+  /* ══════════════════════════════════════════════════════════
+     DATA & STORAGE
+     ══════════════════════════════════════════════════════════ */
+  const renderData = () => {
+    content.innerHTML = `
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Storage Health</h3>
+          <p>How your browser is treating KlazAssist's local database.</p>
+        </div>
+        <div id="st-storage-body">
+          <p class="text-sm text-muted" style="padding:16px;text-align:center;">Checking storage…</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Backup &amp; Restore</h3>
+          <p>Backups may contain personal information. Store them securely.</p>
+        </div>
+        <div class="settings-actions-grid">
+          <button class="settings-action-btn primary" id="st-backup-all">
+            <span class="sab-icon">${icon('download')}</span>
+            <span class="sab-body">
+              <span class="sab-label">Backup All Data</span>
+              <span class="sab-desc">Export everything as JSON</span>
+            </span>
+          </button>
+          <button class="settings-action-btn" id="st-backup-hint">
+            <span class="sab-icon">${icon('file')}</span>
+            <span class="sab-body">
+              <span class="sab-label">Backup + Account Hint</span>
+              <span class="sab-desc">JSON + a text note identifying the account</span>
+            </span>
+          </button>
+          <button class="settings-action-btn" id="st-restore">
+            <span class="sab-icon">${icon('upload')}</span>
+            <span class="sab-body">
+              <span class="sab-label">Restore from JSON</span>
+              <span class="sab-desc">Replace current data with a backup</span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>DepEd Calendar</h3>
+          <p>A universal DepEd School Calendar ships with the app and updates automatically on launch.</p>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-outline" id="st-resync-calendar">
+            ${icon('history')} Re-import Bundled Calendar
+          </button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Sample Data</h3>
+          <p>Add or remove realistic demo data for training or demonstration.</p>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-secondary" id="st-add-sample">${icon('star')} Add Sample Data</button>
+          <button class="btn btn-outline" id="st-remove-sample">${icon('trash')} Remove Sample Data</button>
+        </div>
+      </div>
+
+      <div class="settings-section danger-zone">
+        <div class="settings-section-head">
+          <h3 style="color:var(--danger);">Danger Zone</h3>
+          <p>Permanently deletes everything on this device. Cannot be undone.</p>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-danger" id="st-reset">${icon('trash')} Reset Local Database</button>
+        </div>
+      </div>
+    `;
+
+    // Storage health loads asynchronously
+    setTimeout(() => Pages.renderStorageHealth(), 0);
+
+    // Backup / restore
+    content.querySelector('#st-backup-all').onclick = () => Pages.backupAll();
+    content.querySelector('#st-backup-hint').onclick = () => Pages.backupWithHint();
+    content.querySelector('#st-restore').onclick = () => Pages.restoreFromJSON();
+
+    // DepEd calendar re-sync
+    content.querySelector('#st-resync-calendar').onclick = async () => {
+      await DB.setSetting(Pages.DEPED_CALENDAR_HASH_KEY, null);
+      const r = await Pages.syncBundledDepEdCalendar();
+      if (r && r.added > 0) UI.toast(`Re-imported ${r.added} event${r.added === 1 ? '' : 's'}.`, 'success');
+      else if (r && r.skipped === 'no-events') UI.toast('The bundled calendar has no events to import.', 'warning', 5000);
+      else UI.toast('Bundled calendar is already up to date.', 'info');
     };
-    
 
-    renderTabWithExtras('general');
+    // Sample data
+    content.querySelector('#st-add-sample').onclick = () => Pages.addSampleData();
+    content.querySelector('#st-remove-sample').onclick = () => Pages.removeSampleData();
 
-    root.querySelectorAll('.tab').forEach(b => {
-      b.onclick = () => {
-        root.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        renderTabWithExtras(b.dataset.st);
-      };
+    // Reset
+    content.querySelector('#st-reset').onclick = () => Pages.confirmReset();
+  };
+
+  /* ══════════════════════════════════════════════════════════
+     RENDER DISPATCHER
+     ══════════════════════════════════════════════════════════ */
+  const renderTab = (tab) => {
+    State._settingsTab = tab;
+    root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
+      b.classList.toggle('active', b.dataset.st === tab);
     });
-    content.querySelectorAll('[data-goto]').forEach(el => el.addEventListener('click', () => App.navigate(el.dataset.goto)));
-  },
+    switch (tab) {
+      case 'academic': renderAcademic(); break;
+      case 'license':  renderLicense();  break;
+      case 'data':     renderData();     break;
+      case 'general':
+      default:         renderGeneral();
+    }
+  };
+
+  root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
+    b.onclick = () => renderTab(b.dataset.st);
+  });
+
+  renderTab(State._settingsTab);
+},
 /* ============================================================================
    POLICY DETAILS — editable weights + transmutation table
    ──────────────────────────────────────────────────────────────────────────
