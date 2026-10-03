@@ -347,8 +347,31 @@
 <div id="lock-screen" class="lock-screen">
   <div class="auth-bg-mesh"></div>
   <div class="lock-card">
-    <img class="brand-logo fixed" src="./icon/icon.svg" alt="KlazAssist" style="width:56px;height:56px;margin:0 auto 12px;">
-    <div class="lock-avatar" id="lock-avatar">?</div>
+
+    <!-- KlazAssist badge — half-outside the top edge -->
+    <div class="lock-brand" aria-hidden="true">
+      <div class="lock-brand-halo"></div>
+      <div class="lock-brand-ring lock-brand-ring-1"></div>
+      <div class="lock-brand-ring lock-brand-ring-2"></div>
+      <div class="lock-brand-ring lock-brand-ring-3"></div>
+      <div class="lock-brand-orbit lock-brand-orbit-1"><span></span></div>
+      <div class="lock-brand-orbit lock-brand-orbit-2"><span></span></div>
+      <div class="lock-brand-orbit lock-brand-orbit-3"><span></span></div>
+      <div class="lock-brand-sparkles">
+        <span class="lock-brand-spark s1"></span>
+        <span class="lock-brand-spark s2"></span>
+        <span class="lock-brand-spark s3"></span>
+        <span class="lock-brand-spark s4"></span>
+      </div>
+      <div class="lock-brand-core">
+        <img src="./icon/icon.svg" alt="">
+      </div>
+    </div>
+
+    <div class="lock-hero">
+      <div class="lock-avatar" id="lock-avatar">?</div>
+    </div>
+
     <h3 id="lock-name">Session Locked</h3>
     <p class="lock-sub">Enter your password to unlock.</p>
 
@@ -376,6 +399,7 @@
     <div class="auth-foot" style="margin-top:14px;">
       <div>Your saved classroom data stays on this device.</div>
     </div>
+  </div>
   </div>
 </div>
 
