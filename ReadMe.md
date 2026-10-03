@@ -20,6 +20,7 @@ An offline-first classroom management toolkit built for Filipino teachers.
 </div>
 
 ---
+> 🆕 **New to KlazAssist?** Read the [First-Run Guide](./FirstRun.md) — a 10-minute walkthrough for first-time users.
 
 ## 📖 What is KlazAssist?
 
