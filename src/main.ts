@@ -12667,7 +12667,7 @@ _showClassMismatchDialog(comparison, classInfo) {
               </table>
             </div>
             <div class="mt-16 flex gap-8" style="justify-content:flex-end;">
-              <button class="btn btn-primary" onclick="Pages.saveAttendance()">${icon('save')} Save Attendance</button>
+            
             </div>
           </div>
           <button type="button" class="attendance-save-fab" id="att-save-fab"
@@ -33470,7 +33470,7 @@ openUpgradeModal(featureId) {
             <div class="text-xs text-muted">One-time payment · Lifetime access</div>
           </div>
           <button class="btn btn-primary btn-lg" id="upg-buy">
-            ${icon('star')} Buy on RaketPH
+            ${icon('star')} Buy Now
           </button>
         </div>
       </div>
@@ -33506,7 +33506,7 @@ openUpgradeModal(featureId) {
 
   m.overlay.querySelector('#upg-buy').onclick = () => {
     // ▼▼▼ Replace with your real Gumroad product URL ▼▼▼
-    window.open('https://www.raket.ph/pydjian', '_blank', 'noopener');
+    window.open('https://docs.google.com/forms/d/e/1FAIpQLSeUawQwpflEctMhsWxo7aMmfVmxievF0wdKFzHBpuqeLHRS2g/viewform?usp=sharing&ouid=107077832765838576721', '_blank', 'noopener');
     App.logActivity('Upgrade link opened', 'Licensing');
   };
 

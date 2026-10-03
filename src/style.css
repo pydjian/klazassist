@@ -6616,20 +6616,20 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     color: #000;
   }
 
-  .print-deped-header .pdh-republic {
-    font-family: 'UnifrakturMaguntia', 'Old English Text MT', 'Times New Roman', serif;
-    font-size: 12pt;
-    font-weight: normal;      /* ← changed from bold */
-    letter-spacing: 0.3px;
-  }
+.print-deped-header .pdh-republic {
+  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
+  font-size: 12pt;
+  font-weight: normal;
+  letter-spacing: 0.3px;
+}
 
-  .print-deped-header .pdh-department {
-    font-family: 'UnifrakturMaguntia', 'Old English Text MT', 'Times New Roman', serif;
-    font-size: 18pt;
-    font-weight: normal;      /* ← changed from bold */
-    letter-spacing: 0.5px;
-    margin-top: -2px;
-  }
+.print-deped-header .pdh-department {
+  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
+  font-size: 18pt;
+  font-weight: normal;
+  letter-spacing: 0.5px;
+  margin-top: -2px;
+}
 
   .print-deped-header .pdh-region,
   .print-deped-header .pdh-division,
