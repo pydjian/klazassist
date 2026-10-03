@@ -7472,3 +7472,936 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     max-width: 780px;
   }
 }
+/* ============================================================================
+   UPGRADE MODAL — premium Pro presentation
+   ============================================================================ */
+
+/* ---- Hero badge container ---- */
+.upgrade-hero {
+  position: relative;
+  text-align: center;
+  padding: 8px 0 24px;
+  overflow: hidden;
+}
+
+/* The whole modal picks up a soft shine sweep when it opens */
+.upgrade-hero::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -75%;
+  width: 40%;
+  height: 200%;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    rgba(247, 201, 72, 0.18) 40%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(247, 201, 72, 0.18) 60%,
+    transparent 100%
+  );
+  transform: skewX(-22deg);
+  animation: upgradeIntroSweep 2.4s cubic-bezier(0.4, 0, 0.2, 1) 0.35s 1 both;
+  pointer-events: none;
+  z-index: 1;
+}
+@keyframes upgradeIntroSweep {
+  0%   { left: -75%; opacity: 0; }
+  15%  { opacity: 1; }
+  100% { left: 130%; opacity: 0; }
+}
+
+/* ---- The medal itself ---- */
+.upgrade-hero-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 118px;
+  height: 118px;
+  margin-bottom: 18px;
+  z-index: 2;
+  animation: upgradeHeroFloat 3.4s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes upgradeHeroFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* Rotating metallic conic ring */
+.upgrade-hero-badge .uhb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    #fde68a 0%,
+    #f7c948 15%,
+    #b45309 30%,
+    #f7c948 45%,
+    #fde68a 60%,
+    #f59e0b 75%,
+    #f7c948 90%,
+    #fde68a 100%
+  );
+  background-size: 300% 300%;
+  animation:
+    upgradeBadgeSpin 6s linear infinite,
+    upgradeBadgeHalo 3s ease-in-out infinite;
+  will-change: transform, box-shadow, background-position;
+}
+@keyframes upgradeBadgeSpin {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+@keyframes upgradeBadgeHalo {
+  0%, 100% {
+    box-shadow:
+      0 10px 32px rgba(247, 201, 72, 0.45),
+      0 0 0 0 rgba(247, 201, 72, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 14px 44px rgba(247, 201, 72, 0.75),
+      0 0 0 12px rgba(247, 201, 72, 0);
+  }
+}
+
+/* Outer gold pulse ring — expands and fades */
+.upgrade-hero-badge .uhb-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(247, 201, 72, 0.7);
+  animation: upgradeBadgePulse 2.4s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes upgradeBadgePulse {
+  0%   { transform: scale(1);    opacity: 0.85; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+
+/* The dark jewel core — sits inside the ring */
+.upgrade-hero-badge .uhb-core {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 25%, #3d2a0f 0%, #1a1206 55%, #0b0703 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+  box-shadow:
+    inset 0 3px 12px rgba(255, 255, 255, 0.18),
+    inset 0 -4px 14px rgba(0, 0, 0, 0.75),
+    0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* The "PRO" word — polished gold gradient text */
+.upgrade-hero-badge .uhb-text {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 2.5px;
+  background: linear-gradient(
+    180deg,
+    #fff7d1 0%,
+    #fde68a 30%,
+    #f7c948 55%,
+    #d97706 80%,
+    #b45309 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.4),
+    0 0 14px rgba(247, 201, 72, 0.35);
+  animation: upgradeTextShimmer 4s ease-in-out infinite;
+  background-size: 100% 200%;
+}
+@keyframes upgradeTextShimmer {
+  0%, 100% { background-position: 50% 0%; }
+  50%      { background-position: 50% 100%; }
+}
+
+/* Shine sweep across the badge */
+.upgrade-hero-badge .uhb-shine {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  overflow: hidden;
+  z-index: 4;
+  pointer-events: none;
+}
+.upgrade-hero-badge .uhb-shine::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -75%;
+  width: 40%;
+  height: 200%;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 40%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(255, 255, 255, 0.35) 60%,
+    transparent 100%
+  );
+  transform: skewX(-22deg);
+  animation: upgradeShineSweep 3.8s ease-in-out 1.2s infinite;
+}
+@keyframes upgradeShineSweep {
+  0%   { left: -75%; opacity: 0; }
+  12%  { opacity: 1; }
+  50%  { opacity: 1; }
+  62%  { left: 130%; opacity: 0; }
+  100% { left: 130%; opacity: 0; }
+}
+
+/* Four orbiting sparkles around the medal */
+.upgrade-hero-badge .uhb-sparkles {
+  position: absolute;
+  inset: -14px;
+  pointer-events: none;
+  z-index: 5;
+}
+.upgrade-hero-badge .uhb-spark {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow:
+    0 0 6px 2px rgba(255, 255, 255, 1),
+    0 0 14px 4px rgba(247, 201, 72, 0.8),
+    0 0 24px 6px rgba(253, 230, 138, 0.4);
+  opacity: 0;
+  transform: scale(0.5);
+}
+/* Two thin rays per sparkle — makes each one a 4-point star flare */
+.upgrade-hero-badge .uhb-spark::before,
+.upgrade-hero-badge .uhb-spark::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  background: linear-gradient(to right, transparent, #ffffff, transparent);
+  pointer-events: none;
+}
+.upgrade-hero-badge .uhb-spark::before {
+  width: 22px; height: 1.5px;
+  transform: translate(-50%, -50%);
+}
+.upgrade-hero-badge .uhb-spark::after {
+  width: 1.5px; height: 22px;
+  transform: translate(-50%, -50%);
+}
+
+.upgrade-hero-badge .uhb-spark.s1 { top: 4%;  left: 50%; animation: upgradeSpark 2.8s ease-in-out infinite 0.0s; }
+.upgrade-hero-badge .uhb-spark.s2 { top: 50%; right: 2%; animation: upgradeSpark 2.8s ease-in-out infinite 0.7s; }
+.upgrade-hero-badge .uhb-spark.s3 { bottom: 4%; left: 50%; animation: upgradeSpark 2.8s ease-in-out infinite 1.4s; }
+.upgrade-hero-badge .uhb-spark.s4 { top: 50%; left: 2%;  animation: upgradeSpark 2.8s ease-in-out infinite 2.1s; }
+
+@keyframes upgradeSpark {
+  0%   { opacity: 0; transform: scale(0.3) rotate(0deg); }
+  20%  { opacity: 1; transform: scale(1.3) rotate(45deg); }
+  50%  { opacity: 0.9; transform: scale(1) rotate(90deg); }
+  80%  { opacity: 0.3; transform: scale(0.7) rotate(135deg); }
+  100% { opacity: 0; transform: scale(0.4) rotate(180deg); }
+}
+
+/* ---- Title and lede ---- */
+.upgrade-hero h2 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  margin: 0 0 8px;
+  color: var(--text);
+  position: relative;
+  z-index: 2;
+}
+.upgrade-hero .lede {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  max-width: 520px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+}
+.upgrade-hero .lede strong {
+  color: var(--deped-blue);
+  font-weight: 700;
+}
+
+/* ---- Free vs Pro comparison card ---- */
+.upgrade-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  margin-bottom: 18px;
+  position: relative;
+}
+.upgrade-compare-col {
+  padding: 18px 18px 20px;
+  position: relative;
+}
+.upgrade-compare-col.pro {
+  background: linear-gradient(
+    135deg,
+    rgba(247, 201, 72, 0.10) 0%,
+    rgba(247, 201, 72, 0.03) 60%,
+    transparent 100%
+  );
+}
+.upgrade-compare-col.pro::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, #fde68a, #f7c948, #b45309);
+}
+.upgrade-compare-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 800;
+  margin-bottom: 12px;
+  letter-spacing: 0.2px;
+}
+.upgrade-compare-col.free .upgrade-compare-head { color: var(--text); }
+.upgrade-compare-col.pro  .upgrade-compare-head { color: #b45309; }
+.upgrade-compare-head .icon-chip {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.upgrade-compare-col.free .icon-chip { background: rgba(25, 135, 84, 0.15); color: var(--success); }
+.upgrade-compare-col.pro  .icon-chip { background: var(--gradient-gold); color: var(--dark-navy); }
+.upgrade-compare-head .icon-chip svg { width: 12px; height: 12px; display: block; }
+
+.upgrade-compare-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--text-muted);
+}
+.upgrade-compare-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.upgrade-compare-list li::before {
+  content: '';
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 9px 9px;
+}
+.upgrade-compare-col.free .upgrade-compare-list li::before {
+  background-color: rgba(25, 135, 84, 0.14);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23198754' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+}
+.upgrade-compare-col.pro .upgrade-compare-list li::before {
+  background-color: rgba(247, 201, 72, 0.20);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23b45309'%3E%3Cpath d='M12 2l2.9 6.2 6.6.7-4.9 4.5 1.4 6.5L12 16.7 5.9 19.9l1.4-6.5-4.9-4.5 6.6-.7z'/%3E%3C/svg%3E");
+}
+
+/* ---- Price card with shimmer ---- */
+.upgrade-price-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg,
+      rgba(247, 201, 72, 0.14) 0%,
+      var(--card) 45%,
+      var(--card) 100%);
+  border: 2px solid rgba(247, 201, 72, 0.5);
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(247, 201, 72, 0.12);
+}
+/* Diagonal shine that sweeps across the price card every few seconds */
+.upgrade-price-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -75%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.6) 50%,
+    transparent 100%
+  );
+  transform: skewX(-22deg);
+  animation: upgradePriceSweep 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes upgradePriceSweep {
+  0%   { left: -75%; opacity: 0; }
+  10%  { opacity: 1; }
+  45%  { opacity: 1; }
+  60%  { left: 130%; opacity: 0; }
+  100% { left: 130%; opacity: 0; }
+}
+
+.upgrade-price-info {
+  position: relative;
+  z-index: 1;
+}
+.upgrade-price-tag {
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: -1.2px;
+  line-height: 1;
+  background: linear-gradient(135deg, #b45309 0%, #f59e0b 40%, #f7c948 60%, #d97706 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 4px;
+  display: inline-block;
+}
+.upgrade-price-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+}
+
+/* CTA button with animated gradient and shimmer */
+.upgrade-cta {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 26px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    #d97706 0%,
+    #f59e0b 25%,
+    #f7c948 50%,
+    #f59e0b 75%,
+    #d97706 100%
+  );
+  background-size: 300% 300%;
+  border: none;
+  cursor: pointer;
+  box-shadow:
+    0 4px 18px rgba(247, 201, 72, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.18s, box-shadow 0.18s;
+  animation: upgradeCtaGradient 4s ease infinite;
+  text-shadow: 0 1px 2px rgba(120, 53, 15, 0.35);
+  overflow: hidden;
+}
+.upgrade-cta::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -75%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.75) 50%,
+    transparent 100%
+  );
+  transform: skewX(-22deg);
+  animation: upgradeCtaShimmer 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+.upgrade-cta:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 28px rgba(247, 201, 72, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+.upgrade-cta:active { transform: translateY(0); }
+.upgrade-cta svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+@keyframes upgradeCtaGradient {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+@keyframes upgradeCtaShimmer {
+  0%   { left: -75%; opacity: 0; }
+  15%  { opacity: 1; }
+  45%  { opacity: 1; }
+  65%  { left: 130%; opacity: 0; }
+  100% { left: 130%; opacity: 0; }
+}
+
+/* ---- Divider ---- */
+.upgrade-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px 0 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.upgrade-divider::before,
+.upgrade-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ---- Already purchased section ---- */
+.upgrade-activate {
+  margin-bottom: 12px;
+}
+.upgrade-activate h4 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.upgrade-activate p {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin: 0 0 10px;
+}
+.upgrade-activate p a {
+  color: var(--deped-blue);
+  text-decoration: underline;
+}
+.upgrade-key-input {
+  width: 100%;
+  min-height: 68px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.upgrade-key-input:focus {
+  outline: none;
+  border-color: var(--deped-blue);
+  box-shadow: 0 0 0 3px rgba(0, 56, 168, 0.12);
+}
+.upgrade-activate-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* ---- Active-license confirmation banner ---- */
+.upgrade-active-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-top: 16px;
+  border-radius: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(16, 185, 129, 0.10) 0%,
+    rgba(5, 150, 105, 0.03) 100%
+  );
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.upgrade-active-banner .icon-chip {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--gradient-success);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.upgrade-active-banner .icon-chip svg { width: 18px; height: 18px; }
+.upgrade-active-banner .banner-body {
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.upgrade-active-banner .banner-body strong { font-weight: 700; }
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  .upgrade-hero::before,
+  .upgrade-hero-badge,
+  .upgrade-hero-badge .uhb-ring,
+  .upgrade-hero-badge .uhb-pulse,
+  .upgrade-hero-badge .uhb-text,
+  .upgrade-hero-badge .uhb-shine::before,
+  .upgrade-hero-badge .uhb-spark,
+  .upgrade-price-card::before,
+  .upgrade-cta,
+  .upgrade-cta::after {
+    animation: none !important;
+  }
+  .upgrade-hero-badge .uhb-spark { opacity: 0.8; }
+}
+
+/* ---- Mobile ---- */
+@media (max-width: 620px) {
+  .upgrade-hero-badge { width: 100px; height: 100px; }
+  .upgrade-hero-badge .uhb-core { width: 78px; height: 78px; }
+  .upgrade-hero-badge .uhb-text { font-size: 23px; letter-spacing: 2px; }
+  .upgrade-hero h2 { font-size: 19px; }
+  .upgrade-compare { grid-template-columns: 1fr; }
+  .upgrade-compare-col.pro::before {
+    top: 0; left: 0; right: 0; bottom: auto;
+    width: auto; height: 3px;
+    background: linear-gradient(90deg, #fde68a, #f7c948, #b45309);
+  }
+  .upgrade-price-card { flex-direction: column; text-align: center; }
+  .upgrade-cta { width: 100%; justify-content: center; }
+}
+@media (max-width: 480px) {
+  .upgrade-hero::before,
+  .upgrade-price-card::before { animation-duration: 6s; }
+  .upgrade-cta::after { animation-duration: 5s; }
+}
+/* ============================================================================
+   GCASH PAYMENT MODAL
+   ============================================================================ */
+
+/* Extra button in the price card */
+.upgrade-price-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+  min-width: 200px;
+}
+@media (max-width: 620px) {
+  .upgrade-price-actions { min-width: 0; width: 100%; }
+}
+
+/* GCash button — signature blue, complementary to the gold CTA */
+.upgrade-cta-gcash {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #0071e3 0%, #0052cc 100%);
+  background-size: 200% 200%;
+  border: none;
+  cursor: pointer;
+  box-shadow:
+    0 3px 12px rgba(0, 113, 227, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform 0.18s, box-shadow 0.18s;
+  font-family: inherit;
+  position: relative;
+  overflow: hidden;
+}
+.upgrade-cta-gcash::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -75%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.6), transparent);
+  transform: skewX(-22deg);
+  animation: upgradeCtaShimmer 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+.upgrade-cta-gcash:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 6px 20px rgba(0, 113, 227, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.upgrade-cta-gcash svg { flex-shrink: 0; }
+
+/* ---- GCash modal ---- */
+.gcash-modal { display: block; }
+
+/* Step indicator */
+.gcash-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 0 12px;
+}
+.gcash-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.gcash-step-num {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.gcash-step.active .gcash-step-num {
+  background: linear-gradient(135deg, #0071e3 0%, #0052cc 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.35);
+}
+.gcash-step-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.gcash-step.active .gcash-step-label { color: var(--text); }
+.gcash-step-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin-bottom: 20px;
+  max-width: 60px;
+}
+
+/* QR card */
+.gcash-card {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin-bottom: 18px;
+  box-shadow: 0 4px 20px rgba(16, 42, 67, 0.08);
+}
+
+.gcash-header {
+  background: linear-gradient(135deg, #0071e3 0%, #0052cc 100%);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gcash-logo { display: block; height: 22px; width: auto; filter: brightness(0) invert(1); }
+
+.gcash-qr-wrap {
+  position: relative;
+  padding: 26px 20px 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #fff;
+}
+.gcash-qr-img {
+  width: 220px;
+  height: 220px;
+  display: block;
+  border-radius: 8px;
+  position: relative;
+  z-index: 1;
+}
+/* Soft blue glow behind the QR so it doesn't look flat on white */
+.gcash-qr-glow {
+  position: absolute;
+  inset: 20px;
+  background: radial-gradient(circle, rgba(0, 113, 227, 0.10) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: gcashQrPulse 3s ease-in-out infinite;
+}
+@keyframes gcashQrPulse {
+  0%, 100% { transform: scale(0.95); opacity: 0.6; }
+  50%      { transform: scale(1.08); opacity: 1; }
+}
+
+.gcash-info {
+  padding: 0 24px 16px;
+  text-align: center;
+}
+.gcash-name {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #0038A8;
+  margin-bottom: 10px;
+}
+.gcash-detail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+}
+.gcash-detail-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 68px;
+  text-align: right;
+}
+.gcash-detail-value {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+.gcash-detail-value.gcash-amount {
+  color: #b45309;
+  font-size: 15px;
+}
+.gcash-copy {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--light-blue);
+  color: var(--deped-blue);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  padding: 0;
+}
+.gcash-copy:hover { background: var(--deped-blue); color: #fff; }
+
+.gcash-disclaimer {
+  padding: 10px 20px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Next-step panel */
+.gcash-next {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(0, 113, 227, 0.06) 0%, rgba(0, 113, 227, 0.02) 100%);
+  border: 1px solid rgba(0, 113, 227, 0.20);
+  margin-bottom: 14px;
+}
+.gcash-next-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0071e3 0%, #0052cc 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
+}
+.gcash-next-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.gcash-next-text {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+.gcash-next-text a {
+  color: #0071e3;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* Checklist */
+.gcash-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.gcash-check-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.gcash-check-item strong { color: var(--text); }
+.gcash-check-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(25, 135, 84, 0.15);
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.gcash-check-icon svg { width: 11px; height: 11px; stroke-width: 3; }
+
+/* Dark-theme adjustment — keep the QR card white because QR codes
+   need high contrast to scan reliably */
+[data-theme="dark"] .gcash-qr-wrap,
+[data-theme="noir"] .gcash-qr-wrap { background: #fff; }
+[data-theme="dark"] .gcash-name,
+[data-theme="noir"] .gcash-name { color: #6FA8FF; }
+[data-theme="sepia"] .gcash-name { color: #6b4423; }
+[data-theme="deped-green"] .gcash-name { color: #0f5132; }
+[data-theme="navy"] .gcash-name { color: #5b9cff; }

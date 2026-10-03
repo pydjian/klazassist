@@ -33414,107 +33414,310 @@ async checkTeachingLoadNotifications() {
   async notfound(root) {
     root.innerHTML = `<div class="card">${UI.emptyState({icon:'search', title:'Page not found', message:'This module is not available.', actionLabel:'Go to Dashboard', actionFn:"App.navigate('dashboard')"})}</div>`;
   },
+
+  /* ============================================================================
+   GCASH PAYMENT MODAL — direct payment option for Pro license
+   ──────────────────────────────────────────────────────────────────────────
+   Flow:
+     1. Teacher opens this modal from the Upgrade modal
+     2. Scans the QR code with their GCash app (or copies the number)
+     3. Sends ₱799 to the account shown
+     4. Emails their receipt + username to klazassist@gmail.com
+     5. Developer verifies and replies with a signed license key
+   ============================================================================ */
+openGcashPaymentModal() {
+  const PRICE = '₱799';
+
+  const m = UI.modal({
+    title: 'Pay via GCash',
+    size: 'modal-lg',
+    body: `
+      <div class="gcash-modal">
+
+        <!-- Step indicator -->
+        <div class="gcash-steps">
+          <div class="gcash-step active">
+            <span class="gcash-step-num">1</span>
+            <span class="gcash-step-label">Scan</span>
+          </div>
+          <div class="gcash-step-line"></div>
+          <div class="gcash-step">
+            <span class="gcash-step-num">2</span>
+            <span class="gcash-step-label">Send ₱799</span>
+          </div>
+          <div class="gcash-step-line"></div>
+          <div class="gcash-step">
+            <span class="gcash-step-num">3</span>
+            <span class="gcash-step-label">Email receipt</span>
+          </div>
+        </div>
+
+        <!-- QR card -->
+        <div class="gcash-card">
+          <div class="gcash-header">
+            <svg viewBox="0 0 120 24" fill="none" class="gcash-logo">
+              <circle cx="10" cy="12" r="9" stroke="#0071e3" stroke-width="2.4"/>
+              <path d="M4 12h6M10 7v10" stroke="#0071e3" stroke-width="2.4" stroke-linecap="round"/>
+              <circle cx="22" cy="12" r="3" fill="#0071e3"/>
+              <circle cx="32" cy="12" r="3" fill="#0071e3"/>
+              <text x="42" y="18" font-family="Inter, sans-serif" font-weight="800" font-size="15" fill="#0071e3">GCash</text>
+            </svg>
+          </div>
+
+          <div class="gcash-qr-wrap">
+            <img src="./icon/gcash-qr.png" alt="GCash QR Code" class="gcash-qr-img">
+            <div class="gcash-qr-glow"></div>
+          </div>
+
+          <div class="gcash-info">
+            <div class="gcash-name" id="gcash-name">WILFRED JOHN C. ORTINERO</div>
+            <div class="gcash-detail">
+              <span class="gcash-detail-label">Mobile No.</span>
+              <span class="gcash-detail-value" id="gcash-number">+63 926 390 728</span>
+              <button class="gcash-copy" data-copy="+63926390728" title="Copy mobile number">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+                  <rect x="9" y="9" width="13" height="13" rx="2"/>
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                </svg>
+              </button>
+            </div>
+            <div class="gcash-detail">
+              <span class="gcash-detail-label">Amount</span>
+              <span class="gcash-detail-value gcash-amount">${PRICE}</span>
+            </div>
+          </div>
+
+          <p class="gcash-disclaimer">
+            Transfer fees may apply. GCash sends a reference number with your receipt — keep it safe.
+          </p>
+        </div>
+
+        <!-- Next step: email the receipt -->
+        <div class="gcash-next">
+          <div class="gcash-next-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+              <path d="M22 6l-10 7L2 6"/>
+            </svg>
+          </div>
+          <div class="gcash-next-body">
+            <div class="gcash-next-title">After sending the payment</div>
+            <p class="gcash-next-text">
+              Email your <strong>GCash receipt</strong> (screenshot or reference number) and your
+              <strong>KlazAssist username</strong> to
+              <a href="mailto:klazassist@gmail.com?subject=KlazAssist%20License%20Payment%20—%20GCash&body=Hi%2C%0A%0AI%20just%20sent%20₱799%20via%20GCash%20for%20a%20KlazAssist%20Pro%20license.%0A%0AGCash%20Reference%20No%3A%20%0AUsername%3A%20%0APreferred%20email%20for%20key%20delivery%3A%20%0A%0AThanks!">klazassist@gmail.com</a>.
+              You'll receive your license key within 24 hours.
+            </p>
+          </div>
+        </div>
+
+        <!-- Checklist -->
+        <div class="gcash-checklist">
+          <div class="gcash-check-item">
+            <div class="gcash-check-icon">${icon('check')}</div>
+            <div>Send exactly <strong>₱799</strong> to avoid processing delays.</div>
+          </div>
+          <div class="gcash-check-item">
+            <div class="gcash-check-icon">${icon('check')}</div>
+            <div>Save your <strong>GCash reference number</strong> — you'll need it if you contact support.</div>
+          </div>
+          <div class="gcash-check-item">
+            <div class="gcash-check-icon">${icon('check')}</div>
+            <div>Include your <strong>KlazAssist username</strong> so the key can be issued to the right account.</div>
+          </div>
+        </div>
+
+        <!-- Alert -->
+        <div class="alert alert-warning" style="margin-top:16px;font-size:12px;">
+          ${icon('alert')}
+          <div>
+            <strong>Only pay to the account shown above.</strong>
+            KlazAssist will never ask for payment through Facebook Marketplace, Telegram,
+            or any other channel.
+          </div>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Close</button>
+      <a class="btn btn-primary" id="gcash-email-receipt"
+         href="mailto:klazassist@gmail.com?subject=KlazAssist%20License%20Payment%20—%20GCash&body=Hi%2C%0A%0AI%20just%20sent%20₱799%20via%20GCash%20for%20a%20KlazAssist%20Pro%20license.%0A%0AGCash%20Reference%20No%3A%20%0AUsername%3A%20%0APreferred%20email%20for%20key%20delivery%3A%20%0A%0AThanks!">
+        ${icon('message')} Email Receipt
+      </a>
+    `
+  });
+
+  /* ---- Copy-to-clipboard for the mobile number ---- */
+  m.overlay.querySelectorAll('.gcash-copy').forEach(btn => {
+    btn.onclick = async () => {
+      const text = btn.dataset.copy;
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        UI.toast('Copied to clipboard', 'success', 1800);
+      } catch (e) {
+        UI.toast('Copy failed — long-press the number to copy manually.', 'warning', 3000);
+      }
+    };
+  });
+},
   /* ============================================================================
    UPGRADE / LICENSE MODAL
    ============================================================================ */
 openUpgradeModal(featureId) {
   const feature = featureId ? PRO_FEATURES[featureId] : null;
-  const featureName = feature ? feature.label : 'this feature';
+  const featureName = feature ? feature.label : null;
   const existing = Licensing.getLicense();
+  const isPro = Licensing.isPro();
 
   const m = UI.modal({
     title: 'Unlock KlazAssist Pro',
     size: 'modal-lg',
     body: `
-      <div style="text-align:center;margin-bottom:20px;">
-        <div style="display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:50%;background:var(--gradient-gold);color:var(--dark-navy);font-weight:800;font-size:22px;letter-spacing:-1px;box-shadow:0 8px 24px rgba(247,201,72,0.4);margin-bottom:12px;">PRO</div>
-        <h2 style="font-size:20px;font-weight:800;margin-bottom:4px;">One-time unlock. Yours forever.</h2>
-        <p class="text-sm text-muted" style="max-width:520px;margin:0 auto;">
-          ${feature
-            ? `<strong>${Utils.esc(featureName)}</strong> is a Pro feature.`
+      <div class="upgrade-hero">
+        <div class="upgrade-hero-badge">
+          <div class="uhb-ring"></div>
+          <div class="uhb-pulse"></div>
+          <div class="uhb-core">
+            <span class="uhb-text">PRO</span>
+          </div>
+          <div class="uhb-shine"></div>
+          <div class="uhb-sparkles">
+            <span class="uhb-spark s1"></span>
+            <span class="uhb-spark s2"></span>
+            <span class="uhb-spark s3"></span>
+            <span class="uhb-spark s4"></span>
+          </div>
+        </div>
+
+        <h2>One-time unlock. Yours forever.</h2>
+        <p class="lede">
+          ${featureName
+            ? `<strong>${Utils.esc(featureName)}</strong> is a Pro feature. Unlock every Pro feature with a single payment.`
             : `Unlock every Pro feature with a single payment.`}
           No subscription, no monthly fees, no tracking. Works fully offline.
         </p>
       </div>
 
-      <div class="card mb-16" style="background:var(--gradient-card);">
-        <div class="grid grid-2" style="gap:16px;">
-          <div>
-            <div style="font-weight:700;font-size:13px;color:var(--deped-blue);margin-bottom:6px;">✓ Free forever</div>
-            <ul style="list-style:none;padding:0;font-size:12.5px;line-height:1.9;color:var(--text-muted);">
-              <li>• Attendance recording</li>
-              <li>• Gradebook &amp; assessments</li>
-              <li>• Learner management</li>
-              <li>• Seating, groups, timer, picker</li>
-              <li>• Notes, calendar, behavior logs</li>
-            </ul>
+      <div class="upgrade-compare">
+        <div class="upgrade-compare-col free">
+          <div class="upgrade-compare-head">
+            <span class="icon-chip">${icon('check')}</span>
+            <span>Free forever</span>
           </div>
-          <div>
-            <div style="font-weight:700;font-size:13px;color:#B8860B;margin-bottom:6px;">⭐ Pro (unlock)</div>
-            <ul style="list-style:none;padding:0;font-size:12.5px;line-height:1.9;color:var(--text-muted);">
-              <li>• AI Lesson Planner (Gemini)</li>
-              <li>• TOS &amp; Exam Generator</li>
-              <li>• PowerPoint Generator</li>
-              <li>• SF1 / SF2 / SF9 DepEd forms</li>
-              <li>• Grade Summary + GWA</li>
-              <li>• Item Analysis, Export Center</li>
-            </ul>
+          <ul class="upgrade-compare-list">
+            <li>Attendance recording</li>
+            <li>Gradebook &amp; assessments</li>
+            <li>Learner management</li>
+            <li>Seating, groups, timer, picker</li>
+            <li>Notes, calendar, behavior logs</li>
+          </ul>
+        </div>
+        <div class="upgrade-compare-col pro">
+          <div class="upgrade-compare-head">
+            <span class="icon-chip">${icon('star')}</span>
+            <span>Pro (unlock)</span>
           </div>
+          <ul class="upgrade-compare-list">
+            <li>AI Lesson Planner (Gemini)</li>
+            <li>TOS &amp; Exam Generator</li>
+            <li>PowerPoint Generator</li>
+            <li>SF1 / SF2 / SF9 DepEd forms</li>
+            <li>Grade Summary + GWA</li>
+            <li>Item Analysis, Export Center</li>
+          </ul>
         </div>
       </div>
 
-      <div class="card mb-16" style="border:2px solid var(--deped-blue);">
-        <div class="flex-between" style="align-items:center;flex-wrap:wrap;gap:12px;">
-          <div>
-            <div style="font-weight:800;font-size:24px;color:var(--deped-blue);">₱799</div>
-            <div class="text-xs text-muted">One-time payment · Lifetime access</div>
-          </div>
-          <button class="btn btn-primary btn-lg" id="upg-buy">
-            ${icon('star')} Buy Now
+      <div class="upgrade-price-card">
+        <div class="upgrade-price-info">
+          <div class="upgrade-price-tag">₱799</div>
+          <div class="upgrade-price-sub">One-time payment &middot; Lifetime access</div>
+        </div>
+        <button class="upgrade-cta" id="upg-buy">
+          ${icon('star')} Buy Now
+        </button>
+      </div>
+
+      <button class="upgrade-cta-gcash" id="upg-gcash">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <path d="M14 14h3v3M21 14v7h-7M17 17h4"/>
+      </svg>
+      Pay via GCash
+    </button>
+  </div>
+</div>
+
+      <div class="upgrade-divider">Already purchased?</div>
+
+      <div class="upgrade-activate">
+        <h4>Activate your license</h4>
+        <p>
+          Paste the license key from your purchase email. Lost it?
+          <a href="mailto:klazassist@gmail.com?subject=Lost%20KlazAssist%20license">Email support</a>.
+        </p>
+        <textarea class="upgrade-key-input" id="upg-key" rows="3"
+                  placeholder="KLAZ1.eyJ2IjoxLCJ0aWVyIjoicHJvIiw…"
+                  spellcheck="false"></textarea>
+        <div id="upg-error" class="auth-error" role="alert"></div>
+        <div class="upgrade-activate-actions">
+          <button class="btn btn-outline" id="upg-activate">
+            ${icon('key')} Activate License
           </button>
         </div>
       </div>
 
-      <div class="divider"></div>
-      <h4 style="font-size:14px;margin-bottom:8px;">Already purchased?</h4>
-      <p class="text-xs text-muted mb-8">
-        Paste the license key from your purchase email. Lost it?
-        <a href="mailto:klazassist@gmail.com?subject=Lost%20KlazAssist%20license" style="text-decoration:underline;">Email support</a>.
-      </p>
-
-      <div class="form-group">
-        <textarea class="form-control" id="upg-key" rows="3"
-                  placeholder="KLAZ1.eyJ2IjoxLCJ0aWVyIjoicHJvIiw…"
-                  spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;"></textarea>
-      </div>
-      <div id="upg-error" class="auth-error" role="alert"></div>
-      <div class="flex gap-8" style="justify-content:flex-end;">
-        <button class="btn btn-outline" id="upg-activate">${icon('key')} Activate License</button>
-      </div>
-
-      ${existing && Licensing.isPro() ? `
-        <div class="alert alert-success mt-16">
-          ${icon('check')}<div>
+      ${isPro && existing ? `
+        <div class="upgrade-active-banner">
+          <div class="icon-chip">${icon('check')}</div>
+          <div class="banner-body">
             <strong>Pro is active on this device.</strong>
-            Licensed to <strong>${Utils.esc(existing.payload.name || existing.payload.email || '')}</strong>.
-            ${existing.payload.expires ? ` Expires ${Utils.formatDate(existing.payload.expires)}.` : ' Lifetime license.'}
+            ${existing.payload.name ? ` Licensed to <strong>${Utils.esc(existing.payload.name)}</strong>.` : ''}
+            ${existing.payload.expires
+              ? ` Expires ${Utils.formatDate(existing.payload.expires)}.`
+              : ' Lifetime license.'}
           </div>
-        </div>` : ''}
+        </div>
+      ` : ''}
     `,
     footer: `<button class="btn btn-ghost" data-close>Close</button>`
   });
 
+  /* ---- Buy button ---- */
   m.overlay.querySelector('#upg-buy').onclick = () => {
-    // ▼▼▼ Replace with your real Gumroad product URL ▼▼▼
     window.open('https://docs.google.com/forms/d/e/1FAIpQLSeUawQwpflEctMhsWxo7aMmfVmxievF0wdKFzHBpuqeLHRS2g/viewform?usp=sharing&ouid=107077832765838576721', '_blank', 'noopener');
     App.logActivity('Upgrade link opened', 'Licensing');
+
   };
 
+          /* ---- GCash payment button ---- */
+    const gcashBtn = m.overlay.querySelector('#upg-gcash');
+    if (gcashBtn) {
+      gcashBtn.onclick = () => {
+        m.close();
+        Pages.openGcashPaymentModal();
+        App.logActivity('GCash payment modal opened', 'Licensing');
+  };
+}
+
+  /* ---- Activate button ---- */
   m.overlay.querySelector('#upg-activate').onclick = async () => {
     const err = m.overlay.querySelector('#upg-error');
     const val = m.overlay.querySelector('#upg-key').value.trim();
     err.classList.remove('show');
-    if (!val) { err.textContent = 'Paste your license key first.'; err.classList.add('show'); return; }
+    if (!val) {
+      err.textContent = 'Paste your license key first.';
+      err.classList.add('show');
+      return;
+    }
+
+    const btn = m.overlay.querySelector('#upg-activate');
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Activating…';
 
     try {
       await Licensing.activate(val);
@@ -33525,6 +33728,8 @@ openUpgradeModal(featureId) {
     } catch (e) {
       err.textContent = e.message || 'Could not activate this license.';
       err.classList.add('show');
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
     }
   };
 },
