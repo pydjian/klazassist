@@ -22,9 +22,46 @@
 <body>
 
 <div id="loading-screen" class="loading-screen">
-  <img class="brand-logo fixed" src="./icon/icon.svg" alt="KlazAssist" style="width:64px;height:64px;position:relative;z-index:1;">
-  <div class="spinner"></div>
-  <p style="font-size:13px;color:var(--text-muted);position:relative;z-index:1;" id="loading-text">Initializing local database…</p>
+
+  <div class="loader-orb" role="img" aria-label="KlazAssist is loading">
+
+    <!-- Outer glow halo -->
+    <div class="loader-halo"></div>
+
+    <!-- Rotating rings -->
+    <div class="loader-ring loader-ring-1"></div>
+    <div class="loader-ring loader-ring-2"></div>
+    <div class="loader-ring loader-ring-3"></div>
+
+    <!-- Orbiting satellites -->
+    <div class="loader-orbit loader-orbit-1"><span></span></div>
+    <div class="loader-orbit loader-orbit-2"><span></span></div>
+    <div class="loader-orbit loader-orbit-3"><span></span></div>
+
+    <!-- Floating sparkles -->
+    <div class="loader-sparkles">
+      <span class="loader-spark s1"></span>
+      <span class="loader-spark s2"></span>
+      <span class="loader-spark s3"></span>
+      <span class="loader-spark s4"></span>
+      <span class="loader-spark s5"></span>
+      <span class="loader-spark s6"></span>
+    </div>
+
+    <!-- Core sphere with the KlazAssist icon -->
+    <div class="loader-core">
+      <div class="loader-pulse"></div>
+      <img class="loader-icon" src="./icon/icon.svg" alt="" width="62" height="62">
+    </div>
+
+  </div>
+
+  <p class="loading-text" id="loading-text">Initializing local database…</p>
+
+  <div class="loading-progress-bar">
+    <div class="loading-progress-fill"></div>
+  </div>
+
 </div>
 
 <!-- ============================================================
