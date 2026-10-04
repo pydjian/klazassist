@@ -36977,7 +36977,7 @@ openGcashPaymentModal() {
 
           <div class="gcash-qr-wrap" style="padding: 30px 20px 20px; display: flex; justify-content: center; background: #fff;">
             <div style="background: #f8fafc; border-radius: 12px; padding: 16px; border: 1px solid #e2e8f0; position: relative;">
-              <img src="./icon/gcash-qr.png" alt="GCash QR Code" style="width: 220px; height: 220px; display: block; border-radius: 8px;" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'220\' height=\'220\' viewBox=\'0 0 220 220\'><rect width=\'220\' height=\'220\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' font-family=\'Arial\' font-size=\'14\' fill=\'%2394a3b8\' text-anchor=\'middle\' dominant-baseline=\'middle\'>QR Code Placeholder</text></svg>';">
+              <img src="./icon/qr.png" alt="GCash QR Code" style="width: 220px; height: 220px; display: block; border-radius: 8px;" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'220\' height=\'220\' viewBox=\'0 0 220 220\'><rect width=\'220\' height=\'220\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' font-family=\'Arial\' font-size=\'14\' fill=\'%2394a3b8\' text-anchor=\'middle\' dominant-baseline=\'middle\'>QR Code Placeholder</text></svg>';">
             </div>
           </div>
 
