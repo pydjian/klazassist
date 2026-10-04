@@ -34731,18 +34731,18 @@ If you received this message, Web3Forms is configured correctly and you can now 
 
       <div class="card">
         <div class="card-head"><h3>School Information</h3></div>
-        <div class="form-group"><label>School Name</label><input class="form-control" id="sp-name" value="${Utils.attr(s.name||'')} placeholder="e.g. Cabaliandan High School">"></div>
+        <div class="form-group"><label>School Name</label><input class="form-control" id="sp-name" value="${Utils.attr(s.name||'')}" placeholder="e.g. Cabalinadan High School"></div>
         <div class="form-row">
-          <div class="form-group"><label>School ID</label><input class="form-control" id="sp-id" value="${Utils.attr(s.schoolId||'')}" placeholder="e.g. 309766">></div>
-          <div class="form-group"><label>Region</label><input class="form-control" id="sp-region" value="${Utils.attr(s.region||'')}" placeholder="e.g. Region V">></div>
+          <div class="form-group"><label>School ID</label><input class="form-control" id="sp-id" value="${Utils.attr(s.schoolId||'')}" placeholder="e.g. 309766"></div>
+          <div class="form-group"><label>Region</label><input class="form-control" id="sp-region" value="${Utils.attr(s.region||'')}" placeholder="e.g. Region V"></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Division</label><input class="form-control" id="sp-division" value="${Utils.attr(s.division||'')}" placeholder="e.g. Division of Camarines Sur">></div>
-          <div class="form-group"><label>District</label><input class="form-control" id="sp-district" value="${Utils.attr(s.district||'')}" placeholder="e.g. Tigaon District">></div>
+          <div class="form-group"><label>Division</label><input class="form-control" id="sp-division" value="${Utils.attr(s.division||'')}" placeholder="e.g. Division of Camarines Sur"></div>
+          <div class="form-group"><label>District</label><input class="form-control" id="sp-district" value="${Utils.attr(s.district||'')}" placeholder="e.g. Tigaon District"></div>
         </div>
-        <div class="form-group"><label>Address</label><input class="form-control" id="sp-address" value="${Utils.attr(s.address||'')}" placeholder="e.g. Cabalinadan, Tigaon, Camarines Sur">></div>
+        <div class="form-group"><label>Address</label><input class="form-control" id="sp-address" value="${Utils.attr(s.address||'')}" placeholder="e.g. Cabalinadan, Tigaon, Camarines Sur"></div>
         <div class="form-row">
-          <div class="form-group"><label>School Head</label><input class="form-control" id="sp-head" value="${Utils.attr(s.schoolHead||'')}" placeholder="e.g. John P. Santos, PhD</div>
+          <div class="form-group"><label>School Head</label><input class="form-control" id="sp-head" value="${Utils.attr(s.schoolHead||'')}" placeholder="e.g. John P. Santos, PhD"></div>
           <div class="form-group"><label>Contact Number</label><input class="form-control" id="sp-contact" value="${Utils.attr(s.contact||'')}" placeholder="e.g. (049) 555-1234"></div>
         </div>
         <div class="form-group"><label>School Email</label><input type="email" class="form-control" id="sp-email" value="${Utils.attr(s.email||'')}" placeholder="e.g. info@school.edu.ph"></div>
