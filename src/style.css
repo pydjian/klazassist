@@ -1485,6 +1485,23 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .tab { padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--text-muted); border-bottom: 2px solid transparent; white-space: nowrap; transition: all var(--transition); position: relative; }
 .tab:hover { color: var(--deped-blue); }
 .tab.active { color: var(--deped-blue); border-bottom-color: var(--deped-blue); }
+/* Tab icons — constrain SVG size and align icon + label in a row */
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+  flex-shrink: 0;
+  display: block;
+  stroke-width: 2;
+}
 
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(16,42,67,0.55);
@@ -4417,7 +4434,37 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     height: auto !important;
     overflow: visible !important;
   }
-
+/* ============================================================================
+   TOS / EXAM — restore list markers inside the printed exam
+   The global `* { padding: 0 }` reset strips the padding that <ol>/<ul>
+   markers live in, so the numbers and choice letters vanish on paper.
+   ============================================================================ */
+#print-area ol,
+.print-tos-exam ol {
+  list-style-type: decimal;
+  list-style-position: outside;
+  padding-left: 28pt;
+  margin: 6pt 0 12pt 0;
+}
+#print-area ul,
+.print-tos-exam ul {
+  list-style-type: upper-alpha;
+  list-style-position: outside;
+  padding-left: 26pt;
+  margin: 4pt 0;
+}
+#print-area ol > li,
+.print-tos-exam ol > li {
+  display: list-item;
+  margin-bottom: 10pt;
+  page-break-inside: avoid;
+}
+#print-area ul > li,
+.print-tos-exam ul > li {
+  display: list-item;
+  margin-bottom: 3pt;
+  page-break-inside: avoid;
+}
     /* Remove default body margin so A5 back-to-back aligns cleanly */
   html, body { margin: 0 !important; padding: 0 !important; }
 
@@ -4432,6 +4479,8 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   table th { background: #eee; }
   .print-meta { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 9pt; }
   .print-footer { margin-top: 20px; font-size: 9pt; display: flex; justify-content: space-between; }
+
+
   @page { margin: 1cm; }
 
   /* ---- SF2 (Daily Attendance Report) — landscape, small dense grid ---- */
@@ -6599,54 +6648,6 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
    Only applied during print for non-School Form reports.
    ============================================================================ */
 @media print {
-  .print-deped-header {
-    text-align: center;
-    margin-bottom: 20px;
-    position: relative;
-  }
-
-  .print-deped-header .pdh-seal img {
-    width: 0.76in;
-    height: 0.76in;
-    object-fit: contain;
-  }
-
-  .print-deped-header .pdh-text {
-    line-height: 1.25;
-    color: #000;
-  }
-
-.print-deped-header .pdh-republic {
-  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
-  font-size: 12pt;
-  font-weight: normal;
-  letter-spacing: 0.3px;
-}
-
-.print-deped-header .pdh-department {
-  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
-  font-size: 18pt;
-  font-weight: normal;
-  letter-spacing: 0.5px;
-  margin-top: -2px;
-}
-
-  .print-deped-header .pdh-region,
-  .print-deped-header .pdh-division,
-  .print-deped-header .pdh-school,
-  .print-deped-header .pdh-address {
-    font-family: 'Trajan Pro', 'Trajan', 'Times New Roman', serif;
-    font-size: 10pt;
-    font-weight: bold;
-    text-transform: uppercase;
-  }
-
-  .print-deped-header .pdh-line {
-    border-bottom: 2px solid #000;
-    margin-top: 8px;
-    width: 100%;
-  }
-
   .print-deped-footer {
     display: flex;
     align-items: center;
@@ -6670,6 +6671,101 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     line-height: 1.4;
   }
 }
+/* ============================================================================
+   DEPED LETTERHEAD — one definition, shared by preview, print, and Word
+   Using pt units keeps the preview pixel-identical to the printed page.
+   ============================================================================ */
+.print-deped-header {
+  text-align: center;
+  margin-bottom: 20px;
+  padding-bottom: 4px;
+}
+.print-deped-header .pdh-seal img {
+  width: 76pt;
+  height: 76pt;
+  max-width: 76pt;
+  max-height: 76pt;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+}
+.print-deped-header .pdh-text {
+  line-height: 1.25;
+  color: #000;
+  margin-top: 6px;
+}
+.print-deped-header .pdh-republic {
+  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
+  font-size: 12pt;
+  letter-spacing: 0.3px;
+}
+.print-deped-header .pdh-department {
+  font-family: 'Old English Text MT', 'UnifrakturMaguntia', 'Times New Roman', serif;
+  font-size: 18pt;
+  letter-spacing: 0.5px;
+  margin-top: -2px;
+}
+.print-deped-header .pdh-region,
+.print-deped-header .pdh-division,
+.print-deped-header .pdh-school,
+.print-deped-header .pdh-address {
+  font-family: 'Trajan Pro', 'Trajan', 'Times New Roman', serif;
+  font-size: 10pt;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+.print-deped-header .pdh-line {
+  border-bottom: 2px solid #000;
+  margin-top: 8px;
+  width: 100%;
+}
+.print-deped-header .pdh-doc-title {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 14pt;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-top: 14px;
+  color: #000;
+  text-align: center;
+}
+.print-deped-header .pdh-doc-subtitle {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 11.5pt;
+  font-weight: 700;
+  margin-top: 4px;
+  color: #000;
+  text-align: center;
+}
+/* ============================================================================
+   EXAM BODY — force every content element to left-align.
+   Overrides the global `text-align: center` that can leak in from the
+   letterhead or from inline styles in the AI response.
+   ============================================================================ */
+.exam-body,
+.exam-body h1,
+.exam-body h2,
+.exam-body h3,
+.exam-body h4,
+.exam-body h5,
+.exam-body h6,
+.exam-body p,
+.exam-body ol,
+.exam-body ul,
+.exam-body li,
+.exam-body div,
+.exam-body span,
+.exam-body strong,
+.exam-body em,
+.exam-body table,
+.exam-body td,
+.exam-body th {
+  text-align: left;
+}
+.exam-body ol { padding-left: 28pt; margin: 6pt 0 12pt 0; list-style-type: decimal; list-style-position: outside; }
+.exam-body ul { padding-left: 26pt; margin: 4pt 0; list-style-type: upper-alpha; list-style-position: outside; }
+.exam-body ol > li { display: list-item; margin-bottom: 10pt; page-break-inside: avoid; }
+.exam-body ul > li { display: list-item; margin-bottom: 3pt; page-break-inside: avoid; }
 /* ============================================================================
    CLASS LIST — photo column (print only)
    ============================================================================ */
@@ -8405,3 +8501,587 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 [data-theme="sepia"] .gcash-name { color: #6b4423; }
 [data-theme="deped-green"] .gcash-name { color: #0f5132; }
 [data-theme="navy"] .gcash-name { color: #5b9cff; }
+/* ============================================================================
+   PRO WELCOME SCREEN — celebratory full-screen overlay
+   Shown once after a successful license activation.
+   ============================================================================ */
+#pro-welcome-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+
+  /* ---- Translucent brand-tinted backdrop ----
+     Layer 1 (bottom): semi-transparent deep navy base.
+     Layers 2-5 (top):  brand-color radial glows. */
+  background:
+    radial-gradient(at 18% 12%, rgba(0, 87, 184, 0.55)   0%, transparent 42%),
+    radial-gradient(at 82% 88%, rgba(124, 58, 237, 0.40) 0%, transparent 48%),
+    radial-gradient(at 50% 108%, rgba(6, 182, 212, 0.28) 0%, transparent 55%),
+    radial-gradient(at 88% 8%,  rgba(247, 201, 72, 0.20) 0%, transparent 42%),
+    linear-gradient(
+      160deg,
+      rgba(10, 22, 40, 0.72) 0%,
+      rgba(2, 6, 23, 0.82)  50%,
+      rgba(15, 23, 42, 0.76) 100%
+    );
+
+  /* Frosted-glass over the whole app — blurs + darkens what's behind
+     so text contrast is guaranteed on both light and dark themes. 
+  backdrop-filter:         blur(18px) brightness(0.55) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) brightness(0.55) saturate(135%); */
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  animation: pwFadeIn 0.6s ease both;
+  font-family: var(--font);
+  padding: 20px;
+}
+
+@keyframes pwFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Animated background mesh */
+#pro-welcome-screen .pw-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(at 30% 30%, rgba(247, 201, 72, 0.14) 0px, transparent 45%),
+    radial-gradient(at 70% 70%, rgba(6, 182, 212, 0.12) 0px, transparent 50%);
+  animation: pwBgDrift 14s ease-in-out infinite;
+  will-change: transform;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+@keyframes pwBgDrift {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50%      { transform: scale(1.10) rotate(2deg); }
+}
+
+/* Confetti pieces */
+#pro-welcome-screen .pw-confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.pw-confetti-piece {
+  position: absolute;
+  top: -30px;
+  border-radius: 2px;
+  opacity: 0;
+  animation-name: pwConfettiFall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+@keyframes pwConfettiFall {
+  0%   { transform: translateY(-30px) rotate(0deg); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
+}
+
+.pw-content {
+  position: relative;
+  z-index: 2;
+  max-width: 660px;
+  width: 100%;
+  text-align: center;
+  animation: pwContentIn 0.8s 0.15s cubic-bezier(0.16,1,0.3,1) both;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Reserve room for the PRO badge's float, pulse ring, sparkles,
+     and halo shadow — all of which extend outside the 140px box. */
+  padding: 70px 24px 40px;
+  scrollbar-gutter: stable;
+  box-sizing: border-box;
+
+  /* ---- Translucent glass card ---- */
+  /* ---- Translucent glass card ---- */
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.13) 0%,
+    rgba(255, 255, 255, 0.055) 45%,
+    rgba(255, 255, 255, 0.085) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 24px;
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 1px 0 rgba(255, 255, 255, 0.20) inset;
+}
+
+/* Scrollbar inside the glass card — keep it subtle */
+.pw-content::-webkit-scrollbar { width: 6px; }
+.pw-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+.pw-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+@keyframes pwContentIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---- Medal ---- */
+.pw-badge {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  /* Slightly smaller top margin — the .pw-content padding already
+     provides the breathing room the badge needs. */
+  margin: 0 auto 36px;
+  animation: pwBadgeFloat 3.4s ease-in-out infinite;
+}
+@keyframes pwBadgeFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+.pw-badge .pw-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    #fde68a 0%, #f7c948 15%, #b45309 30%, #f7c948 45%,
+    #fde68a 60%, #f59e0b 75%, #f7c948 90%, #fde68a 100%
+  );
+  background-size: 300% 300%;
+  animation: pwRingSpin 6s linear infinite, pwRingHalo 3s ease-in-out infinite;
+}
+@keyframes pwRingSpin {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+@keyframes pwRingHalo {
+  0%, 100% { box-shadow: 0 14px 44px rgba(247,201,72,0.55), 0 0 0 0 rgba(247,201,72,0.6); }
+  50%      { box-shadow: 0 18px 60px rgba(247,201,72,0.85), 0 0 0 20px rgba(247,201,72,0); }
+}
+
+.pw-badge .pw-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(247,201,72,0.7);
+  animation: pwPulse 2.6s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes pwPulse {
+  0%   { transform: scale(1);   opacity: 0.9; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.pw-badge .pw-core {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 25%, #3d2a0f 0%, #1a1206 55%, #0b0703 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+  box-shadow:
+    inset 0 3px 12px rgba(255,255,255,0.18),
+    inset 0 -4px 14px rgba(0,0,0,0.75),
+    0 4px 20px rgba(0,0,0,0.4);
+}
+.pw-badge .pw-text {
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  background: linear-gradient(180deg, #fff7d1 0%, #fde68a 30%, #f7c948 55%, #d97706 80%, #b45309 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.4), 0 0 14px rgba(247,201,72,0.4);
+  background-size: 100% 200%;
+  animation: pwTextShimmer 4s ease-in-out infinite;
+}
+@keyframes pwTextShimmer {
+  0%, 100% { background-position: 50% 0%; }
+  50%      { background-position: 50% 100%; }
+}
+
+/* Sparkles */
+.pw-badge .pw-sparkles { position: absolute; inset: -20px; pointer-events: none; }
+.pw-badge .pw-spark {
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 8px 2px #fff, 0 0 18px 5px rgba(247,201,72,0.9);
+  opacity: 0;
+}
+.pw-badge .pw-spark::before,
+.pw-badge .pw-spark::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+}
+.pw-badge .pw-spark::before {
+  width: 24px; height: 1.5px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(to right, transparent, #fff, transparent);
+}
+.pw-badge .pw-spark::after {
+  width: 1.5px; height: 24px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(to bottom, transparent, #fff, transparent);
+}
+.pw-badge .pw-spark.s1 { top: 5%;    left: 50%;  animation: pwSpark 2.8s ease-in-out infinite 0s; }
+.pw-badge .pw-spark.s2 { top: 50%;   right: 2%;  animation: pwSpark 2.8s ease-in-out infinite 0.7s; }
+.pw-badge .pw-spark.s3 { bottom: 5%; left: 50%;  animation: pwSpark 2.8s ease-in-out infinite 1.4s; }
+.pw-badge .pw-spark.s4 { top: 50%;   left: 2%;   animation: pwSpark 2.8s ease-in-out infinite 2.1s; }
+@keyframes pwSpark {
+  0%   { opacity: 0;   transform: scale(0.3) rotate(0deg); }
+  20%  { opacity: 1;   transform: scale(1.3) rotate(45deg); }
+  50%  { opacity: 0.9; transform: scale(1)   rotate(90deg); }
+  80%  { opacity: 0.3; transform: scale(0.7) rotate(135deg); }
+  100% { opacity: 0;   transform: scale(0.4) rotate(180deg); }
+}
+
+/* ---- Text ---- */
+.pw-title {
+  font-size: clamp(26px, 4vw, 40px);
+  font-weight: 900;
+  letter-spacing: -1px;
+  line-height: 1.15;
+  margin: 0 0 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #fde68a 40%, #f7c948 70%, #ffffff 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pwTitleShimmer 5s ease-in-out infinite;
+  filter: drop-shadow(0 4px 24px rgba(247,201,72,0.35));
+}
+@keyframes pwTitleShimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+.pw-lede {
+  font-size: clamp(14px, 1.4vw, 17px);
+  color: rgba(255,255,255,0.72);
+  line-height: 1.6;
+  max-width: 540px;
+  margin: 0 auto 22px;
+}
+.pw-lede strong { color: #fde68a; font-weight: 700; }
+
+/* License holder pill */
+.pw-holder {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 40px;
+  background: rgba(247,201,72,0.08);
+  border: 1px solid rgba(247,201,72,0.28);
+  margin-bottom: 26px;
+  font-size: 12.5px;
+  color: rgba(255,255,255,0.85);
+}
+.pw-holder svg { width: 14px; height: 14px; color: #f7c948; flex-shrink: 0; }
+.pw-holder strong { color: #fde68a; font-weight: 700; }
+
+@media (max-width: 520px) { .pw-features { grid-template-columns: 1fr; } }
+
+.pw-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.09) 0%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.10) inset;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: pwFeatureIn 0.5s cubic-bezier(0.16,1,0.3,1) forwards;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.pw-feature:hover {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(255, 255, 255, 0.06) 100%
+  );
+  border-color: rgba(247, 201, 72, 0.35);
+  transform: translateY(-1px);
+}
+.pw-feature:nth-child(1) { animation-delay: 0.40s; }
+.pw-feature:nth-child(2) { animation-delay: 0.50s; }
+.pw-feature:nth-child(3) { animation-delay: 0.60s; }
+.pw-feature:nth-child(4) { animation-delay: 0.70s; }
+.pw-feature:nth-child(5) { animation-delay: 0.80s; }
+.pw-feature:nth-child(6) { animation-delay: 0.90s; }
+@keyframes pwFeatureIn {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.pw-feature .pw-fi {
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(247,201,72,0.22) 0%, rgba(247,201,72,0.08) 100%);
+  color: #f7c948;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pw-feature .pw-fi svg { width: 15px; height: 15px; }
+.pw-feature .pw-ftext { flex: 1; min-width: 0; }
+.pw-feature .pw-ftitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+.pw-feature .pw-fdesc {
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  line-height: 1.4;
+}
+
+/* ---- CTA ---- */
+.pw-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 42px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #1a1206;
+  background: linear-gradient(135deg, #fde68a 0%, #f7c948 50%, #f59e0b 100%);
+  background-size: 200% 200%;
+  border: none;
+  cursor: pointer;
+  box-shadow:
+    0 8px 30px rgba(247,201,72,0.5),
+    0 0 60px rgba(247,201,72,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.5);
+  transition: transform 0.18s, box-shadow 0.18s;
+  animation: pwCtaGradient 4s ease infinite;
+  position: relative;
+  overflow: hidden;
+}
+@keyframes pwCtaGradient {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+.pw-cta::after {
+  content: '';
+  position: absolute;
+  top: 0; left: -75%;
+  width: 50%; height: 100%;
+  background: linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.75) 50%, transparent 100%);
+  transform: skewX(-22deg);
+  animation: pwCtaShimmer 3s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes pwCtaShimmer {
+  0%   { left: -75%; opacity: 0; }
+  15%  { opacity: 1; }
+  55%  { opacity: 1; }
+  70%  { left: 130%; opacity: 0; }
+  100% { left: 130%; opacity: 0; }
+}
+.pw-cta:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 12px 40px rgba(247,201,72,0.7),
+    0 0 80px rgba(247,201,72,0.4),
+    inset 0 1px 0 rgba(255,255,255,0.6);
+}
+.pw-cta:active { transform: translateY(0); }
+.pw-cta svg { width: 18px; height: 18px; position: relative; z-index: 1; }
+.pw-cta span { position: relative; z-index: 1; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  #pro-welcome-screen *,
+  #pro-welcome-screen *::before,
+  #pro-welcome-screen *::after {
+    animation: none !important;
+  }
+  .pw-feature { opacity: 1 !important; transform: none !important; }
+  .pw-confetti-piece { display: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .pw-content {
+    background: linear-gradient(
+      160deg,
+      rgba(15, 23, 42, 0.82) 0%,
+      rgba(2, 6, 23, 0.88) 100%
+    );
+  }
+  .pw-feature {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #pro-welcome-screen {
+    /* Without a blur, we lean on opacity to keep the text readable. */
+    background:
+      radial-gradient(at 18% 12%, rgba(0, 87, 184, 0.40)   0%, transparent 45%),
+      radial-gradient(at 82% 88%, rgba(124, 58, 237, 0.28) 0%, transparent 50%),
+      radial-gradient(at 50% 108%, rgba(6, 182, 212, 0.20) 0%, transparent 55%),
+      linear-gradient(
+        160deg,
+        rgba(10, 22, 40, 0.94) 0%,
+        rgba(2, 6, 23, 0.96)  50%,
+        rgba(15, 23, 42, 0.95) 100%
+      );
+  }
+}
+/* ============================================================================
+   PRO LICENSED PILL — reduced & smoothed pulse/glow
+   The default halo animation was tuned for a bold "pop" effect. For a
+   persistent dashboard element that sits there all day, a subtler, slower
+   breathing glow reads as premium without becoming distracting.
+   ============================================================================ */
+
+/* ---- Slower, gentler breathing halo ---- */
+@keyframes hpb-halo-diamond {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.975);
+    box-shadow:
+      0 3px 12px rgba(255, 255, 255, 0.30),
+      0 0 16px rgba(186, 230, 253, 0.28),
+      0 0 0 0   rgba(255, 255, 255, 0.30);
+  }
+  50% {
+    opacity: 0.82;
+    transform: scale(1.020);
+    box-shadow:
+      0 5px 20px rgba(255, 255, 255, 0.50),
+      0 0 26px rgba(186, 230, 253, 0.42),
+      0 0 0 6px rgba(255, 255, 255, 0);
+  }
+}
+
+/* ---- Slow the ring rotation + halo to match ---- */
+.hero-pro-badge.active {
+  animation:
+    hpb-border-rotate 9s linear infinite,
+    hpb-halo-diamond  4.5s ease-in-out infinite;
+  /* Softer resting shadow (was: two big glows + rim) */
+  box-shadow:
+    0 3px 14px rgba(255, 255, 255, 0.30),
+    0 0 22px rgba(186, 230, 253, 0.28);
+}
+
+/* ---- Tighter, softer outer bloom ---- */
+.hero-pro-badge.active::before {
+  inset: -4px;                         /* was -6px */
+  animation: hpb-halo-diamond 4.5s ease-in-out infinite;
+  filter: blur(2px);                   /* was blur(0.5px) → smoother edges */
+  opacity: 0.65;                       /* was full-opacity */
+  mix-blend-mode: screen;              /* keep, but weaker due to opacity */
+}
+
+/* ---- Hover: still responsive, but not a jolt ---- */
+.hero-pro-badge.active:hover {
+  box-shadow:
+    0 5px 22px rgba(186, 230, 253, 0.45),
+    0 0 36px rgba(224, 231, 255, 0.32),
+    0 0 54px rgba(251, 207, 232, 0.14);
+  transform: translateY(-2px) scale(1.015);   /* was 1.035 */
+}
+
+/* ---- Quiet the sparkling stars ---- */
+/* Slow them down and dim the flare so they twinkle instead of blink. */
+.hero-pro-badge.active .hpb-spark {
+  box-shadow:
+    0 0 5px 1px rgba(255, 255, 255, 0.85),
+    0 0 10px 2px rgba(186, 230, 253, 0.55),
+    0 0 16px 3px rgba(251, 207, 232, 0.28);
+}
+.hero-pro-badge.active .hpb-spark.s1 { animation-duration: 4.2s; }
+.hero-pro-badge.active .hpb-spark.s2 { animation-duration: 4.2s; }
+.hero-pro-badge.active .hpb-spark.s3 { animation-duration: 4.2s; }
+.hero-pro-badge.active .hpb-spark.s4 { animation-duration: 4.2s; }
+
+/* ---- Slow the shine sweep too, so nothing races ---- */
+.hero-pro-badge.active .hpb-shine::before {
+  animation-duration: 5.5s;            /* was 3.8s */
+}
+
+/* ---- Calmer crown float ---- */
+.hero-pro-badge.active .hpb-crown {
+  animation-duration: 3.6s;            /* was 2.6s */
+}
+/* ============================================================================
+   UNLOCK PRO PILL — remove spotlight/flash effects
+   The active PRO pill keeps its subtle breathing. The Unlock pill is a
+   persistent call-to-action, so it shouldn't compete for attention with
+   a moving spotlight or popping sparkles.
+   Scope: [.hero-pro-badge] WITHOUT [.active]
+   ============================================================================ */
+
+/* ---- Kill the traveling shine sweep (the "spotlight") ---- */
+.hero-pro-badge:not(.active) .hpb-shine {
+  display: none;
+}
+
+/* ---- Remove the sparkle flares entirely ---- */
+.hero-pro-badge:not(.active) .hpb-sparkles {
+  display: none;
+}
+
+/* ---- Replace the pulsing halo with a steady glow ---- */
+.hero-pro-badge:not(.active) {
+  /* Keep the rotating conic border, but drop the pulsing halo animation */
+  animation: hpb-border-rotate 8s linear infinite;
+  box-shadow:
+    0 3px 12px rgba(247, 201, 72, 0.28),
+    0 0 20px rgba(247, 201, 72, 0.18);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+/* Remove the outer pulsing bloom ring */
+.hero-pro-badge:not(.active)::before {
+  display: none;
+}
+
+/* ---- Hover: still feels responsive, no flash ---- */
+.hero-pro-badge:not(.active):hover {
+  transform: translateY(-2px) scale(1.015);
+  box-shadow:
+    0 6px 22px rgba(247, 201, 72, 0.45),
+    0 0 32px rgba(247, 201, 72, 0.28);
+}
+
+/* ---- Calm the crown float ---- */
+.hero-pro-badge:not(.active) .hpb-crown {
+  animation-duration: 3.8s;
+}
+
+/* ---- Respect reduced motion (belt and suspenders) ---- */
+@media (prefers-reduced-motion: reduce) {
+  .hero-pro-badge:not(.active),
+  .hero-pro-badge:not(.active) .hpb-crown {
+    animation: none !important;
+  }
+}

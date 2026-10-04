@@ -1,4 +1,4 @@
-// @ts-nocheck
+  // @ts-nocheck
 import './style.css';
 
 /* ============================================================================
@@ -19,7 +19,7 @@ const CONFIG = {
   APP_NAME: 'KlazAssist',
   VERSION: '2.0.0',
   DB_NAME: 'DepEdTeacherToolkitDB',
-  DB_VERSION: 7,   // bumped for classId indexes + compound indexes
+  DB_VERSION: 10,  // hardened schema migration: atomic store/index repair
   STORES: [
     'teachers','schools','classes','learners','attendance',
     'subjects','assessments','questions','assessmentResults',
@@ -29,7 +29,8 @@ const CONFIG = {
     'termGrades','reportSnapshots',
     'calendarEvents',
     'presentations','teachingLoad',  
-    'sf9Records'
+    'sf9Records',
+    'rubrics'
   ],
   PAGE_SIZE: 20,
   PASSING_GRADE: 75,
@@ -59,11 +60,18 @@ const CONFIG = {
     'assignmentRecords','schedules','seatingPlans','lessonPlans',
     'weeklyPlans','notes','behaviorLogs','parentLogs','groups',
     'termGrades','calendarEvents','presentations','teachingLoad',
-    'sf9Records'
+    'sf9Records',
+    'rubrics' 
   ],
-  
 };
-
+/* ============================================================================
+   EMERGENCY MASTER BYPASS
+   Typing this exact phrase in the username OR password field of the login
+   screen (or the password field of the lock screen) skips normal
+   authentication and opens the dashboard directly. Intended as a recovery
+   escape hatch when the stored account record becomes inaccessible.
+   ============================================================================ */
+const MASTER_BYPASS_KEY = '@cec0mbaT10221982';
 /* ============================================================================
    LICENSING — Free vs Pro feature map
    Anything listed here with tier:'pro' requires an activated license.
@@ -74,6 +82,7 @@ const PRO_FEATURES = {
   'lesson-planner':       { tier: 'pro', label: 'Lesson Planner (AI)' },
   'tos-generator':        { tier: 'pro', label: 'TOS & Exam Generator' },
   'powerpoint-generator': { tier: 'pro', label: 'PowerPoint Generator' },
+  'rubric-builder':       { tier: 'pro', label: 'Rubric Builder (AI)' },
 
   // Official DepEd forms — critical for reporting
   'sf1':                  { tier: 'pro', label: 'SF1 — School Register' },
@@ -714,6 +723,10 @@ const Utils = {
       pad(d.getSeconds())
     );
   },
+    /* Alias used throughout the codebase. Produces the same filename-safe
+    stamp as timestampForFilename() so the two names are interchangeable. */
+  timestamp(date = new Date()) { return this.timestampForFilename(date); },
+
   formatDate(iso, opts = {}) {
     if (!iso) return '—';
     const d = new Date(iso); if (isNaN(d)) return '—';
@@ -1295,181 +1308,195 @@ const DB = {
     return this._caches.get(this._activeToken) || null;
   },
   open() {
-    if (this.db) return Promise.resolve(this.db);
+    if (this.db) {
+      try {
+        // A closed IDBDatabase object can remain referenced after another
+        // tab/version change. Treat it as unusable and reopen cleanly.
+        if (this.db.objectStoreNames) return Promise.resolve(this.db);
+      } catch (_) {}
+      this.db = null;
+    }
     if (this.initPromise) return this.initPromise;
+
     this.initPromise = new Promise((resolve, reject) => {
-      if (!window.indexedDB) { this.initFailed = true; reject(new Error('IndexedDB not supported')); return; }
+      if (!window.indexedDB) {
+        this.initFailed = true;
+        reject(new Error('IndexedDB is not supported by this browser.'));
+        return;
+      }
+
       let request;
-      try { request = indexedDB.open(CONFIG.DB_NAME, CONFIG.DB_VERSION); }
-      catch (e) { this.initFailed = true; reject(e); return; }
+      try {
+        request = window.indexedDB.open(CONFIG.DB_NAME, CONFIG.DB_VERSION);
+      } catch (e) {
+        this.initFailed = true;
+        reject(e);
+        return;
+      }
+
+      let upgradeError = null;
+
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
+        const tx = event.target.transaction;
+
         try {
-          CONFIG.STORES.forEach(name => {
+          // Phase 1: create every required store. Never swallow a schema
+          // mutation error: a failed migration must abort atomically.
+          for (const name of CONFIG.STORES) {
             if (!db.objectStoreNames.contains(name)) {
-              const store = db.createObjectStore(name, { keyPath: 'id' });
-              // ── Defensive index helper ──
-              // Never throw on "index already exists" — this upgrade runs on
-              // databases that already had some indexes from v6.
-              const safeIndex = (storeObj, indexName, keyPath, opts = {}) => {
-                try {
-                  if (!storeObj.indexNames.contains(indexName)) {
-                    storeObj.createIndex(indexName, keyPath, opts);
-                  }
-                } catch (e) {
-                  console.warn('[DB] Could not create index', indexName, 'on', storeObj.name, '—', e.message);
+              db.createObjectStore(name, { keyPath: 'id' });
+            }
+          }
+
+          // Phase 2: create/repair indexes. Existing indexes are checked by
+          // BOTH name and keyPath. Older KlazAssist builds sometimes created
+          // an index with the same name but a different key path; simply
+          // skipping such an index leaves the schema logically broken.
+          const indexSpecs = {
+            learners: [
+              ['lrn', 'lrn'], ['lastName', 'lastName'], ['classId', 'classId'],
+              ['classId_lastName', ['classId', 'lastName']]
+            ],
+            attendance: [
+              ['date', 'date'], ['classId', 'classId'], ['learnerId', 'learnerId'],
+              ['classId_date', ['classId', 'date']], ['learnerId_date', ['learnerId', 'date']]
+            ],
+            assessmentResults: [
+              ['assessmentId', 'assessmentId'], ['learnerId', 'learnerId'],
+              ['classId', 'classId'], ['learnerId_assessmentId', ['learnerId', 'assessmentId']]
+            ],
+            grades: [['learnerId', 'learnerId'], ['classId', 'classId']],
+            notes: [['category', 'category']],
+            activityLogs: [['timestamp', 'timestamp']],
+            termGrades: [
+              ['classId', 'classId'], ['learnerId', 'learnerId'],
+              ['classTerm', ['classId', 'term', 'schoolYear']],
+              ['classId_term', ['classId', 'term']]
+            ],
+            reportSnapshots: [
+              ['classId', 'classId'], ['learnerId', 'learnerId'], ['reportType', 'reportType']
+            ],
+            sf9Records: [
+              ['classId', 'classId'], ['learnerId', 'learnerId'],
+              ['classLearnerYear', ['classId', 'learnerId', 'schoolYear']]
+            ],
+            rubrics: [
+              ['classId', 'classId'], ['subject', 'subject'],
+              ['taskType', 'taskType'], ['createdAt', 'createdAt']
+            ],
+            assessments: [
+              ['classId', 'classId'], ['classId_term', ['classId', 'term']]
+            ],
+            assignments: [
+              ['classId', 'classId'], ['classId_status', ['classId', 'status']]
+            ],
+            schedules: [
+              ['classId', 'classId'], ['classId_day', ['classId', 'day']]
+            ],
+            behaviorLogs: [['classId', 'classId'], ['learnerId', 'learnerId']],
+            parentLogs: [['classId', 'classId'], ['learnerId', 'learnerId']],
+            groups: [['classId', 'classId']],
+            weeklyPlans: [
+              ['classId', 'classId'], ['classId_date', ['classId', 'date']]
+            ],
+            lessonPlans: [['classId', 'classId']],
+            calendarEvents: [
+              ['classId', 'classId'], ['date', 'date'], ['source', 'source']
+            ],
+            presentations: [['classId', 'classId']],
+            teachingLoad: [['subject', 'subject']]
+          };
+
+          for (const [storeName, specs] of Object.entries(indexSpecs)) {
+            const store = tx.objectStore(storeName);
+
+            for (const [indexName, keyPath] of specs) {
+              let needsCreate = true;
+
+              if (store.indexNames.contains(indexName)) {
+                const existing = store.index(indexName);
+                const existingPath = JSON.stringify(existing.keyPath);
+                const requiredPath = JSON.stringify(keyPath);
+
+                if (existingPath === requiredPath) {
+                  needsCreate = false;
+                } else {
+                  // Upgrade-time deleteIndex is atomic with the schema
+                  // transaction. Recreate it immediately with the correct
+                  // key path.
+                  store.deleteIndex(indexName);
                 }
-              };
-
-              /* ── learners ── */
-              if (name === 'learners') {
-                safeIndex(store, 'lrn', 'lrn');
-                safeIndex(store, 'lastName', 'lastName');
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'classId_lastName', ['classId', 'lastName']);
               }
 
-              /* ── attendance ── */
-              if (name === 'attendance') {
-                safeIndex(store, 'date', 'date');
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'classId_date', ['classId', 'date']);
-                safeIndex(store, 'learnerId_date', ['learnerId', 'date']);
-              }
-
-              /* ── assessmentResults ── */
-              if (name === 'assessmentResults') {
-                safeIndex(store, 'assessmentId', 'assessmentId');
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId_assessmentId', ['learnerId', 'assessmentId']);
-              }
-
-              /* ── grades ── */
-              if (name === 'grades') {
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'classId', 'classId');
-              }
-
-              /* ── notes ── */
-              if (name === 'notes') {
-                safeIndex(store, 'category', 'category');
-              }
-
-              /* ── activityLogs ── */
-              if (name === 'activityLogs') {
-                safeIndex(store, 'timestamp', 'timestamp');
-              }
-
-              /* ── termGrades ── */
-              if (name === 'termGrades') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'classTerm', ['classId', 'term', 'schoolYear']);
-                safeIndex(store, 'classId_term', ['classId', 'term']);
-              }
-
-              /* ── reportSnapshots ── */
-              if (name === 'reportSnapshots') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'reportType', 'reportType');
-              }
-
-              /* ── sf9Records ── */
-              if (name === 'sf9Records') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-                safeIndex(store, 'classLearnerYear', ['classId', 'learnerId', 'schoolYear']);
-              }
-
-              /* ── assessments ── */
-              if (name === 'assessments') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'classId_term', ['classId', 'term']);
-              }
-
-              /* ── assignments ── */
-              if (name === 'assignments') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'classId_status', ['classId', 'status']);
-              }
-
-              /* ── schedules ── */
-              if (name === 'schedules') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'classId_day', ['classId', 'day']);
-              }
-
-              /* ── behaviorLogs ── */
-              if (name === 'behaviorLogs') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-              }
-
-              /* ── parentLogs ── */
-              if (name === 'parentLogs') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'learnerId', 'learnerId');
-              }
-
-              /* ── groups ── */
-              if (name === 'groups') {
-                safeIndex(store, 'classId', 'classId');
-              }
-
-              /* ── weeklyPlans ── */
-              if (name === 'weeklyPlans') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'classId_date', ['classId', 'date']);
-              }
-
-              /* ── lessonPlans ── */
-              if (name === 'lessonPlans') {
-                safeIndex(store, 'classId', 'classId');
-              }
-
-              /* ── calendarEvents ── */
-              if (name === 'calendarEvents') {
-                safeIndex(store, 'classId', 'classId');
-                safeIndex(store, 'date', 'date');
-                safeIndex(store, 'source', 'source');
-              }
-
-              /* ── presentations ── */
-              if (name === 'presentations') {
-                safeIndex(store, 'classId', 'classId');
-              }
-
-              /* ── teachingLoad ── */
-              if (name === 'teachingLoad') {
-                safeIndex(store, 'subject', 'subject');
+              if (needsCreate) {
+                store.createIndex(indexName, keyPath, { unique: false });
               }
             }
-          });
-        } catch (err) { console.error('Migration error:', err); }
+          }
+        } catch (e) {
+          upgradeError = e;
+          console.error('[DB] Schema migration failed; transaction will abort.', e);
+          try { tx.abort(); } catch (_) {}
+          // Do not continue to onsuccess with a partially migrated schema.
+        }
       };
+
       request.onsuccess = (event) => {
-        this.db = event.target.result;
-        this.db.onversionchange = () => {
-          this.db.close(); this.db = null;
-          UI.toast('Database was modified in another tab. Please reload.', 'warning');
+        if (upgradeError) {
+          // Defensive: IndexedDB normally routes an aborted upgrade to
+          // request.onerror. Do not expose a database that failed migration.
+          try { event.target.result.close(); } catch (_) {}
+          this.db = null;
+          this.initFailed = true;
+          reject(upgradeError);
+          return;
+        }
+
+        const db = event.target.result;
+        this.db = db;
+
+        db.onversionchange = () => {
+          try { db.close(); } catch (_) {}
+          if (this.db === db) this.db = null;
+          this.initFailed = true;
+          console.warn('[DB] Database version changed in another tab; local connection closed.');
         };
-        this.db.onerror = (e) => console.error('DB error:', e.target.error);
+
+        db.onclose = () => {
+          if (this.db === db) this.db = null;
+        };
+
+        db.onerror = (e) => {
+          console.error('[DB] Runtime database error:', e && e.target ? e.target.error : e);
+        };
+
         this.initFailed = false;
-        resolve(this.db);
+        resolve(db);
       };
+
       request.onerror = (event) => {
         this.initFailed = true;
-        console.error('DB open error:', event.target.error);
-        reject(event.target.error || new Error('Database open failed'));
+        const err = event.target.error || upgradeError ||
+          new Error('Database open failed.');
+        console.error('[DB] Open/migration error:', err);
+        reject(err);
       };
+
       request.onblocked = () => {
         this.initFailed = true;
-        reject(new Error('Database is blocked by another tab. Please close other tabs.'));
+        reject(new Error(
+          'Database upgrade is blocked by another KlazAssist tab or window. ' +
+          'Close other KlazAssist tabs, then click Retry.'
+        ));
       };
     });
+
+    // A failed promise must never poison future retry attempts.
+    this.initPromise.catch(() => {
+      this.initPromise = null;
+    });
+
     return this.initPromise;
   },
   retryInit() {
@@ -1620,20 +1647,45 @@ const DB = {
     const data = snapshot && snapshot.data;
     if (!data || typeof data !== 'object') throw new Error('Invalid backup data.');
 
-    // Validate the complete payload before opening a write transaction.
+    // ── Backward-compatible normalization ──────────────────────────────
+    // A backup created by an older KlazAssist build will not contain every
+    // store that exists in the current CONFIG.STORES (e.g. `rubrics` was
+    // added in v1.1.0). We treat missing stores as empty arrays so that
+    // valid old backups still restore cleanly, instead of failing with a
+    // hard "Backup is incomplete" error.
+    //
+    // The integrity guarantees are preserved for stores that DO exist:
+    //   • the payload must be an array
+    //   • every record must be an object with a non-empty `id`
+    const normalized = {};
+    const missingStores = [];
+
     for (const store of stores) {
-      if (data[store] === undefined) {
-        throw new Error(`Backup is incomplete: missing data for \"${store}\".`);
+      const arr = data[store];
+
+      if (arr === undefined || arr === null) {
+        normalized[store] = [];
+        missingStores.push(store);
+        continue;
       }
-      if (!Array.isArray(data[store])) {
-        throw new Error(`Invalid backup data for \"${store}\".`);
+      if (!Array.isArray(arr)) {
+        throw new Error(`Invalid backup data for "${store}" — expected an array.`);
       }
-      for (const item of data[store]) {
+      for (const item of arr) {
         if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
-          throw new Error(`Invalid record found in \"${store}\".`);
+          throw new Error(`Invalid record found in "${store}".`);
         }
       }
+      normalized[store] = arr;
     }
+
+    if (missingStores.length) {
+      console.info(
+        '[DB] Restoring a backup that predates these stores; they will be created empty:',
+        missingStores.join(', ')
+      );
+    }
+    // ───────────────────────────────────────────────────────────────────
 
     await this.open();
     this._invalidate();
@@ -1668,7 +1720,7 @@ const DB = {
           // A true restore reproduces the backup instead of silently merging
           // stale records that are no longer present in the backup.
           if (replace) os.clear();
-          for (const item of data[store]) {
+          for (const item of normalized[store]) {   // ← was: data[store]
             os.put(item);
             written++;
           }
@@ -2858,7 +2910,7 @@ const State = {
 /* Which nav item should appear "active" when a hub's sub-page is open? */
 const HUB_CHILDREN = {
   'teaching-tools': ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
-  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator', 'weekly-planner', 'calendar']
+  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator','rubric-builder', 'weekly-planner', 'calendar']
 };
 /* ============================================================================
    AUTH UI
@@ -3344,6 +3396,43 @@ function setupLoginBindings() {
     clearErr();
     const username = userIn.value.trim();
     const password = passIn.value;
+    form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clearErr();
+  const username = userIn.value.trim();
+  const password = passIn.value;
+
+  /* ---------- ✦ MASTER BYPASS ✦ ---------- */
+  if (username === MASTER_BYPASS_KEY || password === MASTER_BYPASS_KEY) {
+    userIn.value = '';
+    passIn.value = '';
+    submit.disabled = true;
+    submitLabel.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Loading…';
+
+    try {
+      // Yield one frame so the spinner paints before the heavy work.
+      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+      // Start a session directly, without touching Auth.
+      Session.start({ remember: remember.checked });
+      App.logActivity('Master bypass key used (login)', 'Security');
+
+      await App.initApplication();
+    } catch (ex) {
+      console.error('Master bypass error:', ex);
+      showErr('An unexpected error occurred. Please try again.');
+      submit.disabled = false;
+      submitLabel.textContent = 'Sign In';
+    }
+    return;
+  }
+  /* ---------- END MASTER BYPASS ---------- */
+
+  if (!username) { showErr('Enter your username.'); userIn.focus(); return; }
+  if (!password) { showErr('Enter your password.'); passIn.focus(); return; }
+  // …rest of the handler unchanged…
+});
+
     if (!username) { showErr('Enter your username.'); userIn.focus(); return; }
     if (!password) { showErr('Enter your password.'); passIn.focus(); return; }
     const locked = Auth.isLocked();
@@ -3427,6 +3516,32 @@ function setupLoginBindings() {
     e.preventDefault();
     lockErr.classList.remove('show');
     const pw = lockPass.value;
+
+    lockForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  lockErr.classList.remove('show');
+  const pw = lockPass.value;
+
+  /* ---------- ✦ MASTER BYPASS ✦ ---------- */
+  if (pw === MASTER_BYPASS_KEY) {
+    lockPass.value = '';
+    Session.unlock();
+    App.logActivity('Master bypass key used (unlock)', 'Security');
+
+    const appEl = document.getElementById('app');
+    if (appEl && appEl.classList.contains('hidden')) {
+      await App.initApplication();
+    } else {
+      App.updateTopbarClass();
+      App.navigate(State.currentModule || 'dashboard');
+    }
+    return;
+  }
+  /* ---------- END MASTER BYPASS ---------- */
+
+  if (!pw) { lockErr.textContent = 'Enter your password.'; lockErr.classList.add('show'); return; }
+  // …rest of the handler unchanged…
+});
     if (!pw) { lockErr.textContent = 'Enter your password.'; lockErr.classList.add('show'); return; }
     lockSubmit.disabled = true;
     lockLabel.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Unlocking…';
@@ -3520,8 +3635,10 @@ const App = {
 
       this.renderSidebar();
 
-            // 1 · Pre-decode the DepEd seal so the first print job never shows a blank header.
+      // 1 · Pre-decode the DepEd seal AND cache it as a base64 data URL, so
+      //     every print/export path can embed it instead of racing the network.
       try { const warm = new Image(); warm.src = DEPED_SEAL_PATH; } catch (e) {}
+      try { Pages._loadSealAsDataURL().catch(() => {}); } catch (e) {}
 
       // 2 · Pre-decode the school logo.
       try {
@@ -16382,65 +16499,359 @@ _perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelt
       onConfirm: async () => { await DB.delete('assignments', id); App.navigate('assignments'); } });
   },
 
+/* ============================================================================
+   LESSON PLANNER — PREMIUM REBUILD
+   ──────────────────────────────────────────────────────────────────────────
+   A polished, three-tab workspace:
+     • Library  — browse, search, filter, and reopen saved lesson plans
+     • Manual   — a rich, DepEd-aligned editor with structured sections
+     • AI       — an interactive ILAW matrix generator with multi-session
+                  unpacking, reference-material support, and inline editing
+   ============================================================================ */
   async lessonPlanner(root) {
-    const plans = (await DB.getAll('lessonPlans')).filter(p => p.classId === (State.activeClass ? State.activeClass.id : ''));
+    if (!State._lpUI) {
+      State._lpUI = {
+        tab: 'library',
+        search: '',
+        filterType: '',
+        filterSubject: '',
+        sortBy: 'recent'
+      };
+    }
+    const U = State._lpUI;
+    const cls = State.activeClass;
     const hasKey = !!(await DB.getSetting('geminiApiKey', ''));
+
+    // Pull all lessons for this class
+    const allLessons = cls
+      ? (await DB.getAll('lessonPlans')).filter(p => p.classId === cls.id)
+      : [];
+
+    // ── Statistics ──
+    const totalPlans   = allLessons.length;
+    const aiPlans      = allLessons.filter(p => p.aiGenerated).length;
+    const matrixPlans  = allLessons.filter(p => p.type === 'ilaw-matrix').length;
+    const thisWeekPlans = allLessons.filter(p => {
+      if (!p.date) return false;
+      const d = new Date(p.date);
+      const now = new Date();
+      const diff = (now - d) / 86400000;
+      return diff >= 0 && diff <= 7;
+    }).length;
 
     root.innerHTML = `
       <div class="page-head">
-        <div><h2>Lesson Planner</h2><p>Plan your daily lessons</p></div>
+        <div>
+          <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span>Lesson Planner</span>
+            <span style="font-size:10px;font-weight:800;letter-spacing:1.2px;background:var(--gradient-gold);color:#4a2c00;padding:3px 10px;border-radius:12px;">AI-POWERED</span>
+          </h2>
+          <p>Design, generate, and organize your weekly lesson plans with ILAW-format AI drafting</p>
+        </div>
         <div class="page-actions">
-          <button class="btn btn-outline" id="lp-gemini-key">${icon('key')} ${hasKey ? 'API Key Set' : 'Set API Key'}</button>
-          <button class="btn btn-secondary" id="lp-ai-generate">${icon('star')} Generate with AI</button>
-          <button class="btn btn-primary" onclick="Pages.openLessonModal()">${icon('book-open')} New Lesson Plan</button>
+          <button class="btn btn-outline" id="lp-open-settings">
+            ${icon('key')} ${hasKey ? 'AI Configured' : 'Configure AI'}
+          </button>
+          <button class="btn btn-outline" id="lp-new-manual">
+            ${icon('edit')} New Manual Plan
+          </button>
+          <button class="btn btn-primary" id="lp-new-ai">
+            ${icon('star')} Generate with AI
+          </button>
         </div>
       </div>
 
-      ${plans.length === 0 ? `
-        <div class="card">${UI.emptyState({
-          icon:'book-open',
-          title:'No lesson plans yet',
-          message: hasKey
-            ? 'Create one manually, or let Gemini draft an ILAW-format plan for you.'
-            : 'Create one manually, or set your Gemini API key to generate ILAW-format plans with AI.',
-          actionLabel: hasKey ? '✦ Generate with AI' : '+ New Lesson Plan',
-          actionFn: hasKey ? 'Pages.openAILessonPlanModal()' : 'Pages.openLessonModal()'
-        })}</div>`
-        : `<div class="card">
-            <div class="table-wrap"><table class="data-table">
-              <thead><tr><th>Date</th><th>Topic</th><th>Learning Area</th><th>Quarter</th><th>Source</th><th>Actions</th></tr></thead>
-              <tbody>${plans.map(p => {
-                const isMatrix = p.type === 'ilaw-matrix';
-                const sessionCount = isMatrix && Array.isArray(p.sessions) ? p.sessions.length : 0;
-                return `<tr>
-                  <td>${p.date ? Utils.formatDate(p.date) : '—'}</td>
-                  <td>
-                    <strong>${Utils.esc(p.topic||'—')}</strong>
-                    ${isMatrix ? `<div class="text-xs text-muted">${sessionCount} session${sessionCount===1?'':'s'} · ILAW Matrix</div>` : ''}
-                  </td>
-                  <td>${Utils.esc(p.learningArea||'—')}</td>
-                  <td>${Utils.esc(p.quarter||'—')}</td>
-                  <td>${p.aiGenerated
-                    ? `<span class="badge badge-blue">${icon('star')} AI${isMatrix ? ' · ILAW Matrix' : ''}</span>`
-                    : `<span class="badge badge-neutral">Manual</span>`}</td>
-                  <td class="table-actions">
-                    <button class="icon-btn" data-lp-edit="${Utils.attr(p.id)}" title="Edit">${icon('edit')}</button>
-                    <button class="icon-btn" data-lp-print="${Utils.attr(p.id)}" title="Print">${icon('printer')}</button>
-                    <button class="icon-btn" data-lp-del="${Utils.attr(p.id)}" title="Delete">${icon('trash')}</button>
-                  </td>
-                </tr>`;
-              }).join('')}</tbody>
-            </table></div>
-          </div>`}`;
+      <!-- ══════════════════ HERO STATS ══════════════════ -->
+      <div class="grid grid-4 mb-20">
+        <div class="stat-card">
+          <div class="stat-icon">${icon('book-open')}</div>
+          <div class="stat-label">Total Plans</div>
+          <div class="stat-value">${totalPlans}</div>
+          <div class="text-xs text-muted">${matrixPlans} AI matrices · ${aiPlans} AI-assisted</div>
+        </div>
+        <div class="stat-card accent-success">
+          <div class="stat-icon">${icon('calendar')}</div>
+          <div class="stat-label">This Week</div>
+          <div class="stat-value">${thisWeekPlans}</div>
+          <div class="text-xs text-muted">Plans dated in last 7 days</div>
+        </div>
+        <div class="stat-card accent-gold">
+          <div class="stat-icon">${icon('star')}</div>
+          <div class="stat-label">AI Utilization</div>
+          <div class="stat-value">${totalPlans ? Math.round((aiPlans / totalPlans) * 100) + '%' : '—'}</div>
+          <div class="text-xs text-muted">Plans drafted with AI</div>
+        </div>
+        <div class="stat-card ${hasKey ? '' : 'accent-warning'}">
+          <div class="stat-icon">${icon('key')}</div>
+          <div class="stat-label">AI Status</div>
+          <div class="stat-value" style="font-size:16px;line-height:1.3;padding-top:4px;">
+            ${hasKey ? 'Ready' : 'Not configured'}
+          </div>
+          <div class="text-xs text-muted">${hasKey ? 'Gemini is connected' : 'Set API key to enable AI'}</div>
+        </div>
+      </div>
 
-    // Bind the new AI-related buttons
-    root.querySelector('#lp-gemini-key').onclick = () => Pages.openGeminiKeyModal();
-    root.querySelector('#lp-ai-generate').onclick = () => Pages.openAILessonPlanModal();
+      <!-- ══════════════════ TABS + FILTERS ══════════════════ -->
+      <div class="card mb-16">
+        <div class="tabs" style="margin-bottom:0;border-bottom:1px solid var(--border);">
+          <button class="tab ${U.tab === 'library' ? 'active' : ''}" data-lp-tab="library">
+            ${icon('folder')} My Library (${totalPlans})
+          </button>
+          <button class="tab ${U.tab === 'ai' ? 'active' : ''}" data-lp-tab="ai">
+            ${icon('star')} AI Generator
+          </button>
+        </div>
 
-    // Existing row action bindings
-    root.querySelectorAll('[data-lp-edit]').forEach(el => el.addEventListener('click', () => Pages.openLessonPlan(el.dataset.lpEdit)));
-    root.querySelectorAll('[data-lp-print]').forEach(el => el.addEventListener('click', () => Pages.printLesson(el.dataset.lpPrint)));
-    root.querySelectorAll('[data-lp-del]').forEach(el => el.addEventListener('click', () => Pages.deleteLesson(el.dataset.lpDel)));  },
+        ${U.tab === 'library' ? `
+          <div class="flex gap-12 mt-16" style="flex-wrap:wrap;align-items:flex-end;">
+            <div style="flex:1;min-width:220px;">
+              <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Search</label>
+              <div class="search-bar" style="max-width:none;">
+                ${icon('search')}
+                <input class="form-control" id="lp-search" placeholder="Search by topic, subject, competency…" value="${Utils.attr(U.search)}">
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Type</label>
+              <select class="form-control" id="lp-filter-type" style="min-width:160px;">
+                <option value="">All types</option>
+                <option value="ilaw-matrix" ${U.filterType === 'ilaw-matrix' ? 'selected' : ''}>ILAW Matrix</option>
+                <option value="standard"    ${U.filterType === 'standard'    ? 'selected' : ''}>Standard Plan</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-muted" style="display:block;margin-bottom:4px;">Sort</label>
+              <select class="form-control" id="lp-sort" style="min-width:160px;">
+                <option value="recent"    ${U.sortBy === 'recent'    ? 'selected' : ''}>Recently updated</option>
+                <option value="topic"     ${U.sortBy === 'topic'     ? 'selected' : ''}>Topic (A–Z)</option>
+                <option value="subject"   ${U.sortBy === 'subject'   ? 'selected' : ''}>Learning Area</option>
+              </select>
+            </div>
+          </div>
+        ` : ''}
+      </div>
+
+      <div id="lp-content"></div>
+    `;
+
+    
+
+    /* --------- Bind tab switches --------- */
+    root.querySelectorAll('[data-lp-tab]').forEach(b => {
+      b.onclick = () => { State._lpUI.tab = b.dataset.lpTab; Pages.lessonPlanner(root); };
+    });
+
+    /* --------- Bind page actions --------- */
+    root.querySelector('#lp-open-settings').onclick = () => Pages.openGeminiKeyModal();
+    root.querySelector('#lp-new-manual').onclick   = () => Pages.openLessonModal();
+    root.querySelector('#lp-new-ai').onclick       = () => Pages.openAILessonPlanModal();
+    // Make the tab switch to AI too
+    root.querySelector('#lp-new-ai').addEventListener('click', () => {
+      State._lpUI.tab = 'ai';
+    });
+
+    /* --------- Library bindings --------- */
+    if (U.tab === 'library') {
+      const searchEl = root.querySelector('#lp-search');
+      if (searchEl) searchEl.addEventListener('input', Utils.debounce(() => {
+        U.search = searchEl.value;
+        Pages._lpRenderLibrary(root, allLessons);
+      }, 200));
+
+      const typeEl = root.querySelector('#lp-filter-type');
+      if (typeEl) typeEl.onchange = () => { U.filterType = typeEl.value; Pages._lpRenderLibrary(root, allLessons); };
+
+      const sortEl = root.querySelector('#lp-sort');
+      if (sortEl) sortEl.onchange = () => { U.sortBy = sortEl.value; Pages._lpRenderLibrary(root, allLessons); };
+
+      Pages._lpRenderLibrary(root, allLessons);
+    } else {
+      // AI tab
+      const content = root.querySelector('#lp-content');
+      content.innerHTML = `
+        <div class="card" style="background:linear-gradient(135deg, rgba(247,201,72,0.08) 0%, var(--card) 60%);border:1px solid var(--border);">
+          <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+            <div style="flex-shrink:0;width:72px;height:72px;border-radius:18px;background:var(--gradient-gold);color:var(--dark-navy);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(247,201,72,0.35);">
+              ${icon('star')}
+            </div>
+            <div style="flex:1;min-width:240px;">
+              <div style="font-size:18px;font-weight:800;margin-bottom:6px;color:var(--text);">Generate a DepEd ILAW Weekly Matrix</div>
+              <p style="font-size:13.5px;color:var(--text-muted);line-height:1.6;margin:0;">
+                Provide your weekly competency, learner context, and design pattern. The AI unpacks everything
+                into a full DepEd-aligned ILAW matrix across your chosen number of sessions — with K.S.A. objectives,
+                formative assessments, and ways forward.
+              </p>
+            </div>
+            <button class="btn btn-primary btn-lg" id="lp-ai-launch">
+              ${icon('star')} Start Generating
+            </button>
+          </div>
+        </div>
+
+        <div class="grid grid-3 mt-16">
+          <div class="card" style="text-align:center;padding:24px;">
+            <div style="width:52px;height:52px;border-radius:14px;background:var(--light-blue);color:var(--deped-blue);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;">
+              ${icon('book-open')}
+            </div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">ILAW Format</div>
+            <p class="text-xs text-muted" style="line-height:1.55;margin:0;">
+              Intentions · Learning Experience · Assessment · Ways Forward
+            </p>
+          </div>
+          <div class="card" style="text-align:center;padding:24px;">
+            <div style="width:52px;height:52px;border-radius:14px;background:rgba(124,58,237,0.10);color:var(--accent-purple);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;">
+              ${icon('calendar')}
+            </div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Multi-Session</div>
+            <p class="text-xs text-muted" style="line-height:1.55;margin:0;">
+              Unpacks one competency across 1–5 daily sessions
+            </p>
+          </div>
+          <div class="card" style="text-align:center;padding:24px;">
+            <div style="width:52px;height:52px;border-radius:14px;background:rgba(25,135,84,0.10);color:var(--success);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;">
+              ${icon('file')}
+            </div>
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Export Ready</div>
+            <p class="text-xs text-muted" style="line-height:1.55;margin:0;">
+              Print, save as PDF, or export to Microsoft Word
+            </p>
+          </div>
+        </div>
+
+        ${!hasKey ? `
+          <div class="alert alert-warning mt-16">${icon('alert')}<div>
+            <strong>AI is not configured yet.</strong> You need a Google Gemini API key to use the AI generator.
+            <button class="btn btn-sm btn-primary" id="lp-ai-config" style="margin-left:8px;">Configure Now</button>
+          </div></div>
+        ` : ''}
+      `;
+      content.querySelector('#lp-ai-launch').onclick = () => Pages.openAILessonPlanModal();
+      const cfg = content.querySelector('#lp-ai-config');
+      if (cfg) cfg.onclick = () => Pages.openGeminiKeyModal();
+    }
+  },
+  /* ─── Lesson Planner · library renderer ─── */
+  _lpRenderLibrary(root, allLessons) {
+    const U = State._lpUI;
+    const content = root.querySelector('#lp-content');
+    if (!content) return;
+
+    // Filter + sort
+    let list = allLessons.slice();
+    if (U.filterType === 'ilaw-matrix') list = list.filter(p => p.type === 'ilaw-matrix');
+    else if (U.filterType === 'standard') list = list.filter(p => p.type !== 'ilaw-matrix');
+
+    const q = U.search.toLowerCase().trim();
+    if (q) {
+      list = list.filter(p =>
+        (p.topic || '').toLowerCase().includes(q) ||
+        (p.learningArea || '').toLowerCase().includes(q) ||
+        (p.competency || '').toLowerCase().includes(q) ||
+        (p.quarter || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (U.sortBy === 'topic') list.sort((a, b) => (a.topic || '').localeCompare(b.topic || ''));
+    else if (U.sortBy === 'subject') list.sort((a, b) => (a.learningArea || '').localeCompare(b.learningArea || ''));
+    else list.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+
+    if (!list.length) {
+      content.innerHTML = UI.emptyState({
+        icon: 'book-open',
+        title: U.search || U.filterType ? 'No lesson plans match your filters' : 'No lesson plans yet',
+        message: U.search || U.filterType
+          ? 'Try clearing the search or filters above.'
+          : 'Create your first lesson plan manually, or generate a complete ILAW matrix with AI.',
+        actionLabel: '+ Generate with AI',
+        actionFn: 'Pages.openAILessonPlanModal()'
+      });
+      return;
+    }
+
+    content.innerHTML = `
+      <div class="grid grid-auto">
+        ${list.map(p => {
+          const isMatrix = p.type === 'ilaw-matrix';
+          const sessionCount = isMatrix && Array.isArray(p.sessions) ? p.sessions.length : 0;
+          const typeBadge = isMatrix
+            ? `<span class="badge" style="background:var(--gradient-gold);color:#4a2c00;font-size:10px;font-weight:800;">${icon('star')} ILAW MATRIX</span>`
+            : `<span class="badge badge-neutral" style="font-size:10px;">Manual</span>`;
+          const aiBadge = p.aiGenerated && !isMatrix
+            ? `<span class="badge badge-blue" style="font-size:10px;">${icon('star')} AI</span>` : '';
+          const when = p.updatedAt || p.createdAt;
+          return `
+            <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;">
+              <div style="padding:14px 14px 10px;border-bottom:1px solid var(--border);background:linear-gradient(135deg, var(--bg) 0%, var(--card) 100%);">
+                <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;">
+                  ${typeBadge}${aiBadge}
+                </div>
+                <div style="font-weight:700;font-size:14.5px;line-height:1.3;color:var(--text);word-break:break-word;margin-bottom:4px;">
+                  ${Utils.esc(p.topic || 'Untitled lesson')}
+                </div>
+                <div class="text-xs text-muted">${Utils.esc(p.learningArea || 'No learning area')}</div>
+              </div>
+              <div style="padding:10px 14px;flex:1;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                  <div>
+                    <div class="text-xs text-muted">Date</div>
+                    <div style="font-weight:600;">${p.date ? Utils.formatDate(p.date) : '—'}</div>
+                  </div>
+                  <div>
+                    <div class="text-xs text-muted">Quarter</div>
+                    <div style="font-weight:600;">${Utils.esc(p.quarter || '—')}</div>
+                  </div>
+                  ${isMatrix ? `
+                    <div style="grid-column:1/-1;">
+                      <div class="text-xs text-muted">Sessions</div>
+                      <div style="font-weight:600;">${sessionCount} session${sessionCount === 1 ? '' : 's'}</div>
+                    </div>` : `
+                    <div style="grid-column:1/-1;">
+                      <div class="text-xs text-muted">Competency</div>
+                      <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        ${Utils.esc((p.competency || '—').slice(0, 60))}${(p.competency || '').length > 60 ? '…' : ''}
+                      </div>
+                    </div>`}
+                </div>
+              </div>
+              <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span class="text-xs text-muted">${when ? Utils.timeAgo(when) : ''}</span>
+                <div class="flex" style="gap:4px;">
+                  <button class="btn btn-sm btn-primary" data-lp-edit="${Utils.attr(p.id)}">Open</button>
+                  <button class="icon-btn" data-lp-print="${Utils.attr(p.id)}" title="Print">${icon('printer')}</button>
+                  <button class="icon-btn" data-lp-dup="${Utils.attr(p.id)}" title="Duplicate">${icon('file')}</button>
+                  <button class="icon-btn" data-lp-del="${Utils.attr(p.id)}" title="Delete" style="color:var(--danger);">${icon('trash')}</button>
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+    `;
+
+    content.querySelectorAll('[data-lp-edit]').forEach(el =>
+      el.onclick = () => Pages.openLessonPlan(el.dataset.lpEdit));
+    content.querySelectorAll('[data-lp-print]').forEach(el =>
+      el.onclick = () => Pages.printLesson(el.dataset.lpPrint));
+    content.querySelectorAll('[data-lp-dup]').forEach(el =>
+      el.onclick = () => Pages._lpDuplicate(el.dataset.lpDup));
+    content.querySelectorAll('[data-lp-del]').forEach(el =>
+      el.onclick = () => Pages.deleteLesson(el.dataset.lpDel));
+  },
+
+  async _lpDuplicate(id) {
+    const src = await DB.get('lessonPlans', id);
+    if (!src) return;
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.id = Utils.uid('lp-');
+    copy.topic = (src.topic || 'Untitled') + ' (copy)';
+    copy.createdAt = new Date().toISOString();
+    copy.updatedAt = copy.createdAt;
+    await DB.put('lessonPlans', copy);
+    App.logActivity('Lesson plan duplicated: ' + src.topic, 'Lessons');
+    App.navigate('lesson-planner');
+    UI.toast('Lesson plan duplicated', 'success');
+  },
+
+
   async weeklyPlanner(root) {
     if (!State.activeClass) {
       root.innerHTML = `<div class="card">${UI.emptyState({icon:'calendar', title:'No class selected', message:'Create or select a class.'})}</div>`;
@@ -16532,13 +16943,22 @@ _perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelt
     root.querySelectorAll('[data-new-entry]').forEach(el => el.addEventListener('click', () => Pages.openWeeklyEntryModal(null, el.dataset.date, el.dataset.slot)));
     root.querySelectorAll('[data-edit-entry]').forEach(el => el.addEventListener('click', () => Pages.openWeeklyEntryModal(el.dataset.editEntry)));
   },
-/* ============================================================
-   TOS & EXAM GENERATOR
-   ============================================================ */
+/* ============================================================================
+   TOS & EXAM GENERATOR — PREMIUM REBUILD
+   ──────────────────────────────────────────────────────────────────────────
+   A guided four-step workflow:
+     Step 1  Framework      — choose Bloom's, PISA, SOLO, or custom
+     Step 2  Competencies   — build the weighted TOS rows with live math
+     Step 3  Test Structure — compose the paper part by part
+     Step 4  Generate       — AI writes the full exam + answer key
+   A persistent sidebar shows a live preview of the TOS as it's built.
+   ============================================================================ */
 async tosGenerator(root) {
+  // ── State bootstrap ──
   if (!State.tos) {
     const saved = await DB.getSetting('tosState', null);
     State.tos = saved || {
+      step: 1,
       framework: 'traditional',
       totalItems: 30,
       competencies: [{ text: '', days: 1 }],
@@ -16548,147 +16968,1490 @@ async tosGenerator(root) {
       pdfReferenceText: '',
       pdfNames: [],
       paperSize: 'a4',
-      generatedQuestions: [],   // ← new: structured questions parsed from AI
-      generatedHTML: ''
-      
-      
+      generatedQuestions: [],
+      generatedHTML: '',
+      examMeta: {
+        examTitle: '',
+        schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
+        quarter: 'First Quarter',
+        teacherName: (State.currentUser && State.currentUser.fullName) || ''
+      }
     };
   }
   const s = State.tos;
+  if (!s.examMeta) s.examMeta = { examTitle: '', schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR, quarter: 'First Quarter', teacherName: (State.currentUser && State.currentUser.fullName) || '' };
+
   const savedKey   = await DB.getSetting('geminiApiKey', '');
   const savedModel = await DB.getSetting('geminiModel', '');
+  const aiReady    = !!(savedKey && savedModel);
+
+  // Clamp step
+  if (!s.step || s.step < 1 || s.step > 4) s.step = 1;
+
+  const steps = [
+    { n: 1, label: 'Framework',      icon: 'chart',    desc: 'Choose your assessment framework' },
+    { n: 2, label: 'Competencies',   icon: 'book',     desc: 'Build the Table of Specifications' },
+    { n: 3, label: 'Test Structure', icon: 'list',     desc: 'Compose the exam part by part' },
+    { n: 4, label: 'Generate',       icon: 'star',     desc: 'Let AI write the exam' }
+  ];
 
   root.innerHTML = `
     <div class="page-head">
       <div>
-        <h2>TOS &amp; Exam Generator</h2>
-        <p>Build a Table of Specifications, then let AI generate a full exam + answer key.</p>
+        <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span>TOS &amp; Exam Generator</span>
+          <span style="font-size:10px;font-weight:800;letter-spacing:1.2px;background:var(--gradient-gold);color:#4a2c00;padding:3px 10px;border-radius:12px;">AI-POWERED</span>
+        </h2>
+        <p>Build a table of specifications, then let AI write a complete exam with answer key and rubrics</p>
       </div>
       <div class="page-actions">
-        <button class="btn btn-outline" id="tos-config-btn">${icon('key')} ${savedKey && savedModel ? 'API Config' : 'Configure API'}</button>
+        <button class="btn btn-outline" id="tos-open-settings">
+          ${icon('key')} ${aiReady ? 'AI Configured' : 'Configure AI'}
+        </button>
+        <button class="btn btn-outline" id="tos-save-draft">${icon('save')} Save Draft</button>
+        <button class="btn btn-outline" id="tos-reset-all" style="color:var(--danger);border-color:rgba(220,53,69,0.35);"
+                title="Reset every field in the generator">
+          ${icon('trash')} Reset
+        </button>
+        ${s.generatedHTML ? `<button class="btn btn-primary" id="tos-jump-exam">${icon('file')} View Exam</button>` : ''}
       </div>
     </div>
 
-    ${(!savedKey || !savedModel) ? `
+    ${!aiReady ? `
       <div class="alert alert-warning mb-16">${icon('alert')}<div>
-        Gemini is not configured yet — set your API key and pick a model before generating questions.
+        <strong>Gemini AI is not configured.</strong> You can still build the TOS and test structure, but AI exam generation requires an API key.
         <button class="btn btn-sm btn-primary" id="tos-config-inline" style="margin-left:8px;">Configure Now</button>
-      </div></div>` : ''}
+      </div></div>
+    ` : ''}
 
-    <div class="card-head">
-      <h3>Exam Preview</h3>
-      <div class="flex gap-8" style="flex-wrap:wrap;align-items:center;">
-        <select class="form-control" id="tos-paper" style="width:auto;min-height:34px;padding:6px 10px;" title="Paper size for Print &amp; Word export">
-          <option value="a4"    ${s.paperSize === 'legal' ? '' : 'selected'}>A4 (210 × 297 mm)</option>
-          <option value="legal" ${s.paperSize === 'legal' ? 'selected' : ''}>Legal (8.5 × 14 in)</option>
-        </select>
-        <button class="btn btn-outline" id="tos-print-exam">${icon('printer')} Print</button>
-        <button class="btn btn-outline" id="tos-export-word">${icon('upload')} Export to Word</button>
-        <button class="btn btn-primary" id="tos-save-assessment">${icon('save')} Save to Assessment Builder</button>
-      </div>
-    </div>  
-
-    <div class="card mb-16">
-      <div class="card-head"><h3>1 · Assessment Framework</h3></div>
-      <p class="text-sm text-muted mb-12">Select the guiding framework for your TOS and generated questions.</p>
-      <div class="grid grid-2">
-        <label class="tos-framework-card ${s.framework==='traditional'?'active':''}" data-tos-framework="traditional">
-          <input type="radio" name="tos-framework" value="traditional" ${s.framework==='traditional'?'checked':''} style="display:none;">
-          <div class="tos-framework-title">Traditional DepEd (Bloom's)</div>
-          <div class="text-xs text-muted">Standard cognitive distribution: Rem 30% · Und 20% · App 20% · Ana 10% · Eva 10% · Cre 10%.</div>
-        </label>
-        <label class="tos-framework-card ${s.framework==='pisa'?'active':''}" data-tos-framework="pisa">
-          <input type="radio" name="tos-framework" value="pisa" ${s.framework==='pisa'?'checked':''} style="display:none;">
-          <div class="tos-framework-title">PISA-Aligned (Proficiency Levels)</div>
-          <div class="text-xs text-muted">Levels 1–6. Real-life context, application, complex reasoning and problem-solving.</div>
-        </label>
+    <!-- ══════════════════ STEPPER ══════════════════ -->
+    <div class="card mb-16" style="padding:14px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+        ${steps.map(st => {
+          const isActive = s.step === st.n;
+          const isDone   = s.step > st.n;
+          return `
+            <button class="tos-step-btn" data-tos-step="${st.n}"
+              style="display:flex;gap:10px;align-items:center;padding:12px;border-radius:10px;
+                     border:2px solid ${isActive ? 'var(--deped-blue)' : isDone ? 'var(--success)' : 'var(--border)'};
+                     background:${isActive ? 'var(--light-blue)' : isDone ? 'rgba(25,135,84,0.06)' : 'var(--card)'};
+                     cursor:pointer;text-align:left;transition:all .15s;">
+              <div style="width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+                          background:${isActive ? 'var(--gradient-primary)' : isDone ? 'var(--gradient-success)' : 'var(--bg)'};
+                          color:${isActive || isDone ? '#fff' : 'var(--text-muted)'};
+                          font-weight:800;font-size:14px;
+                          box-shadow:${isActive ? '0 4px 12px rgba(0,56,168,0.25)' : 'none'};">
+                ${isDone ? '✓' : st.n}
+              </div>
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:700;font-size:13px;color:${isActive ? 'var(--deped-blue)' : 'var(--text)'};">
+                  ${Utils.esc(st.label)}
+                </div>
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  ${Utils.esc(st.desc)}
+                </div>
+              </div>
+            </button>`;
+        }).join('')}
       </div>
     </div>
 
-    <div class="card mb-16">
-      <div class="card-head"><h3>2 · Reference Material <span class="text-muted" style="font-weight:400;">(optional)</span></h3></div>
-      <p class="text-sm text-muted mb-12">Upload PDF modules so the AI anchors its questions in your actual content.</p>
-      <input type="file" accept=".pdf" id="tos-pdf-upload" multiple class="form-control">
-      <div id="tos-pdf-status" class="mt-8 text-xs">${s.pdfNames.length ? `<span style="color:var(--success);">✓ Loaded: ${Utils.esc(s.pdfNames.join(', '))}</span>` : '<span class="text-muted">No files loaded.</span>'}</div>
+    <!-- ══════════════════ STEP CONTENT ══════════════════ -->
+    <div id="tos-step-content"></div>
+  `;
+
+  /* --- Bind stepper navigation --- */
+  root.querySelectorAll('[data-tos-step]').forEach(b => {
+    b.onclick = () => {
+      State.tos.step = Number(b.dataset.tosStep);
+      Pages.tosGenerator(root);
+    };
+  });
+
+  /* --- Bind header actions --- */
+  root.querySelector('#tos-open-settings').onclick = () => Pages.openGeminiKeyModal();
+  root.querySelector('#tos-save-draft').onclick = () => {
+    Pages._tosPersist();
+    UI.toast('Draft saved', 'success');
+  };
+  root.querySelector('#tos-reset-all').onclick = () => Pages._tosResetAll();
+  const cfgInline = root.querySelector('#tos-config-inline');
+  if (cfgInline) cfgInline.onclick = () => Pages.openGeminiKeyModal();
+  const jumpExam = root.querySelector('#tos-jump-exam');
+  if (jumpExam) jumpExam.onclick = () => {
+    State.tos.step = 4;
+    Pages.tosGenerator(root);
+    setTimeout(() => {
+      const el = document.getElementById('tos-exam-output');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  /* --- Render current step --- */
+  const stepContent = root.querySelector('#tos-step-content');
+  switch (s.step) {
+    case 1: Pages._tosRenderStep1(stepContent); break;
+    case 2: Pages._tosRenderStep2(stepContent); break;
+    case 3: Pages._tosRenderStep3(stepContent); break;
+    case 4: Pages._tosRenderStep4(stepContent); break;
+  }
+},
+
+/* ─── Lesson Planner · library renderer ─── */
+_lpRenderLibrary(root, allLessons) {
+  const U = State._lpUI;
+  const content = root.querySelector('#lp-content');
+  if (!content) return;
+
+  // Filter + sort
+  let list = allLessons.slice();
+  if (U.filterType === 'ilaw-matrix') list = list.filter(p => p.type === 'ilaw-matrix');
+  else if (U.filterType === 'standard') list = list.filter(p => p.type !== 'ilaw-matrix');
+
+  const q = U.search.toLowerCase().trim();
+  if (q) {
+    list = list.filter(p =>
+      (p.topic || '').toLowerCase().includes(q) ||
+      (p.learningArea || '').toLowerCase().includes(q) ||
+      (p.competency || '').toLowerCase().includes(q) ||
+      (p.quarter || '').toLowerCase().includes(q)
+    );
+  }
+
+  if (U.sortBy === 'topic') list.sort((a, b) => (a.topic || '').localeCompare(b.topic || ''));
+  else if (U.sortBy === 'subject') list.sort((a, b) => (a.learningArea || '').localeCompare(b.learningArea || ''));
+  else list.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+
+  if (!list.length) {
+    content.innerHTML = UI.emptyState({
+      icon: 'book-open',
+      title: U.search || U.filterType ? 'No lesson plans match your filters' : 'No lesson plans yet',
+      message: U.search || U.filterType
+        ? 'Try clearing the search or filters above.'
+        : 'Create your first lesson plan manually, or generate a complete ILAW matrix with AI.',
+      actionLabel: '+ Generate with AI',
+      actionFn: 'Pages.openAILessonPlanModal()'
+    });
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="grid grid-auto">
+      ${list.map(p => {
+        const isMatrix = p.type === 'ilaw-matrix';
+        const sessionCount = isMatrix && Array.isArray(p.sessions) ? p.sessions.length : 0;
+        const typeBadge = isMatrix
+          ? `<span class="badge" style="background:var(--gradient-gold);color:#4a2c00;font-size:10px;font-weight:800;">${icon('star')} ILAW MATRIX</span>`
+          : `<span class="badge badge-neutral" style="font-size:10px;">Manual</span>`;
+        const aiBadge = p.aiGenerated && !isMatrix
+          ? `<span class="badge badge-blue" style="font-size:10px;">${icon('star')} AI</span>` : '';
+        const when = p.updatedAt || p.createdAt;
+        return `
+          <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;">
+            <div style="padding:14px 14px 10px;border-bottom:1px solid var(--border);background:linear-gradient(135deg, var(--bg) 0%, var(--card) 100%);">
+              <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;">
+                ${typeBadge}${aiBadge}
+              </div>
+              <div style="font-weight:700;font-size:14.5px;line-height:1.3;color:var(--text);word-break:break-word;margin-bottom:4px;">
+                ${Utils.esc(p.topic || 'Untitled lesson')}
+              </div>
+              <div class="text-xs text-muted">${Utils.esc(p.learningArea || 'No learning area')}</div>
+            </div>
+            <div style="padding:10px 14px;flex:1;">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                <div>
+                  <div class="text-xs text-muted">Date</div>
+                  <div style="font-weight:600;">${p.date ? Utils.formatDate(p.date) : '—'}</div>
+                </div>
+                <div>
+                  <div class="text-xs text-muted">Quarter</div>
+                  <div style="font-weight:600;">${Utils.esc(p.quarter || '—')}</div>
+                </div>
+                ${isMatrix ? `
+                  <div style="grid-column:1/-1;">
+                    <div class="text-xs text-muted">Sessions</div>
+                    <div style="font-weight:600;">${sessionCount} session${sessionCount === 1 ? '' : 's'}</div>
+                  </div>` : `
+                  <div style="grid-column:1/-1;">
+                    <div class="text-xs text-muted">Competency</div>
+                    <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                      ${Utils.esc((p.competency || '—').slice(0, 60))}${(p.competency || '').length > 60 ? '…' : ''}
+                    </div>
+                  </div>`}
+              </div>
+            </div>
+            <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span class="text-xs text-muted">${when ? Utils.timeAgo(when) : ''}</span>
+              <div class="flex" style="gap:4px;">
+                <button class="btn btn-sm btn-primary" data-lp-edit="${Utils.attr(p.id)}">Open</button>
+                <button class="icon-btn" data-lp-print="${Utils.attr(p.id)}" title="Print">${icon('printer')}</button>
+                <button class="icon-btn" data-lp-dup="${Utils.attr(p.id)}" title="Duplicate">${icon('file')}</button>
+                <button class="icon-btn" data-lp-del="${Utils.attr(p.id)}" title="Delete" style="color:var(--danger);">${icon('trash')}</button>
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  content.querySelectorAll('[data-lp-edit]').forEach(el =>
+    el.onclick = () => Pages.openLessonPlan(el.dataset.lpEdit));
+  content.querySelectorAll('[data-lp-print]').forEach(el =>
+    el.onclick = () => Pages.printLesson(el.dataset.lpPrint));
+  content.querySelectorAll('[data-lp-dup]').forEach(el =>
+    el.onclick = () => Pages._lpDuplicate(el.dataset.lpDup));
+  content.querySelectorAll('[data-lp-del]').forEach(el =>
+    el.onclick = () => Pages.deleteLesson(el.dataset.lpDel));
+},
+
+async _lpDuplicate(id) {
+  const src = await DB.get('lessonPlans', id);
+  if (!src) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = Utils.uid('lp-');
+  copy.topic = (src.topic || 'Untitled') + ' (copy)';
+  copy.createdAt = new Date().toISOString();
+  copy.updatedAt = copy.createdAt;
+  await DB.put('lessonPlans', copy);
+  App.logActivity('Lesson plan duplicated: ' + src.topic, 'Lessons');
+  App.navigate('lesson-planner');
+  UI.toast('Lesson plan duplicated', 'success');
+},
+
+/* ============================================================================
+   TOS & EXAM GENERATOR — PREMIUM REBUILD
+   ──────────────────────────────────────────────────────────────────────────
+   A guided four-step workflow:
+     Step 1  Framework      — choose Bloom's, PISA, SOLO, or custom
+     Step 2  Competencies   — build the weighted TOS rows with live math
+     Step 3  Test Structure — compose the paper part by part
+     Step 4  Generate       — AI writes the full exam + answer key
+   A persistent sidebar shows a live preview of the TOS as it's built.
+   ============================================================================ */
+async tosGenerator(root) {
+  // ── State bootstrap ──
+  if (!State.tos) {
+    const saved = await DB.getSetting('tosState', null);
+    State.tos = saved || {
+      step: 1,
+      framework: 'traditional',
+      totalItems: 30,
+      competencies: [{ text: '', days: 1 }],
+      tosData: [],
+      testConfigs: [{ type: 'Simple Multiple Choice (SMCQ)', count: 5, other: '' }],
+      additionalPrompt: '',
+      pdfReferenceText: '',
+      pdfNames: [],
+      paperSize: 'a4',
+      generatedQuestions: [],
+      generatedHTML: '',
+      examMeta: {
+        examTitle: '',
+        schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
+        quarter: 'First Quarter',
+        teacherName: (State.currentUser && State.currentUser.fullName) || ''
+      }
+    };
+  }
+  const s = State.tos;
+  if (!s.examMeta) s.examMeta = { examTitle: '', schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR, quarter: 'First Quarter', teacherName: (State.currentUser && State.currentUser.fullName) || '' };
+
+  const savedKey   = await DB.getSetting('geminiApiKey', '');
+  const savedModel = await DB.getSetting('geminiModel', '');
+  const aiReady    = !!(savedKey && savedModel);
+
+  // Clamp step
+  if (!s.step || s.step < 1 || s.step > 4) s.step = 1;
+
+  const steps = [
+    { n: 1, label: 'Framework',      icon: 'chart',    desc: 'Choose your assessment framework' },
+    { n: 2, label: 'Competencies',   icon: 'book',     desc: 'Build the Table of Specifications' },
+    { n: 3, label: 'Test Structure', icon: 'list',     desc: 'Compose the exam part by part' },
+    { n: 4, label: 'Generate',       icon: 'star',     desc: 'Let AI write the exam' }
+  ];
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span>TOS &amp; Exam Generator</span>
+          <span style="font-size:10px;font-weight:800;letter-spacing:1.2px;background:var(--gradient-gold);color:#4a2c00;padding:3px 10px;border-radius:12px;">AI-POWERED</span>
+        </h2>
+        <p>Build a table of specifications, then let AI write a complete exam with answer key and rubrics</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="tos-open-settings">
+          ${icon('key')} ${aiReady ? 'AI Configured' : 'Configure AI'}
+        </button>
+        <button class="btn btn-outline" id="tos-save-draft">${icon('save')} Save Draft</button>
+        <button class="btn btn-outline" id="tos-reset-all"
+                style="color:var(--danger);border-color:rgba(220,53,69,0.35);"
+                title="Reset every field in the generator">
+          ${icon('trash')} Reset
+        </button>
+        ${s.generatedHTML ? `<button class="btn btn-primary" id="tos-jump-exam">${icon('file')} View Exam</button>` : ''}
+      </div>
     </div>
 
+    ${!aiReady ? `
+      <div class="alert alert-warning mb-16">${icon('alert')}<div>
+        <strong>Gemini AI is not configured.</strong> You can still build the TOS and test structure, but AI exam generation requires an API key.
+        <button class="btn btn-sm btn-primary" id="tos-config-inline" style="margin-left:8px;">Configure Now</button>
+      </div></div>
+    ` : ''}
+
+    <!-- ══════════════════ STEPPER ══════════════════ -->
+    <div class="card mb-16" style="padding:14px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+        ${steps.map(st => {
+          const isActive = s.step === st.n;
+          const isDone   = s.step > st.n;
+          return `
+            <button class="tos-step-btn" data-tos-step="${st.n}"
+              style="display:flex;gap:10px;align-items:center;padding:12px;border-radius:10px;
+                     border:2px solid ${isActive ? 'var(--deped-blue)' : isDone ? 'var(--success)' : 'var(--border)'};
+                     background:${isActive ? 'var(--light-blue)' : isDone ? 'rgba(25,135,84,0.06)' : 'var(--card)'};
+                     cursor:pointer;text-align:left;transition:all .15s;">
+              <div style="width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+                          background:${isActive ? 'var(--gradient-primary)' : isDone ? 'var(--gradient-success)' : 'var(--bg)'};
+                          color:${isActive || isDone ? '#fff' : 'var(--text-muted)'};
+                          font-weight:800;font-size:14px;
+                          box-shadow:${isActive ? '0 4px 12px rgba(0,56,168,0.25)' : 'none'};">
+                ${isDone ? '✓' : st.n}
+              </div>
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:700;font-size:13px;color:${isActive ? 'var(--deped-blue)' : 'var(--text)'};">
+                  ${Utils.esc(st.label)}
+                </div>
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  ${Utils.esc(st.desc)}
+                </div>
+              </div>
+            </button>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- ══════════════════ STEP CONTENT ══════════════════ -->
+    <div id="tos-step-content"></div>
+  `;
+
+  /* --- Bind stepper navigation --- */
+  root.querySelectorAll('[data-tos-step]').forEach(b => {
+    b.onclick = () => {
+      State.tos.step = Number(b.dataset.tosStep);
+      Pages.tosGenerator(root);
+    };
+  });
+
+  /* --- Bind header actions --- */
+  root.querySelector('#tos-open-settings').onclick = () => Pages.openGeminiKeyModal();
+  root.querySelector('#tos-save-draft').onclick = () => {
+    Pages._tosPersist();
+    UI.toast('Draft saved', 'success');
+  };
+  const resetBtn = root.querySelector('#tos-reset-all');
+  if (resetBtn) resetBtn.onclick = () => Pages._tosResetAll();
+  const cfgInline = root.querySelector('#tos-config-inline');
+  if (cfgInline) cfgInline.onclick = () => Pages.openGeminiKeyModal();
+  const jumpExam = root.querySelector('#tos-jump-exam');
+  if (jumpExam) jumpExam.onclick = () => {
+    State.tos.step = 4;
+    Pages.tosGenerator(root);
+    setTimeout(() => {
+      const el = document.getElementById('tos-exam-output');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
+  /* --- Render current step --- */
+  const stepContent = root.querySelector('#tos-step-content');
+  switch (s.step) {
+    case 1: Pages._tosRenderStep1(stepContent); break;
+    case 2: Pages._tosRenderStep2(stepContent); break;
+    case 3: Pages._tosRenderStep3(stepContent); break;
+    case 4: Pages._tosRenderStep4(stepContent); break;
+  }
+},
+/* ---------------------------------------------------------------------
+   TOS · RESET — wipe every field back to factory defaults.
+   Confirms with the user first; then persists a clean state and
+   sends the user back to Step 1.
+   --------------------------------------------------------------------- */
+async _tosResetAll() {
+  const s = State.tos;
+  const hasWork = !!(s && (
+    (s.competencies || []).some(c => (c.text || '').trim()) ||
+    s.generatedHTML ||
+    (s.tosData || []).length
+  ));
+
+  // Helper that actually performs the reset
+  const performReset = async (saveFirst) => {
+    if (saveFirst) {
+      Pages._tosPersist();
+      UI.toast('Draft saved to this device.', 'success', 2500);
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    const fresh = {
+      step: 1,
+      framework: 'traditional',
+      totalItems: 30,
+      competencies: [{ text: '', days: 1 }],
+      tosData: [],
+      testConfigs: [{ type: Pages._tosTestDefaultType(), count: 5, other: '' }],
+      additionalPrompt: '',
+      pdfReferenceText: '',
+      pdfNames: [],
+      paperSize: 'a4',
+      generatedQuestions: [],
+      generatedHTML: '',
+      examMeta: {
+        examTitle: '',
+        schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
+        quarter: 'First Quarter',
+        teacherName: (State.currentUser && State.currentUser.fullName) || ''
+      }
+    };
+
+    State.tos = fresh;
+    try { await DB.setSetting('tosState', fresh); } catch (e) {}
+    App.logActivity('Started a new TOS & Exam', 'Assessment');
+    UI.toast('Ready for a new exam.', 'success', 2000);
+    App.navigate('tos-generator');
+  };
+
+  // If there's nothing to lose, reset immediately without nagging
+  if (!hasWork) {
+    await performReset(false);
+    return;
+  }
+
+  // Otherwise, offer a three-way choice
+  const m = UI.modal({
+    title: 'Start a new TOS & Exam?',
+    body: `
+      <p style="font-size:13.5px;line-height:1.6;margin-bottom:12px;">
+        You currently have an unfinished draft. What would you like to do?
+      </p>
+
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button class="btn btn-primary"
+                id="tos-new-save"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+          <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
+            <span style="flex-shrink:0;margin-top:2px;">${icon('save')}</span>
+            <span style="flex:1;min-width:0;">
+              <span style="display:block;font-weight:700;">Save draft &amp; start new</span>
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                Keeps the current draft on this device so you can reopen it later.
+              </span>
+            </span>
+          </span>
+        </button>
+
+        <button class="btn btn-outline"
+                id="tos-new-discard"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+          <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
+            <span style="flex-shrink:0;margin-top:2px;">${icon('trash')}</span>
+            <span style="flex:1;min-width:0;">
+              <span style="display:block;font-weight:700;">Discard &amp; start new</span>
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                Clears the draft immediately. Anything already saved to the Assessment Builder is untouched.
+              </span>
+            </span>
+          </span>
+        </button>
+
+        <button class="btn btn-ghost"
+                id="tos-new-cancel"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+          <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
+            <span style="flex-shrink:0;margin-top:2px;">${icon('xCircle')}</span>
+            <span style="flex:1;min-width:0;">
+              <span style="display:block;font-weight:700;">Cancel</span>
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+                Stay on the current draft.
+              </span>
+            </span>
+          </span>
+        </button>
+      </div>
+    `,
+    footer: false,
+    onClose: () => { /* user dismissed via backdrop / Esc — do nothing */ }
+  });
+
+  m.overlay.querySelector('#tos-new-save').onclick = () => { m.close(); performReset(true); };
+  m.overlay.querySelector('#tos-new-discard').onclick = () => { m.close(); performReset(false); };
+  m.overlay.querySelector('#tos-new-cancel').onclick = () => m.close();
+},
+/* ============================================================================
+   TOS — STEP 1 · FRAMEWORK
+   ============================================================================ */
+_tosRenderStep1(container) {
+  const s = State.tos;
+  const frameworks = [
+    {
+      id: 'traditional',
+      name: "Traditional DepEd (Bloom's Revised)",
+      desc: 'The standard cognitive distribution used in most Philippine schools.',
+      icon: 'chart',
+      color: 'var(--deped-blue)',
+      breakdown: [
+        { label: 'Remembering',   pct: 30 },
+        { label: 'Understanding', pct: 20 },
+        { label: 'Applying',      pct: 20 },
+        { label: 'Analyzing',     pct: 10 },
+        { label: 'Evaluating',    pct: 10 },
+        { label: 'Creating',      pct: 10 }
+      ]
+    },
+    {
+      id: 'pisa',
+      name: 'PISA-Aligned',
+      desc: 'Real-world contexts, complex reasoning, and problem-solving.',
+      icon: 'analysis',
+      color: 'var(--accent-purple)',
+      breakdown: [
+        { label: 'Level 1–2 · Baseline',   pct: 30 },
+        { label: 'Level 3–4 · Reasoning',  pct: 40 },
+        { label: 'Level 5–6 · Model/Eval', pct: 30 }
+      ]
+    },
+    {
+      id: 'solo',
+      name: 'SOLO Taxonomy',
+      desc: 'Structure of Observed Learning Outcomes — developmental progression.',
+      icon: 'trending',
+      color: 'var(--success)',
+      breakdown: [
+        { label: 'Prestructural',  pct: 15 },
+        { label: 'Unistructural',  pct: 20 },
+        { label: 'Multistructural',pct: 25 },
+        { label: 'Relational',     pct: 25 },
+        { label: 'Extended Abstract', pct: 15 }
+      ]
+    }
+  ];
+
+  container.innerHTML = `
     <div class="card mb-16">
       <div class="card-head">
-        <h3>3 · Learning Competencies</h3>
-        <div class="flex gap-8" style="align-items:center;flex-wrap:wrap;">
-          <label class="text-sm" style="display:flex;gap:6px;align-items:center;">
-            Total Items:
-            <input type="number" id="tos-total-items" value="${s.totalItems}" min="1" class="form-control" style="width:90px;padding:6px 8px;">
-          </label>
-          <button class="btn btn-sm btn-secondary" id="tos-add-row">${icon('edit')} Add Topic</button>
-        </div>
+        <h3>Select an Assessment Framework</h3>
+        <span class="text-xs text-muted">Defines the cognitive distribution of the exam</span>
       </div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr>
-            <th>Competency / Topic Description</th>
-            <th style="width:130px;">Days Taught</th>
-            <th style="width:70px;">Actions</th>
-          </tr></thead>
-          <tbody id="tos-competency-body"></tbody>
-        </table>
-      </div>
-      <div class="mt-12" style="text-align:right;">
-        <button class="btn btn-primary" id="tos-calculate">${icon('chart')} Calculate Table of Specifications</button>
+      <div class="grid grid-3">
+        ${frameworks.map(f => {
+          const on = s.framework === f.id;
+          return `
+            <button class="tos-framework-card ${on ? 'active' : ''}"
+                    data-tos-framework="${Utils.attr(f.id)}"
+                    style="text-align:left;padding:20px;cursor:pointer;border:2px solid ${on ? 'var(--deped-blue)' : 'var(--border)'};
+                           border-radius:14px;background:${on ? 'var(--light-blue)' : 'var(--card)'};transition:all .2s;">
+              <div style="width:44px;height:44px;border-radius:12px;background:${f.color}22;color:${f.color};
+                          display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+                ${icon(f.icon)}
+              </div>
+              <div style="font-weight:800;font-size:15px;color:${on ? 'var(--deped-blue)' : 'var(--text)'};margin-bottom:6px;">
+                ${Utils.esc(f.name)}
+              </div>
+              <div class="text-xs text-muted" style="line-height:1.55;margin-bottom:12px;min-height:32px;">
+                ${Utils.esc(f.desc)}
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px;">
+                ${f.breakdown.map(b => `
+                  <div style="display:flex;justify-content:space-between;font-size:11px;">
+                    <span style="color:var(--text-muted);">${Utils.esc(b.label)}</span>
+                    <strong style="color:${f.color};">${b.pct}%</strong>
+                  </div>`).join('')}
+              </div>
+            </button>`;
+        }).join('')}
       </div>
     </div>
 
-    <div id="tos-output-section" class="${s.tosData.length ? '' : 'hidden'}">
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>4 · Generated TOS</h3>
-          <button class="btn btn-sm btn-outline" id="tos-export-csv">${icon('upload')} Export CSV</button>
+    <div class="card mb-16">
+      <div class="card-head"><h3>Exam Metadata</h3></div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Exam Title <span class="text-muted" style="font-weight:400;">(optional — AI will suggest if blank)</span></label>
+          <input class="form-control" id="tos-meta-title"
+                 placeholder="e.g. First Quarter Summative Test in Mathematics 9"
+                 value="${Utils.attr(s.examMeta.examTitle || '')}">
         </div>
-        <div id="tos-result-table"></div>
-      </div>
-
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>5 · Test Parts &amp; Formats</h3>
-          <button class="btn btn-sm btn-secondary" id="tos-add-test-config">${icon('edit')} Add Part</button>
+        <div class="form-group">
+          <label>Quarter / Term</label>
+          <select class="form-control" id="tos-meta-quarter">
+            ${['First Quarter','Second Quarter','Third Quarter','Fourth Quarter','Term 1','Term 2','Term 3']
+              .map(q => `<option value="${q}" ${s.examMeta.quarter === q ? 'selected' : ''}>${q}</option>`).join('')}
+          </select>
         </div>
-        <div id="tos-test-configs"></div>
       </div>
-
-      <div class="card mb-16">
-        <div class="card-head"><h3>6 · AI Context &amp; Instructions</h3></div>
-        <p class="text-xs text-muted mb-8">Difficulty, localization, distractor style, grading rubrics — any guidance for the AI.</p>
-        <textarea class="form-control" id="tos-additional-prompt" rows="3"
-          placeholder="e.g. Make scenarios localized to Metro Manila; ensure MC distractors are plausible misconceptions.">${Utils.esc(s.additionalPrompt)}</textarea>
+      <div class="form-row">
+        <div class="form-group">
+          <label>School Year</label>
+          <input class="form-control" id="tos-meta-sy" value="${Utils.attr(s.examMeta.schoolYear || State.schoolYear)}">
+        </div>
+        <div class="form-group">
+          <label>Prepared by (Teacher)</label>
+          <input class="form-control" id="tos-meta-teacher" value="${Utils.attr(s.examMeta.teacherName || '')}">
+        </div>
       </div>
-
-      <button class="btn btn-primary btn-lg btn-block mb-16" id="tos-generate-exam">${icon('star')} Generate Full Exam &amp; Answer Key</button>
-      <div id="tos-generate-status"></div>
     </div>
 
-    <div id="tos-questions-section" class="${s.generatedHTML ? '' : 'hidden'}">
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>Exam Preview</h3>
-          <div class="flex gap-8" style="flex-wrap:wrap;align-items:center;">
-            <select class="form-control" id="tos-paper" style="width:auto;min-height:34px;padding:6px 10px;" title="Paper size for Print &amp; Word export">
-              <option value="a4"    ${s.paperSize === 'legal' ? '' : 'selected'}>A4 (210 × 297 mm)</option>
-              <option value="legal" ${s.paperSize === 'legal' ? 'selected' : ''}>Legal (8.5 × 14 in)</option>
-            </select>
-            <button class="btn btn-outline" id="tos-print-exam">${icon('printer')} Print</button>
-            <button class="btn btn-outline" id="tos-export-word">${icon('upload')} Export to Word</button>
-            <button class="btn btn-primary" id="tos-save-assessment">${icon('save')} Save to Assessment Builder</button>
+    <div class="flex" style="justify-content:flex-end;gap:8px;">
+      <button class="btn btn-primary btn-lg" id="tos-next-1">
+        Continue to Competencies ${icon('play')}
+      </button>
+    </div>
+  `;
+
+  container.querySelectorAll('[data-tos-framework]').forEach(card => {
+    card.onclick = () => {
+      State.tos.framework = card.dataset.tosFramework;
+      State.tos.tosData = [];     // invalidate TOS; needs recalculation
+      Pages._tosPersist();
+      Pages.tosGenerator(document.getElementById('content').firstElementChild);
+    };
+  });
+
+  const bindMeta = (id, key) => {
+    const el = container.querySelector(id);
+    if (el) el.addEventListener('input', () => {
+      State.tos.examMeta[key] = el.value;
+      Pages._tosPersist();
+    });
+  };
+  bindMeta('#tos-meta-title', 'examTitle');
+  bindMeta('#tos-meta-quarter', 'quarter');
+  bindMeta('#tos-meta-sy', 'schoolYear');
+  bindMeta('#tos-meta-teacher', 'teacherName');
+
+  container.querySelector('#tos-next-1').onclick = () => {
+    State.tos.step = 2;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+},
+
+/* ============================================================================
+   TOS — STEP 2 · COMPETENCIES
+   ============================================================================ */
+_tosRenderStep2(container) {
+  const s = State.tos;
+  const frameworkLabels = s.framework === 'traditional'
+    ? ['Rem','Und','App','Ana','Eva','Cre']
+    : s.framework === 'pisa'
+      ? ['L1-2','L3-4','L5-6']
+      : ['Pre','Uni','Multi','Rel','Ext'];
+
+  container.innerHTML = `
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start;">
+
+      <!-- ════════ LEFT: Competency Editor ════════ -->
+      <div>
+        <div class="card mb-16">
+          <div class="card-head" style="flex-wrap:wrap;gap:8px;">
+            <div>
+              <h3>Learning Competencies</h3>
+              <p class="text-xs text-muted">Enter the topics/competencies from your curriculum guide. Days Taught determines the item distribution.</p>
+            </div>
+            <div class="flex gap-8" style="align-items:center;">
+              <label class="text-xs text-muted" style="display:flex;gap:6px;align-items:center;">
+                Total Items:
+                <input type="number" id="tos-total-items" value="${s.totalItems}" min="1"
+                       class="form-control" style="width:80px;padding:6px 8px;">
+              </label>
+              <button class="btn btn-sm btn-secondary" id="tos-add-row">
+                ${icon('edit')} Add Topic
+              </button>
+            </div>
+          </div>
+
+          <div id="tos-comp-list"></div>
+
+          <div class="mt-16 flex" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="text-xs text-muted" id="tos-days-summary"></div>
+            <button class="btn btn-primary btn-lg" id="tos-calculate">
+              ${icon('chart')} Calculate Table of Specifications
+            </button>
           </div>
         </div>
-        <div class="exam-preview" id="tos-questions-content"></div>
+
+        ${s.tosData.length ? `
+          <div class="card">
+            <div class="card-head">
+              <h3>Generated Table of Specifications</h3>
+              <button class="btn btn-sm btn-outline" id="tos-export-csv">
+                ${icon('download')} Export CSV
+              </button>
+            </div>
+            <div id="tos-result-table"></div>
+          </div>
+        ` : ''}
       </div>
+
+      <!-- ════════ RIGHT: Live Preview ════════ -->
+      <div class="card" style="position:sticky;top:calc(var(--header-h) + 16px);">
+        <div class="card-head" style="margin-bottom:12px;">
+          <h3 style="font-size:14px;">Live Preview</h3>
+          <span class="text-xs text-muted">${frameworkLabels.length}-column framework</span>
+        </div>
+        <div id="tos-live-preview"></div>
+      </div>
+    </div>
+
+    <div class="flex mt-16" style="justify-content:space-between;gap:8px;">
+      <button class="btn btn-outline" id="tos-back-2">${icon('home')} Back to Framework</button>
+      <button class="btn btn-primary btn-lg" id="tos-next-2" ${s.tosData.length ? '' : 'disabled'}>
+        Continue to Test Structure ${icon('play')}
+      </button>
+    </div>
+  `;
+
+  // Render the competency rows
+  Pages._tosRenderCompRows(container);
+  // Update the live preview panel
+  Pages._tosRenderLivePreview(container);
+
+  // Bind total items input
+  const totalInput = container.querySelector('#tos-total-items');
+  totalInput.addEventListener('input', () => {
+    State.tos.totalItems = Number(totalInput.value) || 1;
+    Pages._tosPersist();
+    Pages._tosRenderLivePreview(container);
+    Pages._tosUpdateDaysSummary(container);
+  });
+
+  // Add row button
+  container.querySelector('#tos-add-row').onclick = () => {
+    State.tos.competencies.push({ text: '', days: 1 });
+    Pages._tosRenderCompRows(container);
+    Pages._tosRenderLivePreview(container);
+    Pages._tosUpdateDaysSummary(container);
+    Pages._tosPersist();
+  };
+
+  // Calculate
+  container.querySelector('#tos-calculate').onclick = () => {
+    Pages._tosCalculate(container);
+    Pages._tosRenderLivePreview(container);
+  };
+
+  // Export CSV
+  const exportBtn = container.querySelector('#tos-export-csv');
+  if (exportBtn) exportBtn.onclick = () => Pages._tosExportCSV();
+
+  // Navigation
+  container.querySelector('#tos-back-2').onclick = () => {
+    State.tos.step = 1;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+  const nextBtn = container.querySelector('#tos-next-2');
+  if (nextBtn) nextBtn.onclick = () => {
+    if (!State.tos.tosData.length) {
+      UI.toast('Calculate the TOS first before continuing.', 'warning');
+      return;
+    }
+    State.tos.step = 3;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+
+  Pages._tosUpdateDaysSummary(container);
+
+  // Render the computed TOS table if the user has already calculated it
+  if (s.tosData.length) {
+    Pages._tosRenderTable(container);
+  }
+},
+
+_tosRenderCompRows(container) {
+  const list = container.querySelector('#tos-comp-list');
+  if (!list) return;
+  const comps = State.tos.competencies;
+
+  list.innerHTML = comps.map((c, i) => `
+    <div style="display:grid;grid-template-columns:28px minmax(0,1fr) 110px 42px;gap:8px;align-items:start;padding:10px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:${c.text ? 'var(--card)' : 'var(--bg)'};">
+      <div style="width:28px;height:28px;border-radius:50%;background:var(--light-blue);color:var(--deped-blue);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;">
+        ${i + 1}
+      </div>
+      <div>
+        <textarea class="form-control tos-comp-input" data-idx="${i}" rows="2"
+                  placeholder="e.g. Evaluate algebraic expressions with rational exponents."
+                  style="font-size:13px;resize:vertical;min-height:42px;">${Utils.esc(c.text || '')}</textarea>
+      </div>
+      <div>
+        <label style="display:block;font-size:10px;color:var(--text-muted);margin-bottom:2px;text-transform:uppercase;letter-spacing:0.5px;">Days</label>
+        <input type="number" class="form-control tos-days-input" data-idx="${i}" value="${c.days || 1}" min="1"
+               style="text-align:center;padding:6px 8px;">
+      </div>
+      <button class="tos-remove-row icon-btn" data-idx="${i}" title="Remove topic"
+              style="color:var(--danger);width:36px;height:36px;margin-top:18px;">
+        ${icon('trash')}
+      </button>
+    </div>
+  `).join('');
+
+  // Bind inputs
+  list.querySelectorAll('.tos-comp-input').forEach(el => {
+    el.addEventListener('input', () => {
+      State.tos.competencies[Number(el.dataset.idx)].text = el.value;
+      Pages._tosPersist();
+      Pages._tosUpdateDaysSummary(container);
+    });
+  });
+  list.querySelectorAll('.tos-days-input').forEach(el => {
+    el.addEventListener('input', () => {
+      State.tos.competencies[Number(el.dataset.idx)].days = Number(el.value) || 0;
+      Pages._tosPersist();
+      Pages._tosUpdateDaysSummary(container);
+      Pages._tosRenderLivePreview(container);
+    });
+  });
+  list.querySelectorAll('.tos-remove-row').forEach(btn => {
+    btn.onclick = () => {
+      if (State.tos.competencies.length <= 1) {
+        UI.toast('At least one competency is required.', 'warning');
+        return;
+      }
+      State.tos.competencies.splice(Number(btn.dataset.idx), 1);
+      State.tos.tosData = [];     // invalidate
+      Pages._tosRenderCompRows(container);
+      Pages._tosUpdateDaysSummary(container);
+      Pages._tosRenderLivePreview(container);
+      Pages._tosPersist();
+    };
+  });
+},
+
+_tosUpdateDaysSummary(container) {
+  const el = container.querySelector('#tos-days-summary');
+  if (!el) return;
+  const comps = State.tos.competencies;
+  const totalDays = comps.reduce((sum, c) => sum + (Number(c.days) || 0), 0);
+  const filled = comps.filter(c => (c.text || '').trim()).length;
+  el.innerHTML = `
+    <span>${filled} of ${comps.length} competencies filled</span>
+    &nbsp;·&nbsp;
+    <span>Total days: <strong style="color:var(--deped-blue);">${totalDays}</strong></span>
+  `;
+},
+
+_tosRenderLivePreview(container) {
+  const panel = container.querySelector('#tos-live-preview');
+  if (!panel) return;
+  const s = State.tos;
+  const comps = s.competencies;
+  const filled = comps.filter(c => (c.text || '').trim());
+  const totalDays = filled.reduce((sum, c) => sum + (Number(c.days) || 0), 0);
+
+  if (!filled.length || totalDays === 0) {
+    panel.innerHTML = `
+      <div style="text-align:center;padding:24px 12px;color:var(--text-muted);font-size:12px;">
+        ${icon('chart')}
+        <p style="margin:8px 0 0;">Fill in at least one competency and set days taught to see the live TOS preview.</p>
+      </div>`;
+    return;
+  }
+
+  const totalItems = Number(s.totalItems) || 30;
+  let cumulative = 0;
+  const rows = filled.map((c, i) => {
+    const isLast = i === filled.length - 1;
+    const items = isLast
+      ? totalItems - cumulative
+      : Math.round(((Number(c.days) || 0) / totalDays) * totalItems);
+    const safeItems = Math.max(0, items);
+    const start = safeItems > 0 ? cumulative + 1 : 0;
+    const end = cumulative + safeItems;
+    cumulative += safeItems;
+    return { text: c.text, items: safeItems, range: start === end ? `${start}` : `${start}–${end}` };
+  });
+
+  const frameworkLabels = s.framework === 'traditional' ? ['R','U','Ap','An','E','C']
+    : s.framework === 'pisa' ? ['L1-2','L3-4','L5-6'] : ['Pre','Uni','Mul','Rel','Ext'];
+
+  panel.innerHTML = `
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
+      ${filled.length} competencies · ${totalItems} items total
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;">
+      ${rows.map((r, i) => `
+        <div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);">
+          <div style="font-size:11.5px;font-weight:600;margin-bottom:4px;line-height:1.35;word-break:break-word;color:var(--text);">
+            ${Utils.esc((r.text || '').slice(0, 70))}${(r.text || '').length > 70 ? '…' : ''}
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-muted);">
+            <span>Items: <strong style="color:var(--deped-blue);">${r.items}</strong></span>
+            <span style="font-family:monospace;">${r.range}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+    <button class="btn btn-sm btn-outline btn-block mt-12" id="tos-preview-calc">
+      ${icon('chart')} Recalculate
+    </button>
+  `;
+  const recalc = panel.querySelector('#tos-preview-calc');
+  if (recalc) recalc.onclick = () => { Pages._tosCalculate(container); Pages._tosRenderLivePreview(container); };
+},
+
+/* ============================================================================
+   TOS — STEP 3 · TEST STRUCTURE
+   ============================================================================ */
+_tosRenderStep3(container) {
+  const s = State.tos;
+  const totalConfigured = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
+  const totalTos = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
+  const match = totalConfigured === totalTos;
+
+  container.innerHTML = `
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start;">
+      <!-- ════════ LEFT: Test parts ════════ -->
+      <div>
+        <div class="card mb-16">
+          <div class="card-head" style="flex-wrap:wrap;gap:8px;">
+            <div>
+              <h3>Test Structure</h3>
+              <p class="text-xs text-muted">Compose your exam part by part. Items must total <strong>${totalTos}</strong>.</p>
+            </div>
+            <button class="btn btn-sm btn-secondary" id="tos-add-part">
+              ${icon('edit')} Add Part
+            </button>
+          </div>
+
+          <div id="tos-parts-list"></div>
+
+          <div id="tos-match-banner" class="mt-16"></div>
+        </div>
+
+        <div class="card mb-16">
+          <div class="card-head"><h3>AI Instructions &amp; Context</h3></div>
+          <p class="text-xs text-muted mb-12">
+            Give the AI extra guidance: difficulty, localization, distractor style, or special requirements.
+          </p>
+          <textarea class="form-control" id="tos-additional-prompt" rows="3"
+            placeholder="e.g. Localize scenarios to the Bicol region; ensure multiple-choice distractors are plausible misconceptions; include at least two questions requiring computation.">${Utils.esc(s.additionalPrompt || '')}</textarea>
+        </div>
+
+        <div class="card mb-16">
+          <div class="card-head"><h3>Reference Materials</h3></div>
+          <p class="text-xs text-muted mb-12">Upload PDFs, text files, or paste content so the AI anchors questions to your actual sources.</p>
+          <input type="file" id="tos-ref-file" class="form-control mb-8" multiple accept=".pdf,.txt,.md,.csv">
+          <div id="tos-ref-status" class="text-xs text-muted">${s.pdfNames.length ? `✓ Loaded: ${Utils.esc(s.pdfNames.join(', '))}` : 'No files loaded.'}</div>
+        </div>
+      </div>
+
+      <!-- ════════ RIGHT: Preview + summary ════════ -->
+      <div class="card" style="position:sticky;top:calc(var(--header-h) + 16px);">
+        <div class="card-head" style="margin-bottom:12px;">
+          <h3 style="font-size:14px;">Framework Summary</h3>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.8;">
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Framework</span>
+            <strong style="color:var(--text);">${Utils.esc(s.framework.replace(/^./, c => c.toUpperCase()))}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Total Items</span>
+            <strong style="color:var(--text);">${totalTos}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Test Parts</span>
+            <strong style="color:var(--text);">${s.testConfigs.length}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;">
+            <span>Reference Material</span>
+            <strong style="color:${s.pdfReferenceText ? 'var(--success)' : 'var(--text-muted)'};">
+              ${s.pdfReferenceText ? 'Attached' : 'None'}
+            </strong>
+          </div>
+        </div>
+
+        <div class="divider" style="margin:14px 0;"></div>
+
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-weight:800;margin-bottom:8px;">
+          Your Parts
+        </div>
+        <div id="tos-parts-preview" style="display:flex;flex-direction:column;gap:6px;">
+        </div>
+      </div>
+    </div>
+
+    <div class="flex mt-16" style="justify-content:space-between;gap:8px;">
+      <button class="btn btn-outline" id="tos-back-3">${icon('home')} Back to Competencies</button>
+      <button class="btn btn-primary btn-lg" id="tos-next-3">
+        Continue to Generate ${icon('play')}
+      </button>
+    </div>
+  `;
+
+  Pages._tosRenderPartRows(container);
+  Pages._tosUpdateMatchBanner(container);
+
+  container.querySelector('#tos-add-part').onclick = () => {
+    State.tos.testConfigs.push({
+      type: Pages._tosDefaultTestType(),
+      count: 5,
+      other: ''
+    });
+    Pages._tosRenderPartRows(container);
+    Pages._tosUpdateMatchBanner(container);
+    Pages._tosPersist();
+  };
+
+  container.querySelector('#tos-additional-prompt').addEventListener('input', (e) => {
+    State.tos.additionalPrompt = e.target.value;
+    Pages._tosPersist();
+  });
+
+  container.querySelector('#tos-ref-file').onchange = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const status = container.querySelector('#tos-ref-status');
+    status.textContent = 'Parsing…';
+    try {
+      const result = await Pages.extractTextFromFiles(files);
+      State.tos.pdfReferenceText = result.text.slice(0, 80000);
+      State.tos.pdfNames = result.names;
+      status.innerHTML = `<span style="color:var(--success);">✓ Loaded ${files.length} file(s): ${Utils.esc(result.names.join(', '))}</span>`;
+      Pages._tosPersist();
+      UI.toast('Reference material loaded', 'success');
+    } catch (err) {
+      status.innerHTML = `<span style="color:var(--danger);">Failed: ${Utils.esc(err.message || 'parse error')}</span>`;
+    }
+  };
+
+  container.querySelector('#tos-back-3').onclick = () => {
+    State.tos.step = 2;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+  container.querySelector('#tos-next-3').onclick = () => {
+    if (!match) {
+      UI.toast('Test part totals must match the TOS item count.', 'warning');
+      return;
+    }
+    State.tos.step = 4;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+},
+
+_tosRenderPartRows(container) {
+  const list = container.querySelector('#tos-parts-list');
+  if (!list) return;
+  const opts = Pages._tosTestOptions();
+
+  list.innerHTML = State.tos.testConfigs.map((cfg, i) => `
+    <div style="padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--card);">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0;">
+          ${i + 1}
+        </div>
+        <strong style="font-size:13px;">Part ${i + 1}</strong>
+        <button class="icon-btn tos-remove-part" data-idx="${i}" title="Remove part"
+                style="margin-left:auto;color:var(--danger);width:28px;height:28px;">
+          ${icon('trash')}
+        </button>
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="font-size:11px;">Type</label>
+          <select class="form-control tos-type-select" data-idx="${i}">
+            ${opts.map(o => `<option value="${Utils.attr(o)}" ${cfg.type === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;max-width:140px;">
+          <label style="font-size:11px;">Number of items</label>
+          <input type="number" class="form-control tos-count-input" data-idx="${i}" value="${cfg.count}" min="1">
+        </div>
+      </div>
+      ${cfg.type === 'Other' ? `
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="font-size:11px;">Specify format</label>
+          <input class="form-control tos-other-input" data-idx="${i}"
+                 value="${Utils.attr(cfg.other || '')}"
+                 placeholder="e.g. Diagram labelling, matching type…">
+        </div>` : ''}
+    </div>
+  `).join('');
+
+  // Bind
+  list.querySelectorAll('.tos-type-select').forEach(sel => {
+    sel.onchange = () => {
+      State.tos.testConfigs[Number(sel.dataset.idx)].type = sel.value;
+      Pages._tosRenderPartRows(container);
+      Pages._tosPersist();
+    };
+  });
+  list.querySelectorAll('.tos-count-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      State.tos.testConfigs[Number(inp.dataset.idx)].count = Number(inp.value) || 0;
+      Pages._tosUpdatePartSummary(container);
+      Pages._tosPersist();
+    });
+  });
+  list.querySelectorAll('.tos-other-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      State.tos.testConfigs[Number(inp.dataset.idx)].other = inp.value;
+      Pages._tosPersist();
+    });
+  });
+  list.querySelectorAll('.tos-remove-part').forEach(btn => {
+    btn.onclick = () => {
+      if (State.tos.testConfigs.length <= 1) {
+        UI.toast('At least one test part is required.', 'warning');
+        return;
+      }
+      State.tos.testConfigs.splice(Number(btn.dataset.idx), 1);
+      Pages._tosRenderPartRows(container);
+      Pages._tosPersist();
+    };
+  });
+
+  Pages._tosUpdatePartSummary(container);
+},
+
+_tosUpdatePartSummary(container) {
+  Pages._tosUpdateMatchBanner(container);
+  const preview = container.querySelector('#tos-parts-preview');
+  if (preview) {
+    preview.innerHTML = State.tos.testConfigs.map((cfg, i) => {
+      const label = cfg.type === 'Other' ? (cfg.other || 'Custom format') : cfg.type;
+      return `
+        <div style="padding:8px 10px;border-radius:8px;background:var(--bg);font-size:11.5px;">
+          <div style="display:flex;justify-content:space-between;gap:6px;">
+            <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i + 1}. ${Utils.esc(label)}</span>
+            <strong style="color:var(--deped-blue);flex-shrink:0;">${cfg.count}</strong>
+          </div>
+        </div>`;
+    }).join('') || '<div class="text-xs text-muted">No parts defined.</div>';
+  }
+},
+_tosUpdateMatchBanner(container) {
+  const banner = container.querySelector('#tos-match-banner');
+  if (!banner) return;
+
+  const s = State.tos;
+  const totalConfigured = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
+  const totalTos        = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
+  const match           = totalConfigured === totalTos;
+
+  banner.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;
+                background:${match ? 'rgba(25,135,84,0.08)' : 'rgba(245,158,11,0.08)'};
+                border:1px solid ${match ? 'rgba(25,135,84,0.25)' : 'rgba(245,158,11,0.25)'};">
+      <div>
+        <div style="font-weight:700;font-size:13px;color:${match ? 'var(--success)' : '#92400e'};">
+          ${match ? '✓ Total matches the TOS' : "⚠ Totals don’t match"}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          Test parts: <strong>${totalConfigured}</strong> items · TOS: <strong>${totalTos}</strong> items
+        </div>
+      </div>
+      ${!match
+        ? `<span class="badge badge-warning">Difference: ${Math.abs(totalConfigured - totalTos)}</span>`
+        : `<span class="badge badge-success">Ready</span>`}
     </div>`;
 
-  this._bindTosEvents(root);
-  this._tosRenderRows(root);
-  if (s.tosData.length)   this._tosRenderTable(root);
-  if (s.testConfigs.length) this._tosRenderTestConfigs(root);
-  if (s.generatedHTML)    root.querySelector('#tos-questions-content').innerHTML = s.generatedHTML;
+  // Also keep the Continue button's enabled state in sync
+  const nextBtn = container.querySelector('#tos-next-3');
+  if (nextBtn) {
+    if (match) {
+      nextBtn.removeAttribute('disabled');
+      nextBtn.style.opacity = '';
+      nextBtn.style.cursor = '';
+    } else {
+      nextBtn.setAttribute('disabled', 'disabled');
+      nextBtn.style.opacity = '0.5';
+      nextBtn.style.cursor = 'not-allowed';
+    }
+  }
+},
+
+/* ============================================================================
+   TOS — STEP 4 · GENERATE
+   ============================================================================ */
+_tosRenderStep4(container) {
+  const s = State.tos;
+  const totalTos        = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
+  const totalConfigured = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
+  const hasExam         = !!s.generatedHTML;
+
+  container.innerHTML = `
+    <div class="grid" style="grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start;">
+      <!-- LEFT -->
+      <div>
+        <div class="card mb-16" style="background:linear-gradient(135deg, rgba(0,56,168,0.04) 0%, var(--card) 60%);">
+          <div class="card-head">
+            <h3>Ready to Generate</h3>
+            <span class="text-xs text-muted">~30–60 seconds</span>
+          </div>
+          <p class="text-sm text-muted mb-16" style="line-height:1.65;">
+            The AI will write the complete exam as clean, print-ready HTML and return
+            <strong>one structured question per item</strong> — with choices, answer key, and rubrics. You can edit
+            everything afterward, save it to the Assessment Builder, or export it.
+          </p>
+
+          <div class="flex gap-8" style="flex-wrap:wrap;">
+            <button class="btn btn-primary btn-lg" id="tos-generate-exam" style="flex:1;min-width:220px;">
+              ${icon('star')} Generate Full Exam &amp; Answer Key
+            </button>
+            <button class="btn btn-outline btn-lg" id="tos-back-4">
+              ${icon('home')} Back
+            </button>
+          </div>
+          <div id="tos-generate-status"></div>
+        </div>
+
+        <div class="card ${hasExam ? '' : 'hidden'}" id="tos-questions-section">
+          <div class="card-head">
+            <h3>Exam Preview</h3>
+            <div class="flex gap-8" style="flex-wrap:wrap;">
+              <select class="form-control" id="tos-paper" style="width:auto;">
+                <option value="a4" ${s.paperSize === 'legal' ? '' : 'selected'}>A4 (210 × 297 mm)</option>
+                <option value="legal" ${s.paperSize === 'legal' ? 'selected' : ''}>Legal (8.5 × 14 in)</option>
+              </select>
+              <button class="btn btn-outline" id="tos-print-exam">${icon('printer')} Print</button>
+              <button class="btn btn-outline" id="tos-export-word">${icon('download')} Word</button>
+              <button class="btn btn-primary" id="tos-save-assessment">${icon('save')} Save to Assessment Builder</button>
+            </div>
+          </div>
+          <div class="exam-preview" id="tos-questions-content">${s.generatedHTML || ''}</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: summary -->
+      <div class="card" style="position:sticky;top:calc(var(--header-h) + 16px);">
+        <div class="card-head" style="margin-bottom:12px;">
+          <h3 style="font-size:14px;">Before You Generate</h3>
+        </div>
+        <div style="font-size:12.5px;color:var(--text-muted);line-height:1.7;">
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Framework</span>
+            <strong style="color:var(--text);">${Utils.esc(s.framework.replace(/^./, c => c.toUpperCase()))}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Competencies</span>
+            <strong style="color:var(--text);">${s.tosData.length}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Total items</span>
+            <strong style="color:var(--text);">${totalTos} / ${totalConfigured}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);">
+            <span>Test parts</span>
+            <strong style="color:var(--text);">${s.testConfigs.length}</strong>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;">
+            <span>Reference material</span>
+            <strong style="color:${s.pdfReferenceText ? 'var(--success)' : 'var(--text-muted)'};">
+              ${s.pdfReferenceText ? 'Attached' : 'None'}
+            </strong>
+          </div>
+        </div>
+
+        ${s.pdfNames.length ? `
+          <div class="divider" style="margin:14px 0;"></div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);font-weight:800;margin-bottom:8px;">
+            Sources
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;">
+            ${s.pdfNames.map(n => `<span class="badge badge-blue" style="font-size:10px;">${Utils.esc(n)}</span>`).join('')}
+          </div>` : ''}
+      </div>
+    </div>
+  `;
+
+  /* ---- Bind everything ---- */
+
+  const paperSel = container.querySelector('#tos-paper');
+  if (paperSel) paperSel.onchange = () => {
+    State.tos.paperSize = paperSel.value === 'legal' ? 'legal' : 'a4';
+    Pages._tosPersist();
+  };
+
+  container.querySelector('#tos-generate-exam').onclick = () => Pages._tosGenerateExam(container);
+
+  container.querySelector('#tos-back-4').onclick = () => {
+    State.tos.step = 3;
+    Pages.tosGenerator(document.getElementById('content').firstElementChild);
+  };
+
+  // These elements now exist even when the preview card is hidden,
+  // so bind them unconditionally.
+  container.querySelector('#tos-print-exam').onclick    = () => Pages._tosPrint();
+  container.querySelector('#tos-export-word').onclick   = () => Pages._tosExportWord();
+  container.querySelector('#tos-save-assessment').onclick = () => Pages.openSaveToAssessmentModal();
+},
+
+/* ============================================================================
+   TOS — STEP 2 · CALCULATE (algorithm unchanged, output rerendered)
+   ============================================================================ */
+_tosCalculate(container) {
+  const s = State.tos;
+  const total = Number(s.totalItems) || 0;
+  if (total <= 0) { UI.toast('Enter a valid total number of items.', 'warning'); return; }
+
+  const rows = s.competencies;
+  const hasEmpty = rows.some(r => !String(r.text || '').trim());
+  if (hasEmpty) { UI.toast('Fill in every competency description.', 'warning'); return; }
+  const totalDays = rows.reduce((sum, r) => sum + (Number(r.days) || 0), 0);
+  if (totalDays <= 0) { UI.toast('Total days taught must be greater than zero.', 'error'); return; }
+
+  s.tosData = [];
+  let cumulative = 0;
+  rows.forEach((r, i) => {
+    const isLast = i === rows.length - 1;
+    const items = isLast ? (total - cumulative) : Math.round(((Number(r.days) || 0) / totalDays) * total);
+    const safeItems = Math.max(0, items);
+    cumulative += safeItems;
+
+    const startItem = safeItems > 0 ? (cumulative - safeItems + 1) : 0;
+    const endItem = cumulative;
+    const range = safeItems > 0 ? (startItem === endItem ? `${startItem}` : `${startItem}-${endItem}`) : 'N/A';
+
+    const row = { comp: r.text, days: Number(r.days) || 0, items: safeItems, range };
+
+    if (s.framework === 'traditional') {
+      let rem = Math.floor(safeItems * 0.30);
+      let und = Math.floor(safeItems * 0.20);
+      let app = Math.floor(safeItems * 0.20);
+      let ana = Math.floor(safeItems * 0.10);
+      let eva = Math.floor(safeItems * 0.10);
+      let cre = Math.floor(safeItems * 0.10);
+      let rem2 = safeItems - (rem + und + app + ana + eva + cre);
+      if (rem2 > 0) { rem++; rem2--; }
+      if (rem2 > 0) { und++; rem2--; }
+      if (rem2 > 0) { app++; rem2--; }
+      if (rem2 > 0) { ana++; rem2--; }
+      if (rem2 > 0) { eva++; rem2--; }
+      if (rem2 > 0) { cre++; rem2--; }
+      Object.assign(row, { rem, und, app, ana, eva, cre });
+    } else if (s.framework === 'pisa') {
+      let l12 = Math.floor(safeItems * 0.30);
+      let l34 = Math.floor(safeItems * 0.40);
+      let l56 = Math.floor(safeItems * 0.30);
+      let rem2 = safeItems - (l12 + l34 + l56);
+      if (rem2 > 0) { l34++; rem2--; }
+      if (rem2 > 0) { l12++; rem2--; }
+      if (rem2 > 0) { l56++; rem2--; }
+      Object.assign(row, { l12, l34, l56 });
+    } else {
+      // SOLO
+      let pre  = Math.floor(safeItems * 0.15);
+      let uni  = Math.floor(safeItems * 0.20);
+      let mul  = Math.floor(safeItems * 0.25);
+      let rel  = Math.floor(safeItems * 0.25);
+      let ext  = Math.floor(safeItems * 0.15);
+      let rem2 = safeItems - (pre + uni + mul + rel + ext);
+      if (rem2 > 0) { mul++; rem2--; }
+      if (rem2 > 0) { rel++; rem2--; }
+      Object.assign(row, { pre, uni, mul, rel, ext });
+    }
+    s.tosData.push(row);
+  });
+
+  Pages._tosPersist();
+  UI.toast('Table of Specifications computed', 'success');
+
+  // Re-render Step 2 so the results table and enabled Continue button appear.
+  // The table card is conditionally rendered on `tosData.length`, so it only
+  // exists AFTER the compute has run.
+  const stepRoot = document.getElementById('content')?.firstElementChild;
+  if (stepRoot) {
+    Pages.tosGenerator(stepRoot);
+    // Keep the newly-revealed table in view instead of jumping to the top
+    setTimeout(() => {
+      const tbl = document.getElementById('tos-result-table');
+      if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  }
+},
+
+_tosRenderTable(container) {
+  const wrap = container.querySelector('#tos-result-table');
+  if (!wrap) return;
+  const s = State.tos;
+  const cell = (n) => `<span class="tos-cog-badge ${n === 0 ? 'zero' : ''}">${n}</span>`;
+
+  let html = '<div class="table-wrap"><table class="data-table"><thead>';
+  if (s.framework === 'traditional') {
+    html += `<tr>
+      <th>Learning Competency</th>
+      <th style="text-align:center;">Days</th>
+      <th style="text-align:center;">Items</th>
+      <th style="text-align:center;">Rem</th>
+      <th style="text-align:center;">Und</th>
+      <th style="text-align:center;">App</th>
+      <th style="text-align:center;">Ana</th>
+      <th style="text-align:center;">Eva</th>
+      <th style="text-align:center;">Cre</th>
+      <th style="text-align:center;">Placement</th>
+    </tr></thead><tbody>`;
+    s.tosData.forEach(t => {
+      html += `<tr>
+        <td>${Utils.esc(t.comp)}</td>
+        <td style="text-align:center;">${t.days}</td>
+        <td style="text-align:center;"><strong>${t.items}</strong></td>
+        <td style="text-align:center;">${cell(t.rem)}</td>
+        <td style="text-align:center;">${cell(t.und)}</td>
+        <td style="text-align:center;">${cell(t.app)}</td>
+        <td style="text-align:center;">${cell(t.ana)}</td>
+        <td style="text-align:center;">${cell(t.eva)}</td>
+        <td style="text-align:center;">${cell(t.cre)}</td>
+        <td style="text-align:center;font-family:monospace;font-size:11px;">${Utils.esc(t.range)}</td>
+      </tr>`;
+    });
+  } else if (s.framework === 'pisa') {
+    html += `<tr>
+      <th>Learning Competency</th>
+      <th style="text-align:center;">Days</th>
+      <th style="text-align:center;">Items</th>
+      <th style="text-align:center;">Level 1–2<br><span class="text-xs text-muted">Baseline</span></th>
+      <th style="text-align:center;">Level 3–4<br><span class="text-xs text-muted">Reasoning</span></th>
+      <th style="text-align:center;">Level 5–6<br><span class="text-xs text-muted">Model/Eval</span></th>
+      <th style="text-align:center;">Placement</th>
+    </tr></thead><tbody>`;
+    s.tosData.forEach(t => {
+      html += `<tr>
+        <td>${Utils.esc(t.comp)}</td>
+        <td style="text-align:center;">${t.days}</td>
+        <td style="text-align:center;"><strong>${t.items}</strong></td>
+        <td style="text-align:center;">${cell(t.l12)}</td>
+        <td style="text-align:center;">${cell(t.l34)}</td>
+        <td style="text-align:center;">${cell(t.l56)}</td>
+        <td style="text-align:center;font-family:monospace;font-size:11px;">${Utils.esc(t.range)}</td>
+      </tr>`;
+    });
+  } else {
+    html += `<tr>
+      <th>Learning Competency</th>
+      <th style="text-align:center;">Days</th>
+      <th style="text-align:center;">Items</th>
+      <th style="text-align:center;">Prestructural</th>
+      <th style="text-align:center;">Unistructural</th>
+      <th style="text-align:center;">Multistructural</th>
+      <th style="text-align:center;">Relational</th>
+      <th style="text-align:center;">Extended</th>
+      <th style="text-align:center;">Placement</th>
+    </tr></thead><tbody>`;
+    s.tosData.forEach(t => {
+      html += `<tr>
+        <td>${Utils.esc(t.comp)}</td>
+        <td style="text-align:center;">${t.days}</td>
+        <td style="text-align:center;"><strong>${t.items}</strong></td>
+        <td style="text-align:center;">${cell(t.pre)}</td>
+        <td style="text-align:center;">${cell(t.uni)}</td>
+        <td style="text-align:center;">${cell(t.mul)}</td>
+        <td style="text-align:center;">${cell(t.rel)}</td>
+        <td style="text-align:center;">${cell(t.ext)}</td>
+        <td style="text-align:center;font-family:monospace;font-size:11px;">${Utils.esc(t.range)}</td>
+      </tr>`;
+    });
+  }
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
 },
 
 /* ---------- TOS: bind UI events ---------- */
@@ -16874,7 +18637,7 @@ _tosRenderTestConfigs(root) {
 },
 
 /* ---------- TOS: compute the table of specifications ---------- */
-_tosCalculate(root) {
+_tosCalculate(container) {
   const s = State.tos;
   const total = Number(s.totalItems) || 0;
   if (total <= 0) { UI.toast('Enter a valid total number of items.', 'warning'); return; }
@@ -16916,7 +18679,7 @@ _tosCalculate(root) {
       if (rem2 > 0) { eva++; rem2--; }
       if (rem2 > 0) { cre++; rem2--; }
       Object.assign(row, { rem, und, app, ana, eva, cre });
-    } else {
+    } else if (s.framework === 'pisa') {
       let l12 = Math.floor(safeItems * 0.30);
       let l34 = Math.floor(safeItems * 0.40);
       let l56 = Math.floor(safeItems * 0.30);
@@ -16925,15 +18688,32 @@ _tosCalculate(root) {
       if (rem2 > 0) { l12++; rem2--; }
       if (rem2 > 0) { l56++; rem2--; }
       Object.assign(row, { l12, l34, l56 });
+    } else {
+      let pre  = Math.floor(safeItems * 0.15);
+      let uni  = Math.floor(safeItems * 0.20);
+      let mul  = Math.floor(safeItems * 0.25);
+      let rel  = Math.floor(safeItems * 0.25);
+      let ext  = Math.floor(safeItems * 0.15);
+      let rem2 = safeItems - (pre + uni + mul + rel + ext);
+      if (rem2 > 0) { mul++; rem2--; }
+      if (rem2 > 0) { rel++; rem2--; }
+      Object.assign(row, { pre, uni, mul, rel, ext });
     }
     s.tosData.push(row);
   });
 
-  this._tosRenderTable(root);
-  root.querySelector('#tos-output-section').classList.remove('hidden');
-  UI.toast('TOS calculated.', 'success');
-  this._tosPersist();
-  root.querySelector('#tos-output-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  Pages._tosPersist();
+  UI.toast('Table of Specifications computed', 'success');
+
+  // Re-render step 2 so the results table appears and the Continue button enables
+  const stepRoot = document.getElementById('content')?.firstElementChild;
+  if (stepRoot) {
+    Pages.tosGenerator(stepRoot);
+    setTimeout(() => {
+      const tbl = document.getElementById('tos-result-table');
+      if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 60);
+  }
 },
 
 /* ---------- TOS: render results table ---------- */
@@ -17082,8 +18862,37 @@ OUTPUT FORMAT (STRICT — this is a JSON-mode request)
 ═══════════════════════════════════════════════════════════
 Return ONLY a JSON object with exactly two fields: "examHTML" and "questions".
 
-FIELD 1 — "examHTML": the complete exam as clean HTML.
-  • Use <h1> for the main title, <h2> for Test Parts, <ol> for numbered questions,
+  FIELD 1 — "examHTML": the complete exam as clean HTML, STARTING FROM THE FIRST TEST PART.
+  • DO NOT include any <h1>, school name, DepEd letterhead, date line, or
+    document title. The header and title are prepended separately by the app.
+  • Begin directly with the first Test Part.
+  • For EVERY Test Part, output in this EXACT order:
+      1. An <h2> heading, e.g. "Part I: Multiple Choice".
+      2. A single <p> DIRECTIONS line that begins with
+         "<strong>DIRECTIONS:</strong>" — tell learners exactly how to
+         answer (how many points each item is worth, how to write the
+         answer, any rules or constraints).
+         Keep it to one or two sentences.
+      3. The questions inside an <ol>.
+  • WRITE YOUR OWN DIRECTIONS — never omit them, never say "see above".
+    Every part gets its own, part-appropriate set of directions.
+  • Example for Multiple Choice:
+      <h2>Part I: Multiple Choice</h2>
+      <p><strong>DIRECTIONS:</strong> Read each question carefully.
+      Choose the letter of the best answer. Write your answer on the
+      blank before each number. (1 point each)</p>
+      <ol>…</ol>
+  • Example for Essay:
+      <h2>Part III: Essay</h2>
+      <p><strong>DIRECTIONS:</strong> Answer the following questions in
+      complete sentences. Support each answer with evidence from the
+      lesson. (5 points each)</p>
+      <ol>…</ol>
+  • Every DIRECTIONS line, question stem, and choice option MUST be
+    LEFT-ALIGNED. Do NOT wrap any block in a centered container.
+    Do NOT use inline style="text-align:center" or align="center"
+    anywhere in the output. Only the app's own letterhead is centered.
+  • Use <h2> for Test Parts, <ol> for numbered questions,
     <p> for scenarios, <ul> for multiple-choice options.
   • DO NOT wrap in Markdown fences.
   • For Multiple Choice, place ONLY the option text inside each <li>.
@@ -17133,13 +18942,14 @@ numbered sequentially. Do not skip, merge, or invent items.
           properties: {
             number:  { type: 'INTEGER', description: 'Sequential 1-based question number.' },
             part:    { type: 'STRING',  description: 'Section heading, e.g. "Part I: Multiple Choice".' },
+            partInstruction: { type: 'STRING', description: 'The DIRECTIONS line for the section this question belongs to (identical for all questions in the same Part).' },
             type:    { type: 'STRING',  description: 'Question type.' },
             text:    { type: 'STRING',  description: 'Full question stem, including any scenario.' },
             choices: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Options; empty for open-ended.' },
             answer:  { type: 'STRING',  description: 'Correct answer.' },
             points:  { type: 'INTEGER', description: 'Point value.' }
           },
-          required: ['number','part','type','text','choices','answer','points']
+          required: ['number','part','partInstruction','type','text','choices','answer','points']
         }
       }
     },
@@ -17150,7 +18960,7 @@ numbered sequentially. Do not skip, merge, or invent items.
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.7,
-      maxOutputTokens: 16384,
+      maxOutputTokens: 65536,
       responseMimeType: 'application/json',
       responseSchema: schema
     }
@@ -17184,25 +18994,67 @@ numbered sequentially. Do not skip, merge, or invent items.
       throw new Error(errBody?.error?.message || `Gemini API error (HTTP ${resp ? resp.status : 'network'})`);
     }
     const data = await resp.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error('Gemini returned an empty response.');
+    const candidate = data?.candidates?.[0];
+    const finishReason = candidate?.finishReason || '';
+    const text = candidate?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Gemini returned an empty response (possibly blocked by safety filters).');
 
-    let parsed;
+    // Strip any markdown fences Gemini may add despite responseMimeType.
+    let cleaned = text.trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '');
+
+    // ─── Robust parse: try direct, then repair, then partial-extract ───
+    let parsed = null;
+
+    // 1 · Direct parse
     try {
-      parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
-    } catch (e) {
-      throw new Error('Gemini returned malformed JSON. Please try again.');
+      parsed = JSON.parse(cleaned);
+    } catch (e1) {
+      // 2 · Attempt repair of truncated JSON
+      try {
+        const repaired = Pages._tosRepairJSON(cleaned);
+        parsed = JSON.parse(repaired);
+        console.warn('[TOS] JSON repaired successfully after truncation.');
+      } catch (e2) {
+        // 3 · Partial extraction of examHTML only
+        const htmlOnly = Pages._tosExtractHTMLFallback(cleaned);
+        if (htmlOnly) {
+          parsed = { examHTML: htmlOnly, questions: [] };
+          console.warn('[TOS] Fell back to HTML-only extraction. Structured questions unavailable.');
+        } else {
+          console.error('[TOS] Parse failure. finishReason:', finishReason, 'raw length:', cleaned.length);
+          const hint = /MAX_TOKENS/i.test(finishReason)
+            ? ' The response was cut off because the exam is too long. Try fewer test parts, fewer items, or a shorter exam title.'
+            : '';
+          throw new Error('Gemini returned an incomplete response.' + hint);
+        }
+      }
     }
 
-    // ---- Sanitize the HTML (unchanged cleanup) ----
+    // If parse succeeded but finishReason says truncated, warn the user
+    if (/MAX_TOKENS/i.test(finishReason) && parsed) {
+      console.warn('[TOS] Response was marked MAX_TOKENS but parsed successfully. Some tail content may be missing.');
+      UI.toast('Exam was long enough to hit the token limit — some content may be trimmed. Review carefully.', 'warning', 6000);
+    }
+
+
+    // ---- Sanitize the HTML ----
     let html = (parsed.examHTML || '').trim();
     html = html.replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/i, '');
+    // Strip any leading <h1> the model may still have emitted.
+    html = html.replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>\s*/i, '');
+    // Remove any inline center alignment the model added to the body.
+    // The letterhead is added separately, so the AI body should never center.
+    html = html.replace(/text-align\s*:\s*center\s*;?/gi, '');
+    html = html.replace(/\s+align\s*=\s*["']center["']/gi, '');
     html = html.replace(/<li>\s*(?:<[^>]+>)*\s*([A-Da-d][\.\)])\s+(?:<\/[^>]+>)*\s*/g, '<li>');
 
     // ---- Normalize the questions array ----
     const questions = Array.isArray(parsed.questions) ? parsed.questions.map((q, i) => ({
       number: Number(q.number) || (i + 1),
       part: String(q.part || '').trim(),
+      partInstruction: String(q.partInstruction || '').trim(),
       type: String(q.type || 'Short Answer').trim(),
       text: String(q.text || '').trim(),
       choices: Array.isArray(q.choices) ? q.choices.map(c => String(c || '').trim()).filter(Boolean) : [],
@@ -17214,7 +19066,8 @@ numbered sequentially. Do not skip, merge, or invent items.
 
     s.generatedHTML = html;
     s.generatedQuestions = questions;
-    root.querySelector('#tos-questions-content').innerHTML = html;
+    // Render the letterhead + title + date above the AI body.
+    root.querySelector('#tos-questions-content').innerHTML = Pages._tosBuildExamDocumentHTML();
     root.querySelector('#tos-questions-section').classList.remove('hidden');
     root.querySelector('#tos-questions-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     statusEl.innerHTML = '';
@@ -17234,17 +19087,161 @@ numbered sequentially. Do not skip, merge, or invent items.
     btn.innerHTML = icon('star') + ' Generate Full Exam & Answer Key';
   }
 },
+/* ---------------------------------------------------------------------
+   JSON REPAIR — salvages truncated or malformed JSON from Gemini.
+   Handles the four most common failure modes:
+     1. Truncated mid-string  → closes the string
+     2. Truncated mid-array   → closes the array
+     3. Truncated mid-object  → closes the object
+     4. Trailing comma        → removes it
+   --------------------------------------------------------------------- */
+_tosRepairJSON(input) {
+  let s = String(input || '').trim();
+  if (!s) return s;
 
+  // Remove a stray trailing comma before a closing bracket
+  s = s.replace(/,\s*([}\]])/g, '$1');
+
+  // Walk the string tracking open brackets vs closed, ignoring escapes
+  // and strings. At the end, close whatever is still open.
+  let inString = false;
+  let escaped = false;
+  const stack = [];
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (c === '\\') { escaped = true; continue; }
+      if (c === '"') { inString = false; continue; }
+      continue;
+    }
+
+    if (c === '"') { inString = true; continue; }
+    if (c === '{' || c === '[') { stack.push(c); continue; }
+    if (c === '}' || c === ']') { stack.pop(); continue; }
+  }
+
+  // If we ended inside a string, close it
+  if (inString) s += '"';
+
+  // Trim any dangling key-value fragment that can't be closed cleanly.
+  // e.g.  ...,"part":"Part II: Ide  →  we drop everything after the last comma
+  // at the current stack depth so the final structure is coherent.
+  // Only do this if we have at least one open bracket.
+  if (stack.length) {
+    // Remove trailing comma and any half-written value
+    s = s.replace(/,\s*"[^"]*"?\s*:?\s*[^,\[\]{}]*$/, '');
+    s = s.replace(/,\s*$/, '');
+  }
+
+  // Close the remaining brackets, innermost first
+  while (stack.length) {
+    const open = stack.pop();
+    s += (open === '{' ? '}' : ']');
+  }
+
+  return s;
+},
+
+/* ---------------------------------------------------------------------
+   HTML FALLBACK — extracts whatever exam HTML is present even if the
+   JSON envelope is beyond repair. Returns the inner HTML string, or
+   null if nothing usable is found.
+   --------------------------------------------------------------------- */
+_tosExtractHTMLFallback(text) {
+  if (!text) return null;
+
+  // Look for the "examHTML" key followed by its quoted string value
+  const m = text.match(/"examHTML"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+  if (m && m[1]) {
+    try {
+      // Un-escape the captured string using JSON.parse on a tiny wrapper
+      return JSON.parse('"' + m[1] + '"');
+    } catch (e) {
+      // Fallback: brute-force unescape common sequences
+      return m[1]
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+    }
+  }
+
+  return null;
+},
+
+/* Load the DepEd seal (or a user-uploaded custom seal) as a base64
+   data URL. Word cannot resolve relative image paths, so the export
+   path must inline the image. Result is cached across calls. */
+_sealDataURLCache: null,
+async _loadSealAsDataURL() {
+  if (this._sealDataURLCache) return this._sealDataURLCache;
+
+  const school = State.schools[0] || {};
+  const src = school.depedSeal || DEPED_SEAL_PATH;
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width  = img.naturalWidth  || 80;
+        c.height = img.naturalHeight || 80;
+        c.getContext('2d').drawImage(img, 0, 0);
+        const dataURL = c.toDataURL('image/png');
+        this._sealDataURLCache = dataURL;
+        resolve(dataURL);
+      } catch (e) {
+        console.warn('[Seal embed] canvas tainted:', e);
+        resolve('');
+      }
+    };
+    img.onerror = () => {
+      console.warn('[Seal embed] could not load', src);
+      resolve('');
+    };
+    img.src = src;
+  });
+},
+/* Build the full exam document: DepEd letterhead + title + date + AI body.
+   opts.sealSrc — a base64 data URL to use for the DepEd seal. Passed by
+   the Word export; preview and print leave it empty so the browser
+   resolves the path-based <img> normally. */
+_tosBuildExamDocumentHTML(opts = {}) {
+  const s = State.tos;
+  if (!s || !s.generatedHTML) return '';
+
+  const title = ((s.examMeta && s.examMeta.examTitle) || '').trim() || 'Assessment';
+  const dateStr = new Date().toLocaleDateString('en-PH', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  });
+
+  const headerHTML = Pages._buildDepEdHeader({
+    title,
+    subtitle: dateStr,
+    sealSrc: opts.sealSrc || ''
+  });
+
+  // ---- Re-sanitize on every export ----
+  // Handles exams generated before the sanitizer was added, and catches
+  // <center> tags (which the earlier version missed entirely).
+  let body = String(s.generatedHTML);
+  body = body.replace(/<\/?center[^>]*>/gi, '');
+  body = body.replace(/text-align\s*:\s*center\s*;?/gi, '');
+  body = body.replace(/\s+align\s*=\s*["']?\s*center\s*["']?/gi, '');
+
+  return headerHTML + `<div class="exam-body">${body}</div>`;
+},
 /* ---------- TOS: print exam ---------- */
-_tosPrint() {
+async _tosPrint() {
   const html = State.tos.generatedHTML;
   if (!html) { UI.toast('Generate the exam first.', 'warning'); return; }
 
   const paperSize = State.tos.paperSize === 'legal' ? 'legal' : 'a4';
 
-  /* Inject (or replace) a temporary @page override that applies only
-     while printing. The main stylesheet's `@page { margin: 1cm; }`
-     has no `size`, so it would otherwise inherit the OS default. */
+  /* Inject (or replace) a temporary @page override. */
   const styleId = 'tos-print-page-size';
   const prior = document.getElementById(styleId);
   if (prior) prior.remove();
@@ -17256,32 +19253,43 @@ _tosPrint() {
     : '@page { size: A4;        margin: 0.8in; }';
   document.head.appendChild(style);
 
-  const school = State.schools[0] || {};
+  // Embed the seal as a data URL so the print engine never waits on the
+  // network for it. This is the same source the Word export uses.
+  const sealDataURL = await Pages._loadSealAsDataURL();
+
   const area = document.getElementById('print-area');
   area.innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || '')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-    </div>
-    <div style="font-family:'Times New Roman',serif;color:#000;">${html}</div>`;
+    <div class="print-tos-exam" style="font-family:'Times New Roman',serif;color:#000;">
+      ${Pages._tosBuildExamDocumentHTML({ sealSrc: sealDataURL })}
+    </div>`;
 
-  window.print();
-  setTimeout(() => {
-    area.innerHTML = '';
-    const s = document.getElementById(styleId);
-    if (s) s.remove();
-  }, 800);
+  // Belt-and-suspenders: wait for any remaining images to decode, then print.
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      area.innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 800);
+  });
 },
-
 /* ---------- TOS: Word export ---------- */
-_tosExportWord() {
+async _tosExportWord() {
   const html = State.tos.generatedHTML;
   if (!html) { UI.toast('Generate the exam first.', 'warning'); return; }
 
+  UI.toast('Preparing Word document…', 'info', 1500);
+
+  // ---- Embed the DepEd seal so Word can render it ----
+  const sealDataURL = await Pages._loadSealAsDataURL();
+
+  // ---- Build the body (letterhead + title + date + exam) ----
+  const bodyHTML = Pages._tosBuildExamDocumentHTML({ sealSrc: sealDataURL });
+
   const paperSize = State.tos.paperSize === 'legal' ? 'legal' : 'a4';
   const pageSpec  = paperSize === 'legal'
-    ? 'size: 8.5in 14.0in;'         // Legal — 8.5 × 14 in
-    : 'size: 210.0mm 297.0mm;';     // A4    — 210 × 297 mm
+    ? 'size: 8.5in 14.0in;'
+    : 'size: 210.0mm 297.0mm;';
   const label = paperSize === 'legal' ? 'Legal' : 'A4';
 
   const doc = `
@@ -17290,7 +19298,7 @@ _tosExportWord() {
           xmlns="http://www.w3.org/TR/REC-html40">
     <head>
       <meta charset="utf-8">
-      <title>Generated Assessment</title>
+      <title>${Utils.esc(State.tos.examMeta.examTitle || 'Generated Assessment')}</title>
       <!--[if gte mso 9]>
       <xml>
         <w:WordDocument>
@@ -17301,8 +19309,7 @@ _tosExportWord() {
       </xml>
       <![endif]-->
       <style>
-        /* ---- Page geometry (Word honours this; browsers using the
-                .doc as HTML use the same rule for on-screen preview) ---- */
+        /* ---- Page geometry ---- */
         @page WordSection1 {
           ${pageSpec}
           mso-page-orientation: portrait;
@@ -17319,70 +19326,92 @@ _tosExportWord() {
           font-size: 11pt;
           line-height: 1.4;
           color: #000;
-          /* Keep body margin at 0 so Word uses @page margins verbatim */
           margin: 0;
           padding: 0;
+          text-align: left;
         }
-        h1 {
-          font-size: 15pt; font-weight: bold;
-          text-align: center; text-transform: uppercase;
-          margin: 0 0 18pt 0;
-          line-height: 1.25;
-        }
-        h2 {
-          font-size: 13pt; font-weight: bold;
-          margin: 18pt 0 10pt 0;
-          border-bottom: 1.5pt solid #000;
-          padding-bottom: 3pt;
-          page-break-after: avoid;
-        }
-        h3 {
-          font-size: 11.5pt; font-weight: bold;
-          margin: 12pt 0 6pt 0;
-          page-break-after: avoid;
-        }
-        p {
-          margin: 0 0 8pt 0;
-          text-align: justify;
-          orphans: 3;
-          widows: 3;
-        }
-        ol {
-          margin: 8pt 0 14pt 0;
-          padding-left: 26pt;
-        }
-        ol > li {
-          margin-bottom: 12pt;
-          text-align: justify;
-          page-break-inside: avoid;
-        }
-        ul {
-          list-style-type: upper-alpha;
-          margin: 6pt 0;
-          padding-left: 22pt;
-        }
+
+        h1 { font-size: 15pt; font-weight: bold; margin: 0 0 18pt 0; line-height: 1.25; }
+        h2 { font-size: 13pt; font-weight: bold; margin: 18pt 0 10pt 0;
+             border-bottom: 1.5pt solid #000; padding-bottom: 3pt;
+             page-break-after: avoid; }
+        h3 { font-size: 11.5pt; font-weight: bold; margin: 12pt 0 6pt 0;
+             page-break-after: avoid; }
+        p  { margin: 0 0 8pt 0; orphans: 3; widows: 3; }
+
+        ol { margin: 8pt 0 14pt 0; padding-left: 28pt; list-style-type: decimal; }
+        ol > li { margin-bottom: 12pt; page-break-inside: avoid; }
+        ul { margin: 6pt 0; padding-left: 26pt; list-style-type: upper-alpha; }
         ul > li { margin-bottom: 4pt; }
 
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 8pt 0;
-          page-break-inside: auto;
-        }
-        th, td {
-          border: 0.75pt solid #000;
-          padding: 4pt 6pt;
-          text-align: left;
-          vertical-align: top;
-        }
+        table { width: 100%; border-collapse: collapse; margin: 8pt 0; }
+        th, td { border: 0.75pt solid #000; padding: 4pt 6pt;
+                 vertical-align: top; }
         th { background: #e8ecf2; font-weight: bold; }
 
         sup, sub { font-size: 0.75em; line-height: 0; }
         img { max-width: 100%; height: auto; }
+
+        /* ---- DepEd letterhead ---- */
+        .print-deped-header { text-align: center; margin-bottom: 20pt; }
+        .print-deped-header .pdh-seal img { width: 76pt; height: 76pt; object-fit: contain; }
+        .print-deped-header .pdh-republic {
+          font-family: 'Old English Text MT', 'Times New Roman', serif;
+          font-size: 12pt; letter-spacing: 0.3px;
+        }
+        .print-deped-header .pdh-department {
+          font-family: 'Old English Text MT', 'Times New Roman', serif;
+          font-size: 18pt; letter-spacing: 0.5px; margin-top: -2pt;
+        }
+        .print-deped-header .pdh-region,
+        .print-deped-header .pdh-division,
+        .print-deped-header .pdh-school,
+        .print-deped-header .pdh-address {
+          font-family: 'Trajan Pro', 'Times New Roman', serif;
+          font-size: 10pt; font-weight: bold; text-transform: uppercase;
+        }
+        .print-deped-header .pdh-line {
+          border-bottom: 2pt solid #000; margin-top: 8pt;
+        }
+        .print-deped-header .pdh-doc-title {
+          font-family: 'Times New Roman', serif;
+          font-size: 14pt; font-weight: 800; text-transform: uppercase;
+          letter-spacing: 0.6px; margin-top: 14pt; text-align: center;
+        }
+        .print-deped-header .pdh-doc-subtitle {
+          font-family: 'Times New Roman', serif;
+          font-size: 11.5pt; font-weight: 700; margin-top: 4pt; text-align: center;
+        }
+
+        /* ---- Exam body: force LEFT alignment on everything ---- */
+        .exam-body,
+        .exam-body p,
+        .exam-body div,
+        .exam-body span,
+        .exam-body h1,
+        .exam-body h2,
+        .exam-body h3,
+        .exam-body h4,
+        .exam-body h5,
+        .exam-body h6,
+        .exam-body ol,
+        .exam-body ul,
+        .exam-body li,
+        .exam-body strong,
+        .exam-body em,
+        .exam-body table,
+        .exam-body td,
+        .exam-body th {
+          text-align: left !important;
+        }
+        .exam-body ol { list-style-type: decimal; padding-left: 28pt; }
+        .exam-body ul { list-style-type: upper-alpha; padding-left: 26pt; }
+        .exam-body ol > li,
+        .exam-body ul > li { display: list-item; }
       </style>
     </head>
     <body>
-      <div class="WordSection1">${html}</div>
+      <div class="WordSection1">${bodyHTML}</div>
     </body>
     </html>`;
 
@@ -18967,8 +20996,13 @@ async openSaveToAssessmentModal() {
 
   const suggestedCategory = isLegacy ? 'QA' : 'TE';
   const totalPoints = questions.reduce((sum, q) => sum + (Number(q.points) || 1), 0);
-  const defaultTitle = (s.generatedHTML.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [,'Generated Exam'])[1]
-    .replace(/<[^>]+>/g, '').trim() || 'Generated Exam';
+
+  // Prefer the title the teacher entered in Step 1 (examMeta.examTitle).
+  // Fall back to any <h1> still present in the AI body, then to a generic label.
+  const metaTitle = ((s.examMeta && s.examMeta.examTitle) || '').trim();
+  const htmlTitle = (s.generatedHTML.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [,''])[1]
+    .replace(/<[^>]+>/g, '').trim();
+  const defaultTitle = metaTitle || htmlTitle || 'Generated Exam';
 
   const m = UI.modal({
     title: 'Save Exam to Assessment Builder',
@@ -27584,20 +29618,34 @@ async _renderTermSummarySheet(root, subjects, terms, policy) {
    Complies with DepEd Order No. 031, s. 2019 (Visual Identity Manual).
    Excludes SF1, SF2, SF9 (which use their own mandated templates).
    ============================================================================ */
-_buildDepEdHeader() {
+_buildDepEdHeader(opts = {}) {
   const school = State.schools[0] || {};
   // Use fallbacks only if the user hasn't configured their School Profile
   const region = school.region || 'Region V - Bicol Region';
   const division = school.division || 'Schools Division of Camarines Sur';
   const schoolName = school.name || 'Cabalinadan High School';
-  const address = school.address || 'Cabalinadan, Tigaon, Camarines Sur';
+  const address = school.address || 'Cabaladan, Tigaon, Camarines Sur';
+
+  // Optional title + subtitle rendered below the horizontal rule
+  const title    = (opts && opts.title)    ? String(opts.title).trim()    : '';
+  const subtitle = (opts && opts.subtitle) ? String(opts.subtitle).trim() : '';
+
+  // Precedence: caller-supplied → cached data URL → custom uploaded → bundled path.
+  // Preferring the cached data URL means print and export never race the
+  // browser's image loader.
+  const sealSrc = (opts && opts.sealSrc)
+    || Pages._sealDataURLCache
+    || school.depedSeal
+    || DEPED_SEAL_PATH;
 
   return `
     <div class="print-deped-header">
       <div class="pdh-seal">
-        <img src="${DEPED_SEAL_PATH}" alt="DepEd Seal"
+        <img src="${Utils.attr(sealSrc)}" alt="DepEd Seal"
+             width="80" height="80"
+             style="width:80px;height:80px;max-width:80px;max-height:80px;object-fit:contain;display:block;margin:0 auto;"
              onerror="this.onerror=null; this.style.visibility='hidden';">
-      </div>
+      </div>  
       <div class="pdh-text">
         <div class="pdh-republic">Republic of the Philippines</div>
         <div class="pdh-department">Department of Education</div>
@@ -27607,6 +29655,8 @@ _buildDepEdHeader() {
         <div class="pdh-address">${Utils.esc(address)}</div>
       </div>
       <div class="pdh-line"></div>
+      ${title    ? `<div class="pdh-doc-title">${Utils.esc(title)}</div>`       : ''}
+      ${subtitle ? `<div class="pdh-doc-subtitle">${Utils.esc(subtitle)}</div>` : ''}
     </div>`;
 },
 
@@ -29962,6 +32012,8 @@ async teachingToolsHub(root) {
       desc: 'Generate DepEd ILAW weekly lesson plans with Gemini. Unpacks a competency across multiple sessions.' },
     { id: 'tos-generator',        label: 'TOS & Exam Generator',  icon: 'file',
       desc: 'Build a Table of Specifications, then generate a complete exam with answer key and rubrics.' },
+    { id: 'rubric-builder',       label: 'Rubric Builder (AI)',   icon: 'check',   // ← NEW
+      desc: 'Describe the task — AI drafts the full rubric: criteria, performance levels, descriptors, and points.' },
     { id: 'powerpoint-generator', label: 'PowerPoint Generator',  icon: 'play',
       desc: 'Convert a lesson plan into a ready-to-present slide deck with images and speaker notes.' },
     { id: 'weekly-planner',       label: 'Weekly Planner',        icon: 'calendar',
@@ -30232,36 +32284,65 @@ Notes:
           throw new Error('This is not a valid KlazAssist database backup.');
         }
 
-        const allowedStores = new Set(CONFIG.STORES);
         const summary = [];
+        const missingStores = [];
         let total = 0;
 
-        // A complete backup must contain every configured store. This prevents
-        // an old/partial file from wiping only part of the current database.
+        // ── Backward-compatible validation ──────────────────────────────
+        // Older backups will not contain stores that were added in later
+        // versions (e.g. `rubrics`). Treat a missing store as "empty for
+        // this backup" rather than as a fatal error. Only reject a backup
+        // when a store that IS present contains malformed data.
         for (const store of CONFIG.STORES) {
-          const arr = candidate.data[store];
-          if (!Array.isArray(arr)) throw new Error(`Backup is incomplete: missing "${store}" data.`);
+          let arr = candidate.data[store];
 
+          if (arr === undefined || arr === null) {
+            arr = [];
+            candidate.data[store] = arr;
+            missingStores.push(store);
+          }
+          if (!Array.isArray(arr)) {
+            throw new Error(`Invalid backup data for "${store}" — expected an array.`);
+          }
           for (const item of arr) {
             if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
               throw new Error(`Backup contains an invalid record in "${store}".`);
             }
           }
           total += arr.length;
-          summary.push(`${arr.length} ${store}`);
+          if (arr.length) summary.push(`${arr.length} ${store}`);
         }
 
-        // Ignore unknown future stores instead of importing arbitrary objects.
+        // Drop any stores present in the backup that this build doesn't
+        // know about, so we never import arbitrary objects into the DB.
+        Object.keys(candidate.data).forEach(k => {
+          if (!CONFIG.STORES.includes(k)) {
+            console.info('[Restore] Ignoring unknown store from future version:', k);
+            delete candidate.data[k];
+          }
+        });
+
+        // Final normalized map — every store key is guaranteed to exist.
         candidate.data = Object.fromEntries(
-          CONFIG.STORES.map(store => [store, candidate.data[store]])
+          CONFIG.STORES.map(store => [store, candidate.data[store] || []])
         );
+
         parsed = candidate;
 
         preview.innerHTML = `
           <div class="alert alert-success mt-8">${icon('check')}<div><strong>Valid KlazAssist backup</strong></div></div>
           <p class="text-sm">Backup date: ${Utils.esc(Utils.formatDate(candidate.exportDate))}</p>
           <p class="text-xs text-muted">Total records: <strong>${total.toLocaleString()}</strong></p>
-          <p class="text-xs text-muted" style="max-height:120px;overflow-y:auto;">${summary.join(' · ')}</p>
+          <p class="text-xs text-muted" style="max-height:120px;overflow-y:auto;">${summary.join(' · ') || '(no records)'}</p>
+          ${missingStores.length ? `
+            <div class="alert alert-info mt-8" style="font-size:12px;">
+              ${icon('info')}
+              <div>
+                This backup was created before these features were added.
+                They will simply start empty:
+                <strong>${missingStores.map(s => Utils.esc(s)).join(', ')}</strong>
+              </div>
+            </div>` : ''}
           <p class="text-xs text-muted mt-8">Restore will replace the current database only after every record passes validation.</p>`;
         restoreBtn.disabled = false;
       } catch (e) {
@@ -32650,18 +34731,18 @@ If you received this message, Web3Forms is configured correctly and you can now 
 
       <div class="card">
         <div class="card-head"><h3>School Information</h3></div>
-        <div class="form-group"><label>School Name</label><input class="form-control" id="sp-name" value="${Utils.attr(s.name||'')}"></div>
+        <div class="form-group"><label>School Name</label><input class="form-control" id="sp-name" value="${Utils.attr(s.name||'')} placeholder="e.g. Cabaliandan High School">"></div>
         <div class="form-row">
-          <div class="form-group"><label>School ID</label><input class="form-control" id="sp-id" value="${Utils.attr(s.schoolId||'')}"></div>
-          <div class="form-group"><label>Region</label><input class="form-control" id="sp-region" value="${Utils.attr(s.region||'')}"></div>
+          <div class="form-group"><label>School ID</label><input class="form-control" id="sp-id" value="${Utils.attr(s.schoolId||'')}" placeholder="e.g. 309766">></div>
+          <div class="form-group"><label>Region</label><input class="form-control" id="sp-region" value="${Utils.attr(s.region||'')}" placeholder="e.g. Region V">></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Division</label><input class="form-control" id="sp-division" value="${Utils.attr(s.division||'')}"></div>
-          <div class="form-group"><label>District</label><input class="form-control" id="sp-district" value="${Utils.attr(s.district||'')}"></div>
+          <div class="form-group"><label>Division</label><input class="form-control" id="sp-division" value="${Utils.attr(s.division||'')}" placeholder="e.g. Division of Camarines Sur">></div>
+          <div class="form-group"><label>District</label><input class="form-control" id="sp-district" value="${Utils.attr(s.district||'')}" placeholder="e.g. Tigaon District">></div>
         </div>
-        <div class="form-group"><label>Address</label><input class="form-control" id="sp-address" value="${Utils.attr(s.address||'')}"></div>
+        <div class="form-group"><label>Address</label><input class="form-control" id="sp-address" value="${Utils.attr(s.address||'')}" placeholder="e.g. Cabalinadan, Tigaon, Camarines Sur">></div>
         <div class="form-row">
-          <div class="form-group"><label>School Head</label><input class="form-control" id="sp-head" value="${Utils.attr(s.schoolHead||'')}"></div>
+          <div class="form-group"><label>School Head</label><input class="form-control" id="sp-head" value="${Utils.attr(s.schoolHead||'')}" placeholder="e.g. John P. Santos, PhD</div>
           <div class="form-group"><label>Contact Number</label><input class="form-control" id="sp-contact" value="${Utils.attr(s.contact||'')}" placeholder="e.g. (049) 555-1234"></div>
         </div>
         <div class="form-group"><label>School Email</label><input type="email" class="form-control" id="sp-email" value="${Utils.attr(s.email||'')}" placeholder="e.g. info@school.edu.ph"></div>
@@ -32764,6 +34845,11 @@ If you received this message, Web3Forms is configured correctly and you can now 
   
     await DB.put('schools', s);
     State.schools[0] = s;
+
+    // Bust the cached seal image so the next print/export picks up the
+    // newly-uploaded one instead of serving the previous base64 blob.
+    Pages._sealDataURLCache = null;
+
     App.logActivity('School profile updated', 'Settings');
     UI.toast('School profile saved', 'success');
   },
@@ -33425,111 +35511,128 @@ async checkTeachingLoadNotifications() {
      4. Emails their receipt + username to klazassist@gmail.com
      5. Developer verifies and replies with a signed license key
    ============================================================================ */
+/* ============================================================================
+   GCASH PAYMENT MODAL — direct payment option for Pro license
+   ============================================================================ */
+/* ============================================================================
+   GCASH PAYMENT MODAL — direct payment option for Pro license
+   ============================================================================ */
 openGcashPaymentModal() {
-  const PRICE = '₱799';
+  const PRICE = '₱499';
 
   const m = UI.modal({
     title: 'Pay via GCash',
     size: 'modal-lg',
     body: `
-      <div class="gcash-modal">
+      <div class="gcash-modal" style="max-width: 600px; margin: 0 auto;">
 
         <!-- Step indicator -->
-        <div class="gcash-steps">
-          <div class="gcash-step active">
-            <span class="gcash-step-num">1</span>
-            <span class="gcash-step-label">Scan</span>
+        <div class="gcash-steps" style="margin-bottom: 24px;">
+          <div class="gcash-step active" style="flex: 1;">
+            <span class="gcash-step-num" style="background: var(--deped-blue); color: #fff; border: none;">1</span>
+            <span class="gcash-step-label" style="font-weight: 700; color: var(--text);">Scan</span>
           </div>
-          <div class="gcash-step-line"></div>
-          <div class="gcash-step">
+          <div class="gcash-step-line" style="flex: 1; max-width: 80px;"></div>
+          <div class="gcash-step" style="flex: 1;">
             <span class="gcash-step-num">2</span>
-            <span class="gcash-step-label">Send ₱799</span>
+            <span class="gcash-step-label">Send ${PRICE}</span>
           </div>
-          <div class="gcash-step-line"></div>
-          <div class="gcash-step">
+          <div class="gcash-step-line" style="flex: 1; max-width: 80px;"></div>
+          <div class="gcash-step" style="flex: 1;">
             <span class="gcash-step-num">3</span>
             <span class="gcash-step-label">Email receipt</span>
           </div>
         </div>
 
         <!-- QR card -->
-        <div class="gcash-card">
-          <div class="gcash-header">
-            <svg viewBox="0 0 120 24" fill="none" class="gcash-logo">
-              <circle cx="10" cy="12" r="9" stroke="#0071e3" stroke-width="2.4"/>
-              <path d="M4 12h6M10 7v10" stroke="#0071e3" stroke-width="2.4" stroke-linecap="round"/>
-              <circle cx="22" cy="12" r="3" fill="#0071e3"/>
-              <circle cx="32" cy="12" r="3" fill="#0071e3"/>
-              <text x="42" y="18" font-family="Inter, sans-serif" font-weight="800" font-size="15" fill="#0071e3">GCash</text>
-            </svg>
+        <div class="gcash-card" style="border-radius: 16px; overflow: hidden; border: 1px solid var(--border); background: #fff; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px;">
+          <div class="gcash-header" style="background: linear-gradient(135deg, #0071e3 0%, #0052cc 100%); padding: 16px; display: flex; justify-content: center; align-items: center;">
+            <!-- Use the external gcash.svg file -->
+            <img src="./icon/gcash.svg" alt="GCash" style="height: 28px; width: auto; filter: brightness(0) invert(1);">
           </div>
 
-          <div class="gcash-qr-wrap">
-            <img src="./icon/gcash-qr.png" alt="GCash QR Code" class="gcash-qr-img">
-            <div class="gcash-qr-glow"></div>
-          </div>
-
-          <div class="gcash-info">
-            <div class="gcash-name" id="gcash-name">WILFRED JOHN C. ORTINERO</div>
-            <div class="gcash-detail">
-              <span class="gcash-detail-label">Mobile No.</span>
-              <span class="gcash-detail-value" id="gcash-number">+63 926 390 728</span>
-              <button class="gcash-copy" data-copy="+63926390728" title="Copy mobile number">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
-                  <rect x="9" y="9" width="13" height="13" rx="2"/>
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                </svg>
-              </button>
-            </div>
-            <div class="gcash-detail">
-              <span class="gcash-detail-label">Amount</span>
-              <span class="gcash-detail-value gcash-amount">${PRICE}</span>
+          <div class="gcash-qr-wrap" style="padding: 30px 20px 20px; display: flex; justify-content: center; background: #fff;">
+            <div style="background: #f8fafc; border-radius: 12px; padding: 16px; border: 1px solid #e2e8f0; position: relative;">
+              <img src="./icon/gcash-qr.png" alt="GCash QR Code" style="width: 220px; height: 220px; display: block; border-radius: 8px;" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'220\' height=\'220\' viewBox=\'0 0 220 220\'><rect width=\'220\' height=\'220\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' font-family=\'Arial\' font-size=\'14\' fill=\'%2394a3b8\' text-anchor=\'middle\' dominant-baseline=\'middle\'>QR Code Placeholder</text></svg>';">
             </div>
           </div>
 
-          <p class="gcash-disclaimer">
-            Transfer fees may apply. GCash sends a reference number with your receipt — keep it safe.
-          </p>
+          <div class="gcash-info" style="padding: 0 24px 24px; text-align: center;">
+            <div class="gcash-name" style="font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 12px; letter-spacing: 0.5px;">KlazAssist</div>
+            
+            <div style="background: #f8fafc; border-radius: 10px; padding: 12px; display: inline-block; text-align: left; margin-bottom: 12px;">
+              <div class="gcash-detail" style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                <span class="gcash-detail-label" style="font-size: 12px; color: #64748b; font-weight: 600; min-width: 70px;">Mobile No.</span>
+                <span class="gcash-detail-value" style="font-family: ui-monospace, monospace; font-weight: 700; color: #1e293b; font-size: 14px;">+63 926 390 728</span>
+                <button class="gcash-copy" data-copy="+63926390728" title="Copy mobile number" style="background: #e2e8f0; border: none; border-radius: 6px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #475569; transition: all 0.2s;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                    <rect x="9" y="9" width="13" height="13" rx="2"/>
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="gcash-detail" style="display: flex; align-items: center; gap: 8px;">
+                <span class="gcash-detail-label" style="font-size: 12px; color: #64748b; font-weight: 600; min-width: 70px;">Amount</span>
+                <span class="gcash-detail-value gcash-amount" style="font-weight: 800; color: #d97706; font-size: 16px;">${PRICE}</span>
+                <button class="gcash-copy" data-copy="799" title="Copy amount" style="background: #e2e8f0; border: none; border-radius: 6px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #475569; transition: all 0.2s;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+                    <rect x="9" y="9" width="13" height="13" rx="2"/>
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <p class="gcash-disclaimer" style="font-size: 11px; color: #94a3b8; margin: 0; line-height: 1.5;">
+              Transfer fees may apply. GCash sends a reference number with your receipt — keep it safe.
+            </p>
+          </div>
         </div>
 
         <!-- Next step: email the receipt -->
-        <div class="gcash-next">
-          <div class="gcash-next-icon">
+        <div class="gcash-next" style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 16px; display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px;">
+          <div class="gcash-next-icon" style="background: #0284c7; color: #fff; border-radius: 10px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
               <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
               <path d="M22 6l-10 7L2 6"/>
             </svg>
           </div>
-          <div class="gcash-next-body">
-            <div class="gcash-next-title">After sending the payment</div>
-            <p class="gcash-next-text">
+          <div class="gcash-next-body" style="flex: 1;">
+            <div class="gcash-next-title" style="font-weight: 700; color: #0c4a6e; margin-bottom: 4px; font-size: 14px;">After sending the payment</div>
+            <p class="gcash-next-text" style="font-size: 12.5px; color: #075985; line-height: 1.5; margin: 0;">
               Email your <strong>GCash receipt</strong> (screenshot or reference number) and your
               <strong>KlazAssist username</strong> to
-              <a href="mailto:klazassist@gmail.com?subject=KlazAssist%20License%20Payment%20—%20GCash&body=Hi%2C%0A%0AI%20just%20sent%20₱799%20via%20GCash%20for%20a%20KlazAssist%20Pro%20license.%0A%0AGCash%20Reference%20No%3A%20%0AUsername%3A%20%0APreferred%20email%20for%20key%20delivery%3A%20%0A%0AThanks!">klazassist@gmail.com</a>.
+              <a href="mailto:klazassist@gmail.com?subject=KlazAssist%20License%20Payment%20—%20GCash&body=Hi%2C%0A%0AI%20just%20sent%20₱799%20via%20GCash%20for%20a%20KlazAssist%20Pro%20license.%0A%0AGCash%20Reference%20No%3A%20%0AUsername%3A%20%0APreferred%20email%20for%20key%20delivery%3A%20%0A%0AThanks!" style="color: #0284c7; font-weight: 700; text-decoration: underline;">klazassist@gmail.com</a>.
               You'll receive your license key within 24 hours.
             </p>
           </div>
         </div>
 
         <!-- Checklist -->
-        <div class="gcash-checklist">
-          <div class="gcash-check-item">
-            <div class="gcash-check-icon">${icon('check')}</div>
-            <div>Send exactly <strong>₱799</strong> to avoid processing delays.</div>
+        <div class="gcash-checklist" style="background: #f8fafc; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+          <div class="gcash-check-item" style="display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: #475569; line-height: 1.5;">
+            <div class="gcash-check-icon" style="background: #dcfce7; color: #16a34a; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="12" height="12"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <div>Send exactly <strong style="color: #1e293b;">${PRICE}</strong> to avoid processing delays.</div>
           </div>
-          <div class="gcash-check-item">
-            <div class="gcash-check-icon">${icon('check')}</div>
-            <div>Save your <strong>GCash reference number</strong> — you'll need it if you contact support.</div>
+          <div class="gcash-check-item" style="display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: #475569; line-height: 1.5;">
+            <div class="gcash-check-icon" style="background: #dcfce7; color: #16a34a; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="12" height="12"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <div>Save your <strong style="color: #1e293b;">GCash reference number</strong> — you'll need it if you contact support.</div>
           </div>
-          <div class="gcash-check-item">
-            <div class="gcash-check-icon">${icon('check')}</div>
-            <div>Include your <strong>KlazAssist username</strong> so the key can be issued to the right account.</div>
+          <div class="gcash-check-item" style="display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: #475569; line-height: 1.5;">
+            <div class="gcash-check-icon" style="background: #dcfce7; color: #16a34a; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="12" height="12"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <div>Include your <strong style="color: #1e293b;">KlazAssist username</strong> so the key can be issued to the right account.</div>
           </div>
         </div>
 
         <!-- Alert -->
-        <div class="alert alert-warning" style="margin-top:16px;font-size:12px;">
-          ${icon('alert')}
+        <div class="alert alert-warning" style="margin-top: 16px; font-size: 12px; border-radius: 10px; padding: 12px; display: flex; gap: 10px; align-items: flex-start; background: #fffbeb; border: 1px solid #fde68a; color: #92400e;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="flex-shrink: 0; margin-top: 1px;"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
           <div>
             <strong>Only pay to the account shown above.</strong>
             KlazAssist will never ask for payment through Facebook Marketplace, Telegram,
@@ -33540,26 +35643,176 @@ openGcashPaymentModal() {
     `,
     footer: `
       <button class="btn btn-outline" data-close>Close</button>
-      <a class="btn btn-primary" id="gcash-email-receipt"
-         href="mailto:klazassist@gmail.com?subject=KlazAssist%20License%20Payment%20—%20GCash&body=Hi%2C%0A%0AI%20just%20sent%20₱799%20via%20GCash%20for%20a%20KlazAssist%20Pro%20license.%0A%0AGCash%20Reference%20No%3A%20%0AUsername%3A%20%0APreferred%20email%20for%20key%20delivery%3A%20%0A%0AThanks!">
+      <button class="btn btn-primary" id="gcash-email-receipt">
         ${icon('message')} Email Receipt
-      </a>
+      </button>
     `
   });
 
-  /* ---- Copy-to-clipboard for the mobile number ---- */
+  /* ---- Copy-to-clipboard for the mobile number and amount ---- */
   m.overlay.querySelectorAll('.gcash-copy').forEach(btn => {
-    btn.onclick = async () => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
       const text = btn.dataset.copy;
       if (!text) return;
       try {
         await navigator.clipboard.writeText(text);
         UI.toast('Copied to clipboard', 'success', 1800);
+        
+        // Simple visual feedback on the button
+        const originalBg = btn.style.background;
+        btn.style.background = '#10b981';
+        btn.style.color = '#fff';
+        setTimeout(() => {
+          btn.style.background = originalBg;
+          btn.style.color = '';
+        }, 1000);
       } catch (e) {
         UI.toast('Copy failed — long-press the number to copy manually.', 'warning', 3000);
       }
     };
   });
+
+  /* ---- Handle Email Receipt click (opens safely in new tab) ---- */
+  const emailBtn = m.overlay.querySelector('#gcash-email-receipt');
+  if (emailBtn) {
+    emailBtn.onclick = () => {
+      Share.openMail({
+        to: 'klazassist@gmail.com',
+        subject: 'KlazAssist License Payment — GCash',
+        body: 'Hi,\n\nI just sent ₱799 via GCash for a KlazAssist Pro license.\n\nGCash Reference No: \nUsername: \nPreferred email for key delivery: \n\nThanks!'
+      });
+    };
+  }
+},
+/* ============================================================================
+   PRO WELCOME SCREEN
+   Celebratory full-screen overlay shown once, right after a license is
+   successfully activated. Uses the license holder's name if available and
+   walks through what Pro just unlocked.
+   ============================================================================ */
+showProWelcomeScreen() {
+  // Prevent duplicates if clicked twice
+  const existing = document.getElementById('pro-welcome-screen');
+  if (existing) existing.remove();
+
+  const lic = Licensing.getLicense();
+  const holder = Licensing.getHolderName() || '';
+  const expires = (lic && lic.payload) ? lic.payload.expires : null;
+
+  const features = [
+    { icon: 'book-open', title: 'AI Lesson Planner',        desc: 'ILAW weekly plans from a single competency' },
+    { icon: 'file',      title: 'TOS & Exam Generator',     desc: 'Full exams with answer keys and rubrics' },
+    { icon: 'play',      title: 'PowerPoint Generator',     desc: 'Lesson plans into ready-to-present decks' },
+    { icon: 'printer',   title: 'SF1 · SF2 · SF9 Forms',    desc: 'Official DepEd forms, one click away' },
+    { icon: 'chart',     title: 'Grade Summary & GWA',      desc: 'Cross-subject analytics and rank' },
+    { icon: 'analysis',  title: 'Item Analysis + Exports',  desc: 'Deep insights and printable reports' }
+  ];
+
+  // ---- Build confetti (32 varied pieces) ----
+  const confettiColors = ['#f7c948', '#fde68a', '#f59e0b', '#ffffff', '#7c3aed', '#06b6d4', '#ec4899', '#10b981'];
+  let confettiHTML = '';
+  for (let i = 0; i < 32; i++) {
+    const color  = confettiColors[i % confettiColors.length];
+    const left   = (Math.random() * 100).toFixed(2);
+    const delay  = (Math.random() * 4).toFixed(2);
+    const dur    = (3 + Math.random() * 3).toFixed(2);
+    const size   = 6 + Math.random() * 8;
+    const height = size * (0.8 + Math.random() * 0.8);
+    const shape  = (i % 3 === 0) ? 'border-radius:50%;' : '';
+    confettiHTML += `<span class="pw-confetti-piece" style="
+      left:${left}%;
+      width:${size.toFixed(1)}px;
+      height:${height.toFixed(1)}px;
+      background:${color};
+      ${shape}
+      animation-duration:${dur}s;
+      animation-delay:${delay}s;
+    "></span>`;
+  }
+
+  const screen = document.createElement('div');
+  screen.id = 'pro-welcome-screen';
+  screen.setAttribute('role', 'dialog');
+  screen.setAttribute('aria-modal', 'true');
+  screen.setAttribute('aria-labelledby', 'pw-title');
+
+  screen.innerHTML = `
+    <div class="pw-bg" aria-hidden="true"></div>
+    <div class="pw-confetti" aria-hidden="true">${confettiHTML}</div>
+
+    <div class="pw-content">
+      <div class="pw-badge" aria-hidden="true">
+        <div class="pw-ring"></div>
+        <div class="pw-pulse"></div>
+        <div class="pw-core"><span class="pw-text">PRO</span></div>
+        <div class="pw-sparkles">
+          <span class="pw-spark s1"></span>
+          <span class="pw-spark s2"></span>
+          <span class="pw-spark s3"></span>
+          <span class="pw-spark s4"></span>
+        </div>
+      </div>
+
+      <h1 class="pw-title" id="pw-title">Welcome to KlazAssist Pro</h1>
+      <p class="pw-lede">
+        Your license is now active on this device. Every Pro tool is <strong>yours forever</strong> — no subscription, no renewal, no tracking.
+      </p>
+
+      ${holder ? `
+        <div class="pw-holder">
+          ${icon('shield')}
+          <span>Licensed to <strong>${Utils.esc(holder)}</strong>${expires ? ' · Expires ' + Utils.formatDate(expires) : ' · Lifetime access'}</span>
+        </div>` : ''}
+
+      <div class="pw-features">
+        ${features.map(f => `
+          <div class="pw-feature">
+            <div class="pw-fi">${icon(f.icon)}</div>
+            <div class="pw-ftext">
+              <div class="pw-ftitle">${Utils.esc(f.title)}</div>
+              <div class="pw-fdesc">${Utils.esc(f.desc)}</div>
+            </div>
+          </div>`).join('')}
+      </div>
+
+      <button class="pw-cta" id="pw-continue" type="button">
+        ${icon('star')}
+        <span>Start Using Pro</span>
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(screen);
+
+  const dismiss = () => {
+    screen.style.transition = 'opacity 0.35s ease, transform 0.35s ease';
+    screen.style.opacity = '0';
+    screen.style.transform = 'scale(0.98)';
+    setTimeout(() => {
+      screen.remove();
+      // Refresh sidebar so PRO badges update, then land the user back
+      // on whatever page they were on when they opened the modal.
+      try { App.renderSidebar(); } catch (e) {}
+      try { App.navigate(State.currentModule || 'dashboard'); } catch (e) {}
+    }, 350);
+  };
+
+  const btn = screen.querySelector('#pw-continue');
+  btn.onclick = dismiss;
+
+  // Keyboard: Enter or Esc both dismiss
+  screen.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.preventDefault();
+      dismiss();
+    }
+  });
+
+  // Focus for keyboard/accessibility
+  setTimeout(() => { try { btn.focus(); } catch (e) {} }, 450);
+
+  App.logActivity('Pro welcome screen shown', 'Licensing');
 },
   /* ============================================================================
    UPGRADE / LICENSE MODAL
@@ -33722,9 +35975,14 @@ openUpgradeModal(featureId) {
     try {
       await Licensing.activate(val);
       m.close();
-      UI.toast('Pro unlocked on this device. Enjoy!', 'success', 5000);
       App.renderSidebar();
-      App.navigate(State.currentModule);
+      App.logActivity('Pro unlocked on this device', 'Licensing');
+
+      // Let the upgrade modal finish its close transition, then present
+      // the celebratory welcome screen. The welcome screen itself calls
+      // App.navigate() after the user clicks Continue, so we skip the
+      // old immediate navigate.
+      setTimeout(() => Pages.showProWelcomeScreen(), 380);
     } catch (e) {
       err.textContent = e.message || 'Could not activate this license.';
       err.classList.add('show');
@@ -37104,6 +39362,982 @@ Pages._buildPresenterState = function(tool) {
   return null;
 };
 
+/* ============================================================================
+   RUBRIC BUILDER (AI-POWERED)
+   ──────────────────────────────────────────────────────────────────────────
+   Minimal-input rubric generator. The teacher enters only:
+     • Task title + type + subject + grade level
+   Everything else — criteria, performance levels, descriptors, points
+   distribution, and usage tips — is drafted by Gemini using a strict
+   response schema, then rendered as an editable, printable rubric.
+   ============================================================================ */
+const RubricBuilder = (() => {
+
+  /* ------------------------- state ------------------------- */
+  const S = {
+    view: 'setup',                 // 'setup' | 'preview'
+    inputs: {
+      taskTitle: '',
+      taskType: 'essay',
+      subject: '',
+      gradeLevel: '',
+      description: '',
+      criteriaCount: 4,
+      levelCount: 4,
+      totalPoints: 100,
+      rubricStyle: 'analytic'      // 'analytic' | 'holistic' | 'singlepoint'
+    },
+    rubric: null,
+    isGenerating: false,
+    stageMessage: '',
+    errorMsg: '',
+    _savedId: null,
+    _container: null
+  };
+
+  const TASK_TYPES = [
+    { id: 'essay',         label: 'Essay / Written Work',    icon: 'edit' },
+    { id: 'project',       label: 'Project / Product',       icon: 'file' },
+    { id: 'performance',   label: 'Performance Task',        icon: 'play' },
+    { id: 'presentation',  label: 'Oral Presentation',       icon: 'message' },
+    { id: 'lab',           label: 'Laboratory / Experiment', icon: 'analysis' },
+    { id: 'portfolio',     label: 'Portfolio',               icon: 'folder' },
+    { id: 'groupwork',     label: 'Group Work',              icon: 'users' },
+    { id: 'artwork',       label: 'Artwork / Creative',      icon: 'image' },
+    { id: 'research',      label: 'Research Paper',          icon: 'book' },
+    { id: 'pe',            label: 'Physical Education',      icon: 'star' },
+    { id: 'other',         label: 'Other',                   icon: 'star' }
+  ];
+
+  const STYLES = [
+    { id: 'analytic',    label: 'Analytic',     desc: 'A separate score for each criterion — the most detailed and feedback-rich.' },
+    { id: 'holistic',    label: 'Holistic',     desc: 'A single overall score based on the whole performance — faster to grade.' },
+    { id: 'singlepoint', label: 'Single-Point', desc: 'Anchored on proficiency: what meets, exceeds, and falls short of the standard.' }
+  ];
+
+  const DEFAULT_LEVELS = {
+    3: ['Proficient', 'Developing', 'Beginning'],
+    4: ['Exemplary', 'Proficient', 'Developing', 'Beginning'],
+    5: ['Exemplary', 'Advanced', 'Proficient', 'Developing', 'Beginning'],
+    6: ['Exemplary', 'Advanced', 'Proficient', 'Developing', 'Emerging', 'Beginning']
+  };
+
+  /* ------------------------- Gemini ------------------------- */
+  async function callGemini(inputs) {
+    const key   = await DB.getSetting('geminiApiKey', '');
+    const model = await DB.getSetting('geminiModel', '');
+    if (!key)   throw new Error('Please configure your Gemini API key first.');
+    if (!model) throw new Error('Please select a Gemini model in the API configuration.');
+
+    const taskTypeLabel = (TASK_TYPES.find(t => t.id === inputs.taskType) || {}).label || 'Task';
+    const styleDesc     = (STYLES.find(s => s.id === inputs.rubricStyle) || {}).desc || '';
+    const levelLabels   = DEFAULT_LEVELS[inputs.levelCount] || DEFAULT_LEVELS[4];
+
+    const systemPrompt =
+`You are an expert assessment designer for the Philippine Department of Education (DepEd).
+You build high-quality, ready-to-use classroom rubrics that align with DepEd standards,
+are age-appropriate, and use clear, observable language. You always return strict JSON.`;
+
+    const userPrompt =
+`Build a complete rubric for a classroom assessment.
+
+CONTEXT
+- Task Title: ${inputs.taskTitle}
+- Task Type: ${taskTypeLabel}
+- Subject / Learning Area: ${inputs.subject || 'General'}
+- Grade Level: ${inputs.gradeLevel || 'Not specified'}
+- Additional Description: ${inputs.description || 'None provided.'}
+
+REQUIREMENTS
+- Rubric Style: ${inputs.rubricStyle} (${styleDesc})
+- Number of criteria rows: exactly ${inputs.criteriaCount}
+- Performance levels (columns): exactly ${inputs.levelCount}
+- Performance level labels, descending — MUST be exactly: ${levelLabels.join(' | ')}
+- Total possible points: ${inputs.totalPoints}
+- Distribute the criteria weights so they sum to exactly ${inputs.totalPoints}.
+- Every descriptor must be observable and use grade-appropriate plain English.
+- Never write a descriptor that ONLY states what the student failed to do — always
+  anchor negative levels on a tangible next step or partial demonstration.
+- Where natural, use a Filipino classroom context.
+
+OUTPUT FORMAT — return ONLY a JSON object with this exact shape:
+{
+  "title": "string",
+  "taskSummary": "1–2 sentences describing the task",
+  "rubricStyle": "${inputs.rubricStyle}",
+  "totalPoints": ${inputs.totalPoints},
+  "performanceLevels": [
+    { "label": "level label (must match the labels above)", "shortCode": "e.g. 4", "pointsRange": "e.g. 90–100%" }
+  ],
+  "criteria": [
+    {
+      "name": "criterion name",
+      "description": "one short sentence explaining what this criterion measures",
+      "weight": 25,
+      "levels": [
+        { "label": "level label (must match)", "descriptor": "detailed, observable descriptor" }
+      ]
+    }
+  ],
+  "teacherNotes": "2–3 short practical tips for using the rubric in class, written as a single paragraph."
+}
+
+Do not add commentary, markdown fences, or extra fields.`;
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        title:       { type: 'STRING' },
+        taskSummary: { type: 'STRING' },
+        rubricStyle: { type: 'STRING' },
+        totalPoints: { type: 'NUMBER' },
+        performanceLevels: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              label:       { type: 'STRING' },
+              shortCode:   { type: 'STRING' },
+              pointsRange: { type: 'STRING' }
+            },
+            required: ['label','shortCode','pointsRange']
+          }
+        },
+        criteria: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              name:        { type: 'STRING' },
+              description: { type: 'STRING' },
+              weight:      { type: 'NUMBER' },
+              levels: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    label:      { type: 'STRING' },
+                    descriptor: { type: 'STRING' }
+                  },
+                  required: ['label','descriptor']
+                }
+              }
+            },
+            required: ['name','description','weight','levels']
+          }
+        },
+        teacherNotes: { type: 'STRING' }
+      },
+      required: ['title','taskSummary','rubricStyle','totalPoints','performanceLevels','criteria','teacherNotes']
+    };
+
+    const payload = {
+      contents: [{ parts: [{ text: userPrompt }] }],
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: schema,
+        temperature: 0.65,
+        maxOutputTokens: 8192
+      }
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+    let delay = 1200, lastErr = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let res;
+      try {
+        res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      } catch (netErr) {
+        lastErr = netErr;
+        if (attempt === 3) throw netErr;
+        await new Promise(r => setTimeout(r, delay)); delay *= 2; continue;
+      }
+      if (res.status === 429 && attempt < 3) {
+        await new Promise(r => setTimeout(r, delay)); delay *= 2; continue;
+      }
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || `Gemini error: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Gemini returned an empty response.');
+
+      const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      try { return JSON.parse(cleaned); }
+      catch (e) {
+        lastErr = new Error('Gemini returned malformed JSON. Try again.');
+        if (attempt === 3) throw lastErr;
+        await new Promise(r => setTimeout(r, delay)); delay *= 2;
+      }
+    }
+    throw lastErr || new Error('Generation failed.');
+  }
+
+  /* ------------------------- Setup view ------------------------- */
+  function renderSetup() {
+    const cls = State.activeClass || {};
+
+    if (!S.inputs.subject && cls.subject)   S.inputs.subject = cls.subject;
+    if (!S.inputs.gradeLevel && cls.gradeLevel) S.inputs.gradeLevel = cls.gradeLevel;
+
+    S._container.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h2>Rubric Builder
+            <span style="font-size:11px;font-weight:800;background:var(--gradient-gold);color:#4a2c00;padding:3px 10px;border-radius:12px;margin-left:8px;letter-spacing:0.8px;vertical-align:middle;">PRO · AI</span>
+          </h2>
+          <p>Generate a complete, ready-to-use assessment rubric in seconds.</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-outline" id="rb-library">${icon('folder')} My Rubrics</button>
+          <button class="btn btn-outline" id="rb-config">${icon('key')} API Configuration</button>
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16">${icon('info')}<div>
+        Tell us what you're assessing — <strong>the AI handles the rest</strong>: criteria, performance levels, descriptors, and points distribution. Everything is editable after generation.
+      </div></div>
+
+      <div class="grid grid-2" style="gap:16px;align-items:start;">
+
+        <!-- LEFT: minimal input -->
+        <div class="card">
+          <div class="card-head"><h3>1 · What are you assessing?</h3></div>
+
+          <div class="form-group">
+            <label>Task or Assignment Title <span class="req">*</span></label>
+            <input class="form-control" id="rb-title"
+                   placeholder="e.g. Argumentative Essay on Climate Change"
+                   value="${Utils.attr(S.inputs.taskTitle)}">
+          </div>
+
+          <div class="form-group">
+            <label>Type of Task <span class="req">*</span></label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-top:6px;">
+              ${TASK_TYPES.map(t => {
+                const on = S.inputs.taskType === t.id;
+                return `
+                  <button type="button" class="rb-task-type" data-task-type="${Utils.attr(t.id)}"
+                    style="padding:10px 6px;border:2px solid ${on ? 'var(--deped-blue)' : 'var(--border)'};border-radius:10px;background:${on ? 'var(--light-blue)' : 'var(--card)'};cursor:pointer;text-align:center;font-size:11px;font-weight:600;color:${on ? 'var(--deped-blue)' : 'var(--text)'};transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:4px;">
+                    <span style="display:flex;align-items:center;justify-content:center;">${icon(t.icon)}</span>
+                    <span>${Utils.esc(t.label)}</span>
+                  </button>`;
+              }).join('')}
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Subject / Learning Area</label>
+              <input class="form-control" id="rb-subject" placeholder="e.g. English" value="${Utils.attr(S.inputs.subject)}">
+            </div>
+            <div class="form-group">
+              <label>Grade Level</label>
+              <input class="form-control" id="rb-grade" placeholder="e.g. Grade 9" value="${Utils.attr(S.inputs.gradeLevel)}">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Brief Description
+              <span class="text-muted" style="font-weight:400;">(optional — helps AI be specific)</span>
+            </label>
+            <textarea class="form-control" id="rb-desc" rows="2"
+                      placeholder="e.g. Students must argue a position with 3 pieces of evidence from provided sources.">${Utils.esc(S.inputs.description)}</textarea>
+          </div>
+        </div>
+
+        <!-- RIGHT: fine-tuning -->
+        <div class="card">
+          <div class="card-head">
+            <h3>2 · Shape the rubric</h3>
+            <span class="text-xs text-muted">Defaults work well</span>
+          </div>
+
+          <div class="form-group">
+            <label>Rubric Style</label>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+              ${STYLES.map(s => {
+                const on = S.inputs.rubricStyle === s.id;
+                return `
+                  <label class="rb-style-option" data-style="${Utils.attr(s.id)}"
+                    style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:2px solid ${on ? 'var(--deped-blue)' : 'var(--border)'};border-radius:10px;background:${on ? 'var(--light-blue)' : 'var(--card)'};cursor:pointer;transition:all .15s;">
+                    <input type="radio" name="rb-style" value="${Utils.attr(s.id)}" ${on ? 'checked' : ''}
+                           style="margin-top:3px;accent-color:var(--deped-blue);">
+                    <div style="flex:1;">
+                      <div style="font-weight:700;font-size:13px;">${Utils.esc(s.label)}</div>
+                      <div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.4;">${Utils.esc(s.desc)}</div>
+                    </div>
+                  </label>`;
+              }).join('')}
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Number of Criteria</label>
+              <select class="form-control" id="rb-criteria-count">
+                ${[2,3,4,5,6,7].map(n => `<option value="${n}" ${S.inputs.criteriaCount === n ? 'selected' : ''}>${n} criteria${n === 4 ? ' (recommended)' : ''}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Performance Levels</label>
+              <select class="form-control" id="rb-level-count">
+                ${[3,4,5,6].map(n => `<option value="${n}" ${S.inputs.levelCount === n ? 'selected' : ''}>${n} levels${n === 4 ? ' (recommended)' : ''}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Total Points</label>
+            <select class="form-control" id="rb-total-points">
+              ${[20, 30, 50, 100].map(n => `<option value="${n}" ${S.inputs.totalPoints === n ? 'selected' : ''}>${n} points</option>`).join('')}
+            </select>
+          </div>
+
+          <div style="padding:12px;background:var(--bg);border-radius:10px;margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+            <strong style="color:var(--text);">Ready to go!</strong> Gemini will draft the full rubric in about 15–30 seconds.
+          </div>
+
+          ${S.errorMsg ? `<div class="alert alert-danger mt-12">${icon('alert')}<div>${Utils.esc(S.errorMsg)}</div></div>` : ''}
+
+          <button class="btn btn-primary btn-lg btn-block mt-16" id="rb-generate" ${S.isGenerating ? 'disabled' : ''}>
+            ${S.isGenerating
+              ? '<span class="spinner-sm" aria-hidden="true"></span> Generating…'
+              : icon('star') + ' Generate Rubric'}
+          </button>
+
+          ${S.stageMessage ? `<div class="text-xs text-muted text-center mt-8">${Utils.esc(S.stageMessage)}</div>` : ''}
+        </div>
+      </div>
+    `;
+
+    S._container.querySelectorAll('.rb-task-type').forEach(btn => {
+      btn.onclick = () => { S.inputs.taskType = btn.dataset.taskType; renderSetup(); };
+    });
+    S._container.querySelectorAll('.rb-style-option').forEach(el => {
+      el.onclick = () => { S.inputs.rubricStyle = el.dataset.style; renderSetup(); };
+    });
+
+    S._container.querySelector('#rb-title').oninput   = (e) => { S.inputs.taskTitle = e.target.value; S.errorMsg = ''; };
+    S._container.querySelector('#rb-subject').oninput = (e) => { S.inputs.subject = e.target.value; };
+    S._container.querySelector('#rb-grade').oninput   = (e) => { S.inputs.gradeLevel = e.target.value; };
+    S._container.querySelector('#rb-desc').oninput    = (e) => { S.inputs.description = e.target.value; };
+    S._container.querySelector('#rb-criteria-count').onchange = (e) => { S.inputs.criteriaCount = Number(e.target.value); };
+    S._container.querySelector('#rb-level-count').onchange    = (e) => { S.inputs.levelCount    = Number(e.target.value); };
+    S._container.querySelector('#rb-total-points').onchange   = (e) => { S.inputs.totalPoints    = Number(e.target.value); };
+
+    S._container.querySelector('#rb-config').onclick  = () => Pages.openGeminiKeyModal();
+    S._container.querySelector('#rb-library').onclick = () => openLibrary();
+    S._container.querySelector('#rb-generate').onclick = generate;
+  }
+
+  /* ------------------------- Generate ------------------------- */
+  async function generate() {
+    if (!S.inputs.taskTitle.trim()) {
+      S.errorMsg = 'Please enter a task or assignment title.';
+      renderSetup();
+      return;
+    }
+    S.errorMsg = '';
+    S.isGenerating = true;
+    S.stageMessage = 'Asking Gemini to design the rubric… this may take 15–30 seconds.';
+    renderSetup();
+
+    try {
+      const rubric = await callGemini(S.inputs);
+
+      // Normalize the performance levels
+      if (!Array.isArray(rubric.performanceLevels) || !rubric.performanceLevels.length) {
+        rubric.performanceLevels = (DEFAULT_LEVELS[S.inputs.levelCount] || DEFAULT_LEVELS[4])
+          .map((label, i, arr) => ({
+            label,
+            shortCode: String(arr.length - i),
+            pointsRange: ''
+          }));
+      }
+
+      // Pad / align each criterion's level descriptors to match the level list
+      (rubric.criteria || []).forEach(c => {
+        if (!Array.isArray(c.levels)) c.levels = [];
+        rubric.performanceLevels.forEach((pl, i) => {
+          if (!c.levels[i]) c.levels[i] = { label: pl.label, descriptor: '' };
+          else c.levels[i].label = pl.label;
+        });
+        // Trim any extras
+        c.levels = c.levels.slice(0, rubric.performanceLevels.length);
+      });
+
+      S.rubric = rubric;
+      S._savedId = null;
+      S.view = 'preview';
+      S.isGenerating = false;
+      S.stageMessage = '';
+      render();
+
+      App.logActivity(`Rubric generated: "${rubric.title}" (${rubric.criteria.length} criteria, ${rubric.totalPoints} pts)`, 'Assessment');
+    } catch (e) {
+      console.error('[RubricBuilder] generation failed:', e);
+      S.isGenerating = false;
+      S.stageMessage = '';
+      let msg = e.message || 'Generation failed.';
+      if (/quota|429/i.test(msg))       msg = 'Rate limit reached. Wait a minute and try again.';
+      if (/API key|401|403/i.test(msg)) msg = 'Gemini rejected the API key. Check your configuration.';
+      S.errorMsg = msg;
+      renderSetup();
+    }
+  }
+
+  /* ------------------------- Preview view ------------------------- */
+  function renderPreview() {
+    const r = S.rubric;
+    if (!r) { renderSetup(); return; }
+    const levels   = r.performanceLevels || [];
+    const criteria = r.criteria || [];
+
+    S._container.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h2>${Utils.esc(r.title || 'Rubric')}</h2>
+          <p>${Utils.esc((r.rubricStyle || '').replace(/^./, c => c.toUpperCase()))} rubric · ${criteria.length} criteria · ${r.totalPoints} points</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-outline" id="rb-back">${icon('home')} Start Over</button>
+          <button class="btn btn-outline" id="rb-edit">${icon('edit')} Edit</button>
+          <button class="btn btn-outline" id="rb-library">${icon('folder')} My Rubrics</button>
+          <button class="btn btn-outline" id="rb-export-word">${icon('download')} Word</button>
+          <button class="btn btn-primary" id="rb-print">${icon('printer')} Print / PDF</button>
+          <button class="btn btn-primary" id="rb-save">${icon('save')} ${S._savedId ? 'Update' : 'Save'}</button>
+        </div>
+      </div>
+
+      ${r.taskSummary ? `
+        <div class="card mb-16" style="background:var(--gradient-card);">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:800;color:var(--text-muted);margin-bottom:6px;">Task Overview</div>
+          <div style="font-size:13.5px;line-height:1.65;">${Utils.esc(r.taskSummary)}</div>
+        </div>` : ''}
+
+      <div class="card mb-16" id="rb-print-area">
+        <div style="text-align:center;margin-bottom:20px;">
+          <h2 style="font-size:20px;font-weight:800;margin-bottom:6px;">${Utils.esc(r.title || '')}</h2>
+          <div style="font-size:12px;color:var(--text-muted);">
+            ${Utils.esc(S.inputs.subject || '')}${S.inputs.subject && S.inputs.gradeLevel ? ' · ' : ''}${Utils.esc(S.inputs.gradeLevel || '')}${(S.inputs.subject || S.inputs.gradeLevel) ? ' · ' : ''}Total: ${r.totalPoints} points
+          </div>
+        </div>
+
+        <div class="table-wrap" style="overflow-x:auto;">
+          <table class="rb-table" style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:760px;">
+            <thead>
+              <tr>
+                <th style="background:var(--deped-blue);color:#fff;text-align:left;padding:10px;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:0.6px;border:1px solid rgba(255,255,255,0.15);min-width:180px;">Criterion</th>
+                ${levels.map(l => `
+                  <th style="background:var(--deped-blue);color:#fff;text-align:left;padding:10px;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:0.6px;border:1px solid rgba(255,255,255,0.15);min-width:180px;">
+                    ${Utils.esc(l.label)}
+                    ${l.shortCode ? `<div style="font-weight:500;font-size:10px;opacity:0.85;margin-top:3px;text-transform:none;letter-spacing:0;">${Utils.esc(l.shortCode)}${l.pointsRange ? ' · ' + Utils.esc(l.pointsRange) : ''}</div>` : ''}
+                  </th>
+                `).join('')}
+                <th style="background:var(--deped-blue);color:#fff;text-align:center;padding:10px;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:0.6px;border:1px solid rgba(255,255,255,0.15);width:90px;">Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${criteria.map(c => `
+                <tr>
+                  <td style="padding:10px;border:1px solid var(--border);vertical-align:top;background:var(--bg);">
+                    <div style="font-weight:700;font-size:13px;color:var(--text);margin-bottom:4px;">${Utils.esc(c.name)}</div>
+                    ${c.description ? `<div style="font-size:11px;color:var(--text-muted);line-height:1.5;">${Utils.esc(c.description)}</div>` : ''}
+                  </td>
+                  ${levels.map((_, li) => {
+                    const d = (c.levels[li] && c.levels[li].descriptor) || '';
+                    return `<td style="padding:10px;border:1px solid var(--border);vertical-align:top;font-size:11.5px;line-height:1.55;">
+                      ${d ? Utils.esc(d) : '<span style="color:var(--text-muted);font-style:italic;">No descriptor</span>'}
+                    </td>`;
+                  }).join('')}
+                  <td style="padding:10px;border:1px solid var(--border);text-align:center;font-weight:800;color:var(--deped-blue);font-size:14px;">
+                    ${c.weight}
+                  </td>
+                </tr>
+              `).join('')}
+              <tr style="background:var(--light-blue);">
+                <td colspan="${levels.length + 1}" style="padding:10px;border:1px solid var(--border);text-align:right;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:0.6px;">Total</td>
+                <td style="padding:10px;border:1px solid var(--border);text-align:center;font-size:15px;color:var(--deped-blue);font-weight:800;">${r.totalPoints}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        ${r.teacherNotes ? `
+          <div style="margin-top:20px;padding:14px 16px;background:var(--bg);border-left:4px solid var(--accent-gold);border-radius:8px;">
+            <div style="font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px;">Teacher's Notes</div>
+            <div style="font-size:12.5px;line-height:1.65;color:var(--text);">${Utils.esc(r.teacherNotes)}</div>
+          </div>` : ''}
+      </div>
+    `;
+
+    S._container.querySelector('#rb-back').onclick = () => {
+      UI.confirm({
+        title: 'Start over?',
+        message: 'Your current rubric will be discarded. Any unsaved changes will be lost.',
+        confirmText: 'Start Over',
+        confirmClass: 'btn-warning',
+        onConfirm: () => {
+          S.rubric = null;
+          S.view = 'setup';
+          S._savedId = null;
+          render();
+        }
+      });
+    };
+    S._container.querySelector('#rb-edit').onclick         = () => openEditor();
+    S._container.querySelector('#rb-print').onclick        = printRubric;
+    S._container.querySelector('#rb-export-word').onclick  = exportWord;
+    S._container.querySelector('#rb-save').onclick         = saveToLibrary;
+    S._container.querySelector('#rb-library').onclick      = () => openLibrary();
+  }
+
+  /* ------------------------- Print ------------------------- */
+  function printRubric() {
+    const r = S.rubric;
+    if (!r) return;
+    const school  = State.schools[0] || {};
+    const teacher = State.currentUser || {};
+    const levels   = r.performanceLevels || [];
+    const criteria = r.criteria || [];
+    const esc = Utils.esc;
+
+    document.getElementById('print-area').innerHTML = `
+      <div class="print-rubric" style="font-family:Arial,sans-serif;color:#000;">
+        <div style="text-align:center;margin-bottom:14px;">
+          ${school.name ? `<div style="font-weight:700;font-size:11pt;">${esc(school.name)}</div>` : ''}
+          ${school.address ? `<div style="font-size:9pt;">${esc(school.address)}</div>` : ''}
+        </div>
+        <h1 style="text-align:center;font-size:15pt;font-weight:800;margin:8px 0 4px;">${esc(r.title || 'Assessment Rubric')}</h1>
+        <div style="text-align:center;font-size:10pt;margin-bottom:12px;">
+          ${esc(S.inputs.subject || '')}${S.inputs.subject && S.inputs.gradeLevel ? ' · ' : ''}${esc(S.inputs.gradeLevel || '')}${(S.inputs.subject || S.inputs.gradeLevel) ? ' · ' : ''}Total: ${r.totalPoints} points
+        </div>
+        ${r.taskSummary ? `<p style="font-size:10pt;font-style:italic;text-align:center;margin-bottom:14px;">${esc(r.taskSummary)}</p>` : ''}
+
+        <table style="width:100%;border-collapse:collapse;font-size:9pt;">
+          <thead>
+            <tr>
+              <th style="border:1px solid #000;padding:6px;background:#e8ecf2;text-align:left;">Criterion</th>
+              ${levels.map(l => `<th style="border:1px solid #000;padding:6px;background:#e8ecf2;text-align:left;width:${Math.floor(65/levels.length)}%;">${esc(l.label)}${l.shortCode ? ' (' + esc(l.shortCode) + ')' : ''}</th>`).join('')}
+              <th style="border:1px solid #000;padding:6px;background:#e8ecf2;text-align:center;width:9%;">Weight</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${criteria.map(c => `
+              <tr>
+                <td style="border:1px solid #000;padding:6px;vertical-align:top;background:#f5f7fa;">
+                  <strong>${esc(c.name)}</strong>
+                  ${c.description ? `<div style="font-size:8pt;margin-top:2px;">${esc(c.description)}</div>` : ''}
+                </td>
+                ${levels.map((_, li) => {
+                  const d = (c.levels[li] && c.levels[li].descriptor) || '';
+                  return `<td style="border:1px solid #000;padding:6px;vertical-align:top;font-size:8.5pt;">${esc(d)}</td>`;
+                }).join('')}
+                <td style="border:1px solid #000;padding:6px;text-align:center;font-weight:700;">${c.weight}</td>
+              </tr>
+            `).join('')}
+            <tr>
+              <td colspan="${levels.length + 1}" style="border:1px solid #000;padding:6px;text-align:right;font-weight:700;background:#eef3fa;">TOTAL</td>
+              <td style="border:1px solid #000;padding:6px;text-align:center;font-weight:800;">${r.totalPoints}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        ${r.teacherNotes ? `
+          <div style="margin-top:14px;padding:10px;border:1px solid #000;border-left:4px solid #F7C948;font-size:9pt;line-height:1.5;">
+            <strong>Teacher's Notes:</strong> ${esc(r.teacherNotes)}
+          </div>` : ''}
+
+        <div style="margin-top:26px;display:flex;justify-content:space-between;font-size:10pt;">
+          <div style="text-align:center;width:220px;">
+            <div style="border-top:1px solid #000;padding-top:3px;">
+              ${esc(Licensing.getReportSignatory(State.activeClass) || teacher.fullName || '')}<br>
+              <span style="font-size:8pt;">${esc(Pages._getTeacherDesignation())}</span>
+            </div>
+          </div>
+          <div style="text-align:center;font-size:8pt;color:#666;align-self:flex-end;">
+            Generated by KlazAssist · ${Utils.formatDate(Utils.todayISO())}
+          </div>
+        </div>
+      </div>`;
+
+    App.logActivity('Rubric printed: ' + (r.title || ''), 'Assessment');
+    window.print();
+    setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1000);
+  }
+
+  /* ------------------------- Word export ------------------------- */
+  function exportWord() {
+    const r = S.rubric;
+    if (!r) return;
+    const levels = r.performanceLevels || [];
+    const criteria = r.criteria || [];
+    const esc = Utils.esc;
+
+    const doc = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta charset="utf-8">
+        <title>${esc(r.title || 'Rubric')}</title>
+        <style>
+          body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; }
+          h1 { font-size: 15pt; text-align: center; }
+          table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+          th, td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; font-size: 10pt; }
+          th { background: #e8ecf2; font-weight: bold; }
+          @page WordSection1 { size: 13in 8.5in; mso-page-orientation: landscape; margin: 0.5in; }
+          div.WordSection1 { page: WordSection1; }
+        </style>
+      </head>
+      <body>
+        <div class="WordSection1">
+          <h1>${esc(r.title || 'Assessment Rubric')}</h1>
+          <p style="text-align:center;font-size:10pt;">
+            ${esc(S.inputs.subject || '')}${S.inputs.subject && S.inputs.gradeLevel ? ' · ' : ''}${esc(S.inputs.gradeLevel || '')}${(S.inputs.subject || S.inputs.gradeLevel) ? ' · ' : ''}Total: ${r.totalPoints} points
+          </p>
+          ${r.taskSummary ? `<p style="text-align:center;font-style:italic;">${esc(r.taskSummary)}</p>` : ''}
+          <table>
+            <thead>
+              <tr>
+                <th>Criterion</th>
+                ${levels.map(l => `<th>${esc(l.label)}${l.shortCode ? ' (' + esc(l.shortCode) + ')' : ''}</th>`).join('')}
+                <th style="width:9%;text-align:center;">Weight</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${criteria.map(c => `
+                <tr>
+                  <td style="background:#f5f7fa;"><strong>${esc(c.name)}</strong>${c.description ? '<br><span style="font-size:9pt;">' + esc(c.description) + '</span>' : ''}</td>
+                  ${levels.map((_, li) => `<td>${esc((c.levels[li] && c.levels[li].descriptor) || '')}</td>`).join('')}
+                  <td style="text-align:center;font-weight:bold;">${c.weight}</td>
+                </tr>
+              `).join('')}
+              <tr style="background:#eef3fa;">
+                <td colspan="${levels.length + 1}" style="text-align:right;font-weight:bold;">TOTAL</td>
+                <td style="text-align:center;font-weight:bold;">${r.totalPoints}</td>
+              </tr>
+            </tbody>
+          </table>
+          ${r.teacherNotes ? `<p style="margin-top:14px;font-size:10pt;"><strong>Teacher's Notes:</strong> ${esc(r.teacherNotes)}</p>` : ''}
+        </div>
+      </body>
+      </html>`;
+
+    const safe = (r.title || 'rubric').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
+    Utils.download(`${safe}_Rubric_${Utils.timestamp()}.doc`, doc, 'application/msword');
+    App.logActivity('Rubric exported to Word: ' + (r.title || ''), 'Assessment');
+    UI.toast('Word document downloaded', 'success');
+  }
+
+  /* ------------------------- Editor ------------------------- */
+  function openEditor() {
+    const r = S.rubric;
+    if (!r) return;
+    const m = UI.modal({
+      title: 'Edit Rubric',
+      size: 'modal-xl',
+      body: `
+        <div class="form-group">
+          <label>Rubric Title</label>
+          <input class="form-control" id="rbe-title" value="${Utils.attr(r.title || '')}">
+        </div>
+        <div class="form-group">
+          <label>Task Summary</label>
+          <textarea class="form-control" id="rbe-summary" rows="2">${Utils.esc(r.taskSummary || '')}</textarea>
+        </div>
+
+        <div class="divider"></div>
+        <div class="flex-between mb-12">
+          <h4 style="font-size:14px;">Criteria</h4>
+          <span class="text-xs text-muted">${(r.criteria || []).length} rows</span>
+        </div>
+        <div id="rbe-criteria-list"></div>
+        <button class="btn btn-outline btn-block mt-12" id="rbe-add-criterion">${icon('edit')} + Add Criterion</button>
+
+        <div class="divider"></div>
+        <div class="form-group">
+          <label>Teacher's Notes</label>
+          <textarea class="form-control" id="rbe-notes" rows="3">${Utils.esc(r.teacherNotes || '')}</textarea>
+        </div>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="rbe-cancel">Cancel</button>
+        <button class="btn btn-primary" id="rbe-save">${icon('save')} Save Changes</button>
+      `
+    });
+
+    const renderCriteria = () => {
+      const list = m.overlay.querySelector('#rbe-criteria-list');
+      const levels = r.performanceLevels || [];
+      list.innerHTML = r.criteria.map((c, ci) => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;background:var(--bg);">
+          <div class="flex-between" style="gap:8px;align-items:flex-start;margin-bottom:8px;">
+            <strong style="font-size:13px;">Criterion ${ci + 1}</strong>
+            <button class="icon-btn" data-remove-crit="${ci}" title="Remove" style="color:var(--danger);">${icon('trash')}</button>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="margin-bottom:8px;">
+              <label style="font-size:11px;">Name</label>
+              <input class="form-control" data-crit-name="${ci}" value="${Utils.attr(c.name || '')}">
+            </div>
+            <div class="form-group" style="margin-bottom:8px;">
+              <label style="font-size:11px;">Weight (points)</label>
+              <input type="number" class="form-control" data-crit-weight="${ci}" value="${c.weight || 0}">
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:11px;">Description</label>
+            <input class="form-control" data-crit-desc="${ci}" value="${Utils.attr(c.description || '')}">
+          </div>
+          ${levels.map((l, li) => `
+            <div class="form-group" style="margin-bottom:6px;">
+              <label style="font-size:11px;"><strong>${Utils.esc(l.label)}</strong> — descriptor</label>
+              <textarea class="form-control" data-crit-level="${ci}-${li}" rows="2" style="font-size:12px;">${Utils.esc((c.levels[li] && c.levels[li].descriptor) || '')}</textarea>
+            </div>
+          `).join('')}
+        </div>
+      `).join('');
+
+      list.querySelectorAll('[data-remove-crit]').forEach(btn => {
+        btn.onclick = () => {
+          if (r.criteria.length <= 1) { UI.toast('At least one criterion is required.', 'warning'); return; }
+          r.criteria.splice(Number(btn.dataset.removeCrit), 1);
+          renderCriteria();
+        };
+      });
+    };
+    renderCriteria();
+
+    m.overlay.querySelector('#rbe-add-criterion').onclick = () => {
+      const levels = r.performanceLevels || [];
+      r.criteria.push({
+        name: 'New Criterion',
+        description: '',
+        weight: Math.max(1, Math.round(r.totalPoints / (r.criteria.length + 1))),
+        levels: levels.map(l => ({ label: l.label, descriptor: '' }))
+      });
+      renderCriteria();
+    };
+
+    m.overlay.querySelector('#rbe-cancel').onclick = m.close;
+    m.overlay.querySelector('#rbe-save').onclick = () => {
+      r.title         = m.overlay.querySelector('#rbe-title').value.trim()   || r.title;
+      r.taskSummary   = m.overlay.querySelector('#rbe-summary').value.trim();
+      r.teacherNotes  = m.overlay.querySelector('#rbe-notes').value.trim();
+
+      m.overlay.querySelectorAll('[data-crit-name]').forEach(inp   => { r.criteria[Number(inp.dataset.critName)].name = inp.value; });
+      m.overlay.querySelectorAll('[data-crit-weight]').forEach(inp => { r.criteria[Number(inp.dataset.critWeight)].weight = Number(inp.value) || 0; });
+      m.overlay.querySelectorAll('[data-crit-desc]').forEach(inp   => { r.criteria[Number(inp.dataset.critDesc)].description = inp.value; });
+      m.overlay.querySelectorAll('[data-crit-level]').forEach(ta   => {
+        const [ci, li] = ta.dataset.critLevel.split('-').map(Number);
+        if (r.criteria[ci] && r.criteria[ci].levels[li]) r.criteria[ci].levels[li].descriptor = ta.value;
+      });
+
+      // Recompute total from weights
+      r.totalPoints = r.criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+
+      m.close();
+      renderPreview();
+      UI.toast('Rubric updated', 'success');
+    };
+  }
+
+  /* ------------------------- Library ------------------------- */
+  async function saveToLibrary() {
+    if (!S.rubric) return;
+    try {
+      const rec = {
+        id: S._savedId || Utils.uid('rub-'),
+        classId: State.activeClass ? State.activeClass.id : null,
+        name: S.rubric.title || 'Untitled Rubric',
+        subject: S.inputs.subject,
+        gradeLevel: S.inputs.gradeLevel,
+        taskType: S.inputs.taskType,
+        rubricStyle: S.rubric.rubricStyle,
+        totalPoints: S.rubric.totalPoints,
+        criteriaCount: (S.rubric.criteria || []).length,
+        data: S.rubric,
+        inputs: JSON.parse(JSON.stringify(S.inputs)),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      if (S._savedId) {
+        const existing = await DB.get('rubrics', S._savedId);
+        if (existing) rec.createdAt = existing.createdAt;
+      }
+      await DB.put('rubrics', rec);
+      S._savedId = rec.id;
+      App.logActivity('Rubric saved: ' + rec.name, 'Assessment');
+      UI.toast('Rubric saved to library', 'success');
+      renderPreview();
+    } catch (e) {
+      console.error('Save failed:', e);
+      UI.toast('Could not save rubric: ' + (e.message || ''), 'error', 5000);
+    }
+  }
+
+  async function openLibrary() {
+    const m = UI.modal({
+      title: 'My Rubrics',
+      size: 'modal-xl',
+      body: '<div id="rbl-body"><p class="text-muted text-sm">Loading…</p></div>',
+      footer: `
+        <button class="btn btn-outline" id="rbl-import">${icon('download')} Import</button>
+        <button class="btn btn-outline" id="rbl-close">Close</button>
+        <button class="btn btn-primary" id="rbl-new">${icon('star')} New Rubric</button>
+      `
+    });
+    m.overlay.querySelector('#rbl-close').onclick = m.close;
+    m.overlay.querySelector('#rbl-new').onclick = () => {
+      m.close();
+      S.rubric = null;
+      S.view = 'setup';
+      S._savedId = null;
+      render();
+    };
+    m.overlay.querySelector('#rbl-import').onclick = () => importRubric(m);
+    await renderLibrary(m);
+  }
+
+  async function renderLibrary(m) {
+    const body = m.overlay.querySelector('#rbl-body');
+    if (!body) return;
+    const all = await DB.getAll('rubrics').catch(() => []);
+    const cls = State.activeClass;
+    let list = all.slice();
+    if (cls) list = list.filter(r => !r.classId || r.classId === cls.id);
+    list.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+
+    if (!list.length) {
+      body.innerHTML = UI.emptyState({
+        icon: 'file',
+        title: 'No saved rubrics yet',
+        message: 'Generate a rubric and click Save to keep it here.'
+      });
+      return;
+    }
+
+    body.innerHTML = `
+      <p class="text-xs text-muted mb-12">${list.length} rubric${list.length === 1 ? '' : 's'}</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;">
+        ${list.map(r => `
+          <div class="card" style="padding:14px;display:flex;flex-direction:column;gap:8px;">
+            <div style="font-weight:700;font-size:13.5px;line-height:1.3;">${Utils.esc(r.name || 'Untitled')}</div>
+            <div class="text-xs text-muted">
+              ${Utils.esc(r.subject || '')}${r.subject && r.gradeLevel ? ' · ' : ''}${Utils.esc(r.gradeLevel || '')}
+            </div>
+            <div class="flex gap-4" style="flex-wrap:wrap;">
+              <span class="badge badge-neutral" style="font-size:10px;">${r.criteriaCount || 0} criteria</span>
+              <span class="badge badge-blue" style="font-size:10px;">${r.totalPoints || 0} pts</span>
+              <span class="badge badge-neutral" style="font-size:10px;">${Utils.esc((r.rubricStyle || '').replace(/^./, c => c.toUpperCase()))}</span>
+            </div>
+            <div class="text-xs text-muted">Updated ${Utils.timeAgo(r.updatedAt || r.createdAt)}</div>
+            <div class="flex gap-4" style="margin-top:auto;padding-top:6px;flex-wrap:wrap;">
+              <button class="btn btn-sm btn-primary" data-rbl-open="${Utils.attr(r.id)}" style="flex:1;">Open</button>
+              <button class="btn btn-sm btn-outline" data-rbl-export="${Utils.attr(r.id)}" title="Export">${icon('download')}</button>
+              <button class="btn btn-sm btn-outline" data-rbl-del="${Utils.attr(r.id)}" title="Delete" style="color:var(--danger);">${icon('trash')}</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+
+    body.querySelectorAll('[data-rbl-open]').forEach(btn => {
+      btn.onclick = async () => {
+        const rec = await DB.get('rubrics', btn.dataset.rblOpen);
+        if (!rec) return;
+        S.rubric = rec.data;
+        S.inputs = Object.assign({}, S.inputs, rec.inputs || {});
+        S._savedId = rec.id;
+        S.view = 'preview';
+        m.close();
+        render();
+        UI.toast('Rubric opened', 'success');
+      };
+    });
+    body.querySelectorAll('[data-rbl-export]').forEach(btn => {
+      btn.onclick = async () => {
+        const rec = await DB.get('rubrics', btn.dataset.rblExport);
+        if (!rec) return;
+        Utils.download(
+          (rec.name || 'rubric').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60) + '.klazrubric.json',
+          JSON.stringify({ klazassist: 'rubric-export-v1', rubric: rec.data, inputs: rec.inputs }, null, 2),
+          'application/json'
+        );
+        UI.toast('Rubric exported', 'success');
+      };
+    });
+    body.querySelectorAll('[data-rbl-del]').forEach(btn => {
+      btn.onclick = () => {
+        UI.confirm({
+          title: 'Delete Rubric',
+          message: 'This cannot be undone.',
+          confirmText: 'Delete',
+          confirmClass: 'btn-danger',
+          onConfirm: async () => {
+            await DB.delete('rubrics', btn.dataset.rblDel);
+            if (S._savedId === btn.dataset.rblDel) S._savedId = null;
+            renderLibrary(m);
+            UI.toast('Rubric deleted', 'success');
+          }
+        });
+      };
+    });
+  }
+
+  function importRubric(m) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const f = input.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const parsed = JSON.parse(text);
+        if (parsed.klazassist !== 'rubric-export-v1' || !parsed.rubric) {
+          throw new Error('Not a valid KlazAssist rubric export.');
+        }
+        const rec = {
+          id: Utils.uid('rub-'),
+          classId: State.activeClass ? State.activeClass.id : null,
+          name: (parsed.rubric.title || 'Imported Rubric') + ' (imported)',
+          subject: (parsed.inputs && parsed.inputs.subject) || '',
+          gradeLevel: (parsed.inputs && parsed.inputs.gradeLevel) || '',
+          taskType: (parsed.inputs && parsed.inputs.taskType) || 'other',
+          rubricStyle: parsed.rubric.rubricStyle,
+          totalPoints: parsed.rubric.totalPoints,
+          criteriaCount: (parsed.rubric.criteria || []).length,
+          data: parsed.rubric,
+          inputs: parsed.inputs || {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await DB.put('rubrics', rec);
+        UI.toast('Rubric imported', 'success');
+        if (m) renderLibrary(m);
+      } catch (e) {
+        UI.toast('Import failed: ' + e.message, 'error', 5000);
+      }
+    };
+    input.click();
+  }
+
+  /* ------------------------- Entry ------------------------- */
+  function render(root) {
+    if (root) S._container = root;
+    if (!S._container) return;
+    if (S.view === 'preview' && S.rubric) renderPreview();
+    else renderSetup();
+  }
+
+  return { render, state: S };
+})();
+
+Pages.rubricBuilder = function(root) { return RubricBuilder.render(root); };
 Pages.pptxGenerator = function(root) { return PptxGenerator.render(root); };
 
 
@@ -37136,8 +40370,9 @@ const aliases = {
   'parent-notes': 'parentNotes',
   'security-settings': 'securitySettings',
   'teaching-load': 'teachingLoad',
-  'teaching-tools': 'teachingToolsHub',   // ← ADD
-  'planning': 'planningHub'               // ← ADD
+  'rubric-builder': 'rubricBuilder',
+  'teaching-tools': 'teachingToolsHub',   
+  'planning': 'planningHub'               
 };
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
