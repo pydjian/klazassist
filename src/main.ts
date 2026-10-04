@@ -1,5 +1,10 @@
   // @ts-nocheck
 import './style.css';
+import {
+  PEDAGOGY_CARDS,
+  PEDAGOGY_PRINCIPLES,
+  KEY_STAGE_LABELS
+} from './pedagogy-cards';
 
 /* ============================================================================
    KlazAssist v1.1.0 — Offline-First Teacher Toolkit · pydjianPH
@@ -95,7 +100,8 @@ const PRO_FEATURES = {
 
   // Printable reports & bulk exports
   'printable-reports':    { tier: 'pro', label: 'Printable Reports' },
-  'export-center':        { tier: 'pro', label: 'Export Center' }
+  'export-center':        { tier: 'pro', label: 'Export Center' },
+  'pedagogy-library':     { tier: 'pro', label: 'Pedagogy Library' },
 };
 
 /* ============================================================================
@@ -170,11 +176,33 @@ const NOISE_BALL_THEMES = {
     floorTint: 'rgba(148,163,184,0.10)',
     colors: ['#F7C948','#198754','#DC3545','#0057B8','#7C3AED','#0891B2','#F59E0B','#BE185D','#10B981','#6366F1','#EC4899','#F97316']
   },
-  emoji: {
-    label: 'Emoji', mode: 'emoji',
-    bgTop: '#1e293b', bgMid: '#0f172a', bgBot: '#020617',
-    floorTint: 'rgba(148,163,184,0.10)',
-    glyphs: ['😀','🌟','⚽','🎈','🍎','🐶','🌈','🎵','🚀','💡','🐱','🍕','⚡','🎨','🌸','🦋']
+  billiard: {
+    label: 'Billiard', mode: 'billiard',
+    // Rails fall back to these if felt rendering is somehow skipped.
+    bgTop: '#6b3a12', bgMid: '#3d1d08', bgBot: '#241004',
+    floorTint: 'rgba(0,0,0,0.25)',
+    // Fraction of the shorter canvas dimension used as rail thickness.
+    // Shared by the renderer and the physics so balls bounce off the felt.
+    wallInset: 0.055,
+    solids: [
+      { number: 1,  color: '#F5C518' },   // yellow
+      { number: 2,  color: '#1B4DA8' },   // blue
+      { number: 3,  color: '#C8102E' },   // red
+      { number: 4,  color: '#5C2E91' },   // purple
+      { number: 5,  color: '#E67E22' },   // orange
+      { number: 6,  color: '#0B6E3A' },   // green
+      { number: 7,  color: '#7B1414' },   // maroon
+      { number: 8,  color: '#111111' }    // black
+    ],
+    stripes: [
+      { number: 9,  color: '#F5C518' },
+      { number: 10, color: '#1B4DA8' },
+      { number: 11, color: '#C8102E' },
+      { number: 12, color: '#5C2E91' },
+      { number: 13, color: '#E67E22' },
+      { number: 14, color: '#0B6E3A' },
+      { number: 15, color: '#7B1414' }
+    ]
   },
   numbers: {
     label: 'Numbers', mode: 'number',
@@ -195,7 +223,300 @@ const NOISE_BALL_THEMES = {
     irisColors: ['#3B82F6','#10B981','#F59E0B','#8B4513','#7C3AED','#EC4899','#6B7280','#EF4444','#0891B2']
   }
 };
+/* ============================================================================
+   BILLIARD THEME — shared rendering helpers
+   Both the teacher Noise Meter and the learner Presenter call these so the
+   two views stay pixel-identical.
+   ============================================================================ */
 
+function _blHexToRgb(hex) {
+  const h = String(hex).replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function _blLighten(hex, amt) {
+  const c = _blHexToRgb(hex);
+  const f = v => Math.round(v + (255 - v) * amt);
+  return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`;
+}
+function _blDarken(hex, amt) {
+  const c = _blHexToRgb(hex);
+  const f = v => Math.round(v * (1 - amt));
+  return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`;
+}
+
+/* Draw a billiard ball at the ctx's current origin (already translated). */
+function drawBilliardBall(ctx, b) {
+  const sq = b.squash || 0;
+  const rx = b.r * (1 + sq);
+  const ry = b.r * (1 - sq);
+  const color = b.color || '#111';
+  const number = b.number;
+  const isStriped = !!b.isStriped;
+
+  ctx.save();
+
+  /* ---- Base: white/ivory sphere ---- */
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  const baseGrad = ctx.createRadialGradient(
+    -b.r * 0.35, -b.r * 0.40, b.r * 0.05,
+     0, 0, b.r
+  );
+  baseGrad.addColorStop(0,    '#ffffff');
+  baseGrad.addColorStop(0.65, '#f4f1e8');
+  baseGrad.addColorStop(1,    '#cfc8b8');
+  ctx.fillStyle = baseGrad;
+  ctx.fill();
+
+  if (isStriped) {
+    /* ---- Striped (9–15): colored band across the middle ---- */
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.clip();
+
+    const bandH = b.r * 1.15;
+    const bandGrad = ctx.createLinearGradient(0, -bandH / 2, 0, bandH / 2);
+    bandGrad.addColorStop(0,   _blLighten(color, 0.15));
+    bandGrad.addColorStop(0.5, color);
+    bandGrad.addColorStop(1,   _blDarken(color, 0.35));
+    ctx.fillStyle = bandGrad;
+    ctx.fillRect(-b.r * 1.2, -bandH / 2, b.r * 2.4, bandH);
+    ctx.restore();
+  } else {
+    /* ---- Solid (1–8): colored sphere ---- */
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.clip();
+
+    const colorGrad = ctx.createRadialGradient(
+      -b.r * 0.35, -b.r * 0.40, b.r * 0.05,
+       0, 0, b.r
+    );
+    colorGrad.addColorStop(0,   _blLighten(color, 0.55));
+    colorGrad.addColorStop(0.5, color);
+    colorGrad.addColorStop(1,   _blDarken(color, 0.55));
+    ctx.fillStyle = colorGrad;
+    ctx.fillRect(-b.r * 1.2, -b.r * 1.2, b.r * 2.4, b.r * 2.4);
+    ctx.restore();
+  }
+
+  /* ---- Global shading for a glossy 3D look ---- */
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.clip();
+  const shading = ctx.createRadialGradient(
+    -b.r * 0.40, -b.r * 0.45, b.r * 0.05,
+     0, 0, b.r
+  );
+  shading.addColorStop(0,    'rgba(255,255,255,0.35)');
+  shading.addColorStop(0.45, 'rgba(255,255,255,0)');
+  shading.addColorStop(0.85, 'rgba(0,0,0,0.12)');
+  shading.addColorStop(1,    'rgba(0,0,0,0.55)');
+  ctx.fillStyle = shading;
+  ctx.fillRect(-b.r * 1.2, -b.r * 1.2, b.r * 2.4, b.r * 2.4);
+  ctx.restore();
+
+  /* ---- Number puck ---- */
+  if (number !== undefined && number !== null) {
+    const numR = b.r * 0.45;
+
+    // Small drop shadow
+    ctx.beginPath();
+    ctx.arc(0, 0, numR + 0.8, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fill();
+
+    // White puck
+    const puck = ctx.createRadialGradient(
+      -numR * 0.3, -numR * 0.35, numR * 0.15,
+       0, 0, numR
+    );
+    puck.addColorStop(0, '#ffffff');
+    puck.addColorStop(1, '#e8e2d2');
+    ctx.beginPath();
+    ctx.arc(0, 0, numR, 0, Math.PI * 2);
+    ctx.fillStyle = puck;
+    ctx.fill();
+
+    // The digit
+    const fontPx = Math.max(8, Math.round(numR * 1.3));
+    ctx.font = `900 ${fontPx}px 'Arial Black', Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#111111';
+    ctx.fillText(String(number), 0, fontPx * 0.04);
+  }
+
+  /* ---- Specular highlight ---- */
+  ctx.beginPath();
+  ctx.ellipse(-b.r * 0.40, -b.r * 0.44, b.r * 0.28, b.r * 0.16, -0.55, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.ellipse(b.r * 0.42, b.r * 0.42, b.r * 0.09, b.r * 0.06, -0.55, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fill();
+
+  /* ---- Rim ---- */
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/* Paint a full billiard table onto a 2D context, filling (0,0)–(W,H). */
+function paintBilliardTable(ctx, W, H) {
+  const RAIL = Math.max(18, Math.min(40, Math.min(W, H) * 0.055));
+  const FX = RAIL, FY = RAIL;
+  const FW = W - RAIL * 2, FH = H - RAIL * 2;
+
+  /* ---- Wood rails ---- */
+  const woodGrad = ctx.createLinearGradient(0, 0, 0, H);
+  woodGrad.addColorStop(0,    '#7a4318');
+  woodGrad.addColorStop(0.15, '#5c2e0e');
+  woodGrad.addColorStop(0.85, '#3d1d08');
+  woodGrad.addColorStop(1,    '#241004');
+  ctx.fillStyle = woodGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Faint diagonal grain
+  ctx.save();
+  ctx.globalAlpha = 0.07;
+  ctx.strokeStyle = '#140800';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 90; i++) {
+    const y = ((i * 7) % (H + 40)) - 20;
+    ctx.beginPath();
+    ctx.moveTo(-10, y);
+    ctx.lineTo(W + 10, y + 3);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Varnish sheen on the top/bottom rails
+  ctx.save();
+  const sheen = ctx.createLinearGradient(0, 0, 0, RAIL);
+  sheen.addColorStop(0,   'rgba(255,220,180,0.22)');
+  sheen.addColorStop(0.5, 'rgba(255,220,180,0.06)');
+  sheen.addColorStop(1,   'rgba(0,0,0,0.15)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, W, RAIL);
+  ctx.fillRect(0, H - RAIL, W, RAIL);
+  ctx.restore();
+
+  /* ---- Green felt ---- */
+  const cx = FX + FW / 2, cy = FY + FH / 2;
+  const feltGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(FW, FH) * 0.72);
+  feltGrad.addColorStop(0,    '#0e8b46');
+  feltGrad.addColorStop(0.55, '#0a6e37');
+  feltGrad.addColorStop(1,    '#04411f');
+  ctx.fillStyle = feltGrad;
+  ctx.fillRect(FX, FY, FW, FH);
+
+  // Speckle noise
+  ctx.save();
+  ctx.globalAlpha = 0.055;
+  const speckles = Math.min(2400, Math.round((FW * FH) / 130));
+  for (let i = 0; i < speckles; i++) {
+    const x = FX + Math.random() * FW;
+    const y = FY + Math.random() * FH;
+    ctx.fillStyle = Math.random() > 0.5 ? '#ffffff' : '#001a0a';
+    ctx.fillRect(x, y, 1, 1);
+  }
+  ctx.restore();
+
+  // Inner shadow from the rails onto the felt
+  ctx.save();
+  const shTop = ctx.createLinearGradient(FX, FY, FX, FY + 30);
+  shTop.addColorStop(0, 'rgba(0,0,0,0.35)');
+  shTop.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = shTop;
+  ctx.fillRect(FX, FY, FW, 30);
+
+  const shBot = ctx.createLinearGradient(FX, FY + FH - 30, FX, FY + FH);
+  shBot.addColorStop(0, 'rgba(0,0,0,0)');
+  shBot.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = shBot;
+  ctx.fillRect(FX, FY + FH - 30, FW, 30);
+
+  const shL = ctx.createLinearGradient(FX, FY, FX + 30, FY);
+  shL.addColorStop(0, 'rgba(0,0,0,0.35)');
+  shL.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = shL;
+  ctx.fillRect(FX, FY, 30, FH);
+
+  const shR = ctx.createLinearGradient(FX + FW - 30, FY, FX + FW, FY);
+  shR.addColorStop(0, 'rgba(0,0,0,0)');
+  shR.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = shR;
+  ctx.fillRect(FX + FW - 30, FY, 30, FH);
+  ctx.restore();
+
+  // Cushion edge
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(FX, FY, FW, FH);
+  ctx.restore();
+
+  /* ---- Six pockets ---- */
+  const pocketR = RAIL * 0.9;
+  const longerHoriz = FW >= FH;
+  const corners = [
+    [FX, FY], [FX + FW, FY],
+    [FX, FY + FH], [FX + FW, FY + FH]
+  ];
+  const mids = longerHoriz
+    ? [[FX + FW / 2, FY], [FX + FW / 2, FY + FH]]
+    : [[FX, FY + FH / 2], [FX + FW, FY + FH / 2]];
+
+  [...corners, ...mids].forEach(([px, py]) => {
+    const ring = ctx.createRadialGradient(px, py, pocketR * 0.7, px, py, pocketR * 1.5);
+    ring.addColorStop(0,    'rgba(0,0,0,0.55)');
+    ring.addColorStop(0.55, 'rgba(0,0,0,0.20)');
+    ring.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = ring;
+    ctx.beginPath(); ctx.arc(px, py, pocketR * 1.5, 0, Math.PI * 2); ctx.fill();
+
+    const hole = ctx.createRadialGradient(px, py, 0, px, py, pocketR);
+    hole.addColorStop(0,    '#000000');
+    hole.addColorStop(0.65, '#0a0a0a');
+    hole.addColorStop(1,    '#1c1c1c');
+    ctx.fillStyle = hole;
+    ctx.beginPath(); ctx.arc(px, py, pocketR, 0, Math.PI * 2); ctx.fill();
+
+    // Pocket rim highlight
+    ctx.beginPath();
+    ctx.arc(px, py, pocketR - 1, Math.PI * 1.1, Math.PI * 1.9);
+    ctx.strokeStyle = 'rgba(120,120,120,0.4)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  /* ---- Diamond markers on the rails ---- */
+  ctx.save();
+  ctx.fillStyle = 'rgba(240,235,220,0.75)';
+  const dr = Math.max(1.5, RAIL * 0.08);
+  for (let i = 1; i <= 3; i++) {
+    const x = FX + (FW * i / 4);
+    ctx.beginPath(); ctx.arc(x, RAIL * 0.5,     dr, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, H - RAIL * 0.5, dr, 0, Math.PI * 2); ctx.fill();
+  }
+  for (let i = 1; i <= 3; i++) {
+    const y = FY + (FH * i / 4);
+    ctx.beginPath(); ctx.arc(RAIL * 0.5,     y, dr, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W - RAIL * 0.5, y, dr, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
 /** Which band does a grade-level string belong to? */
 function resolveSf9Band(gradeLevel) {
   const g = String(gradeLevel || '').toLowerCase();
@@ -2910,7 +3231,7 @@ const State = {
 /* Which nav item should appear "active" when a hub's sub-page is open? */
 const HUB_CHILDREN = {
   'teaching-tools': ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
-  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator','rubric-builder', 'weekly-planner', 'calendar']
+  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator','rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library'],
 };
 /* ============================================================================
    AUTH UI
@@ -4106,34 +4427,57 @@ toggleTheme() {
     document.getElementById('session-lock-now').onclick = () => { AuthUI.hideSessionWarning(); Session.lock('manual'); };
     setupLoginBindings();
   },
-  renderSidebar() {
-    const nav = document.getElementById('sidebar-nav');
-    let html = '';
-    NAV.forEach(section => {
-      html += `<div class="nav-section"><div class="nav-section-title">${section.section}</div>`;
-      section.items.forEach(item => {
-        const isPro      = PRO_FEATURES[item.id] && PRO_FEATURES[item.id].tier === 'pro';
-        const isLocked   = isPro && !Licensing.isPro();
-        // The gold "PRO" tag on sidebar items is only a hint that a feature is
-        // still locked. Once the license is active, the dashboard hero badge is
-        // the single PRO marker in the UI — no per-item clutter.
-        const proBadge   = isLocked ? '<span class="nav-pro-badge">PRO</span>' : '';
-        html += `<button class="nav-item${isLocked ? ' is-locked' : ''}" data-nav="${item.id}" onclick="App.navigate('${item.id}')">
-          ${icon(item.icon)}
-          <span>${item.label}</span>
+renderSidebar() {
+  const nav = document.getElementById('sidebar-nav');
+  let html = '';
+  NAV.forEach(section => {
+    html += `<div class="nav-section"><div class="nav-section-title">${section.section}</div>`;
+    section.items.forEach(item => {
+      const isPro      = PRO_FEATURES[item.id] && PRO_FEATURES[item.id].tier === 'pro';
+      const isLocked   = isPro && !Licensing.isPro();
+      // The gold "PRO" tag on sidebar items is only a hint that a feature is
+      // still locked. Once the license is active, the dashboard hero badge is
+      // the single PRO marker in the UI — no per-item clutter.
+      const proBadge   = isLocked ? '<span class="nav-pro-badge">PRO</span>' : '';
+
+      // ---- Hub detection --------------------------------------------------
+      // Any nav item listed in HUB_CHILDREN opens a hub page that contains
+      // several sub-features. We surface a small pill telling the teacher how
+      // many features live inside, so they don't miss them behind a single
+      // label like "Teaching Tools" or "Lesson & Planning".
+      const hubChildren = HUB_CHILDREN[item.id];
+      const isHub       = !!(hubChildren && hubChildren.length);
+      const hubBadge    = isHub
+        ? `<span class="nav-hub-badge" title="${hubChildren.length} features inside">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+               <rect x="3" y="3" width="7" height="7" rx="1"/>
+               <rect x="14" y="3" width="7" height="7" rx="1"/>
+               <rect x="14" y="14" width="7" height="7" rx="1"/>
+               <rect x="3" y="14" width="7" height="7" rx="1"/>
+             </svg>
+             ${hubChildren.length}
+           </span>`
+        : '';
+      const hubTitleAttr = isHub
+        ? ` title="${hubChildren.length} features inside — click to open"`
+        : '';
+
+      html += `<button class="nav-item${isLocked ? ' is-locked' : ''}" data-nav="${item.id}" onclick="App.navigate('${item.id}')"${hubTitleAttr}>
+        ${icon(item.icon)}
+        <span>${item.label}</span>
+        <span class="nav-item-trailing">
+          ${hubBadge}
           ${proBadge}
           <span class="badge-count hidden" data-badge-for="${item.id}"></span>
-        </button>`;
-      });
-      html += '</div>';
+        </span>
+      </button>`;
     });
-    html += `<div class="nav-section" style="margin-top:20px;border-top:1px solid rgba(255,255,255,0.12);padding-top:10px;">
-      <button class="nav-item" onclick="Session.lock('manual')">${icon('lock')}<span>Lock App</span></button>
-      <button class="nav-item" onclick="App.confirmLogout()">${icon('logOut')}<span>Log out</span></button>
-    </div>`;
-    nav.innerHTML = html;
-    this.updateSidebarBadges();
-  },
+    html += '</div>';
+  });
+  nav.innerHTML = html;
+  this.updateSidebarBadges();
+},
 
   async updateSidebarBadges() {
     try {
@@ -4195,9 +4539,17 @@ toggleTheme() {
     );
 
     const meta = this.getPageMeta(id);
-    document.getElementById('topbar-page-title').textContent = meta.title;
-    document.getElementById('topbar-page-sub').textContent = meta.sub;
-    document.title = meta.title + ' · KlazAssist';
+    const titleEl = document.getElementById('topbar-page-title');
+    const subEl   = document.getElementById('topbar-page-sub');
+    const titleWrap = titleEl.parentElement;   // .topbar-title
+
+    titleEl.textContent = meta.title || '';
+    subEl.textContent   = meta.sub || '';
+
+    // Hide the whole block if we have nothing to show
+    titleWrap.style.display = (meta.title || meta.sub) ? '' : 'none';
+
+    document.title = (meta.title || 'KlazAssist') + ' · KlazAssist';
 
     const content = document.getElementById('content');
     content.innerHTML = '';
@@ -4239,13 +4591,45 @@ toggleTheme() {
       try { this.updateSidebarBadges(); } catch (e) { /* non-critical */ }
     }, 60);
   },
-  getPageMeta(id) {
-    for (const sec of NAV) {
-      const item = sec.items.find(i => i.id === id);
-      if (item) return { title: item.label, sub: sec.section };
+getPageMeta(id) {
+  // 1. Direct hit in NAV
+  for (const sec of NAV) {
+    const item = sec.items.find(i => i.id === id);
+    if (item) return { title: item.label, sub: sec.section };
+  }
+
+  // 2. Hub sub-page — resolve against HUB_CHILDREN so the topbar shows a
+  //    meaningful label instead of the generic "Page" fallback.
+  for (const [parentId, children] of Object.entries(HUB_CHILDREN)) {
+    if (children.includes(id)) {
+      // Find the parent's label + section for context
+      for (const sec of NAV) {
+        const parent = sec.items.find(i => i.id === parentId);
+        if (parent) {
+          return { title: this._titleize(id), sub: parent.label };
+        }
+      }
+      return { title: this._titleize(id), sub: '' };
     }
-    return { title: 'Page', sub: '' };
-  },
+  }
+
+  // 3. Defensive fallback — never render the literal word "Page"
+  return { title: '', sub: '' };
+},
+
+/* Convert a kebab-case module id into a readable title.
+   e.g. "lesson-planner" → "Lesson Planner", "sf9" → "SF9" */
+_titleize(id) {
+  if (!id) return '';
+  // Preserve all-caps acronyms (sf1, sf2, sf9, tos, ai)
+  return String(id)
+    .split('-')
+    .map(part => {
+      if (/^(sf\d+|tos|ai|s[a-z]?\d?)$/i.test(part)) return part.toUpperCase();
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(' ');
+},
   toggleSidebar(force) {
     const sb = document.getElementById('sidebar');
     const bd = document.getElementById('sidebar-backdrop');
@@ -6593,7 +6977,12 @@ hub.innerHTML = `
 
   _renderNoise(body, p) {
     const mode = p.mode || 'meter';
-    const theme = p.theme || 'bubbles';
+    // The 'emoji' theme was replaced by 'billiard'. Coerce any stale
+    // value coming over the wire so an old teacher session doesn't make
+    // the learner fall back to 'bubbles'.
+    let theme = p.theme || 'bubbles';
+    if (theme === 'emoji') theme = 'billiard';
+    if (!NOISE_BALL_THEMES[theme]) theme = 'bubbles';
     const totalBalls = Utils.clamp(Number(p.totalBalls) || 40, 5, 120);
 
     // The physics loop reads this — update it every frame regardless of mode.
@@ -6776,31 +7165,70 @@ hub.innerHTML = `
   },
 
   /* ------------------------------------------------------------------ */
-  _presMakeBall(state) {
-    const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
-    // Must match Pages.makeBall so the teacher and learner views look identical.
-    const r = 5 + Math.pow(Math.random(), 2.1) * 55;
-    const color = cfg.mode === 'eyeball'
-      ? '#ffffff'
-      : (cfg.colors[Math.floor(Math.random() * cfg.colors.length)]);
-    return {
-      x: r + Math.random() * Math.max(1, state.W - r * 2),
-      y: state.floorY - r - Math.random() * 200,
-      vx: (Math.random() - 0.5) * 1.6,
-      vy: Math.random() * 3,
-      r, color,
-      iris: cfg.mode === 'eyeball'
-        ? cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)] : null,
-      glyph: cfg.mode === 'emoji'
-        ? cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)] : null,
-      number: cfg.mode === 'number'
-        ? Math.floor(Math.random() * 99) + 1 : null,
-      squash: 0,
-      _gazeX: 0, _gazeY: 0,
-      _gazeTargetX: 0, _gazeTargetY: 0,
-      _gazeNextAt: 0
-    };
-  },
+_presMakeBall(state) {
+  const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
+  const uniformBilliardR = Math.max(12, Math.min(state.W, state.H) * 0.028);
+  const r = cfg.mode === 'billiard'
+    ? uniformBilliardR
+    : 5 + Math.pow(Math.random(), 2.1) * 55;
+
+  let color = '#888', number = null, isStriped = false, glyph = null, iris = null;
+
+  if (cfg.mode === 'eyeball') {
+    color = '#ffffff';
+    iris = cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)];
+  } else if (cfg.mode === 'billiard') {
+    // Reset to the uniform billiard radius and re-spawn inside the felt
+    const newR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
+    const inset = Math.min(bouncy.W, bouncy.H) * (cfg.wallInset || 0);
+    b.r = newR;
+    b.x = Utils.clamp(b.x, inset + newR, bouncy.W - inset - newR);
+    b.y = Utils.clamp(b.y, inset + newR, bouncy.H - inset - newR);
+    b.vx = (Math.random() - 0.5) * 3;
+    b.vy = (Math.random() - 0.5) * 3;
+    b.squash = 0;
+
+    const useStripe = Math.random() < 0.5;
+    const pool = useStripe ? cfg.stripes : cfg.solids;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    b.color = pick.color;
+    b.number = pick.number;
+    b.isStriped = useStripe;
+    b.glyph = null;
+    b.iris = null;
+  } else if (cfg.mode === 'emoji') {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+    glyph = cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)];
+  } else if (cfg.mode === 'number') {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+    number = Math.floor(Math.random() * 99) + 1;
+  } else {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+  }
+
+  const wallInsetPx = cfg.wallInset ? Math.min(state.W, state.H) * cfg.wallInset : 0;
+  const spawnX = cfg.mode === 'billiard'
+    ? wallInsetPx + r + Math.random() * Math.max(1, state.W - wallInsetPx * 2 - r * 2)
+    : r + Math.random() * Math.max(1, state.W - r * 2);
+  const spawnY = cfg.mode === 'billiard'
+    ? wallInsetPx + r + Math.random() * Math.max(1, state.H - wallInsetPx * 2 - r * 2)
+    : state.floorY - r - Math.random() * 200;
+  const initialVx = cfg.mode === 'billiard' ? (Math.random() - 0.5) * 3 : (Math.random() - 0.5) * 1.6;
+  const initialVy = cfg.mode === 'billiard' ? (Math.random() - 0.5) * 3 : Math.random() * 3;
+  return {
+    x: spawnX,
+    y: spawnY,
+    vx: initialVx,
+    vy: initialVy,
+    vx: (Math.random() - 0.5) * 1.6,
+    vy: Math.random() * 3,
+    r, color, iris, glyph, number, isStriped,
+    squash: 0,
+    _gazeX: 0, _gazeY: 0,
+    _gazeTargetX: 0, _gazeTargetY: 0,
+    _gazeNextAt: 0
+  };
+},
 
   _presStep(state, vol, dt = 1) {
     const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
@@ -6809,6 +7237,86 @@ hub.innerHTML = `
     const impulse = state.impulseMin + Math.pow(t, 1.25) * (state.impulseMax - state.impulseMin);
     const isBubble = cfg.mode === 'bubble';
     const now = performance.now();
+      // Billiard mode insets the physics walls so balls bounce off the felt
+    // rather than the wooden rails. Other themes fall back to inset 0.
+    const wallInsetPx = cfg.wallInset
+      ? Math.min(W, H) * cfg.wallInset
+      : 0;
+    const wallL = wallInsetPx;
+    const wallR = W - wallInsetPx;
+      const wallT = wallInsetPx;
+  const wallB = H - wallInsetPx;
+
+  // ── Billiard mode: top-down pool table physics ──
+if (cfg.mode === 'billiard') {
+  const ROLLING_FRICTION  = 0.985;
+  const CUSHION_BOUNCE    = 0.82;
+  const BALL_BOUNCE       = 0.70;
+  const MAX_SPEED         = 10;
+  const QUIET_SETTLE_V    = 0.10;
+  const MIN_LOUD_VOLUME   = 8;
+
+  const hasSound = vol >= MIN_LOUD_VOLUME;
+  const loudness = Utils.clamp(vol, 0, 100) / 100;
+
+  state.balls.forEach(b => {
+    b.vx *= ROLLING_FRICTION;
+    b.vy *= ROLLING_FRICTION;
+
+    if (hasSound) {
+      const kick = 0.4 + loudness * 1.6;
+      const angle = Math.random() * Math.PI * 2;
+      b.vx += Math.cos(angle) * kick * dt;
+      b.vy += Math.sin(angle) * kick * dt;
+    }
+
+    if (!hasSound) {
+      if (Math.abs(b.vx) < QUIET_SETTLE_V) b.vx = 0;
+      if (Math.abs(b.vy) < QUIET_SETTLE_V) b.vy = 0;
+    }
+
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    if (b.x - b.r < wallL) { b.x = wallL + b.r; b.vx =  Math.abs(b.vx) * CUSHION_BOUNCE; }
+    if (b.x + b.r > wallR) { b.x = wallR - b.r; b.vx = -Math.abs(b.vx) * CUSHION_BOUNCE; }
+    if (b.y - b.r < wallT) { b.y = wallT + b.r; b.vy =  Math.abs(b.vy) * CUSHION_BOUNCE; }
+    if (b.y + b.r > wallB) { b.y = wallB - b.r; b.vy = -Math.abs(b.vy) * CUSHION_BOUNCE; }
+
+    b.vx = Utils.clamp(b.vx, -MAX_SPEED, MAX_SPEED);
+    b.vy = Utils.clamp(b.vy, -MAX_SPEED, MAX_SPEED);
+    b.squash *= 0.85;
+  });
+
+  const balls = state.balls;
+  const n = balls.length;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      const minDist = a.r + b.r;
+      if (distSq >= minDist * minDist || distSq < 0.0001) continue;
+      const dist = Math.sqrt(distSq);
+      const overlap = minDist - dist;
+      const nx = dx / dist, ny = dy / dist;
+      const push = Math.min(overlap * 0.5, 2.4);
+      a.x -= nx * push; a.y -= ny * push;
+      b.x += nx * push; b.y += ny * push;
+      const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
+      const dot = dvx * nx + dvy * ny;
+      if (dot < 0) {
+        const k = dot * BALL_BOUNCE;
+        a.vx += k * nx; a.vy += k * ny;
+        b.vx -= k * nx; b.vy -= k * ny;
+      }
+    }
+  }
+
+  return;
+}
+
 
     state.balls.forEach(b => {
       /* Idle gaze target for eyeballs */
@@ -6846,13 +7354,13 @@ hub.innerHTML = `
       b.vx *= state.airFriction;
       b.vy *= 0.999;
 
-      /* Walls */
-      if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.7; }
-      if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
+      /* Walls — respect the inset so billiard balls bounce off the felt */
+      if (b.x - b.r < wallL) { b.x = wallL + b.r; b.vx = Math.abs(b.vx) * 0.7; }
+      if (b.x + b.r > wallR) { b.x = wallR - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
 
       /* Ceiling */
-      if (b.y - b.r < 0) {
-        b.y = b.r;
+      if (b.y - b.r < wallInsetPx) {
+        b.y = wallInsetPx + b.r;
         if (isBubble) {
           b.vy = Math.abs(b.vy) * 0.15;
           b.vx += (Math.random() - 0.5) * 0.6;
@@ -6862,10 +7370,10 @@ hub.innerHTML = `
       }
 
       /* Floor */
-      if (b.y + b.r > floorY) {
-        b.y = floorY - b.r;
-        if (isBubble) {
-          b.x = b.r + Math.random() * (W - b.r * 2);
+      if (b.y + b.r > floorY - wallInsetPx) {
+        b.y = floorY - wallInsetPx - b.r;
+      if (isBubble) {
+          b.x = wallL + b.r + Math.random() * ((wallR - wallL) - b.r * 2);
           b.y = b.r + Math.random() * 40;
           b.vy = 0;
           b.vx = (Math.random() - 0.5) * 1.2;
@@ -6938,14 +7446,22 @@ hub.innerHTML = `
   },
 
   /* ------------------------------------------------------------------ */
-  _presRender(state) {
-    const ctx = state.ctx;
-    if (!ctx) return;
-    const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
-    const W = state.W, H = state.H;
+_presRender(state) {
+  const ctx = state.ctx;
+  if (!ctx) return;
+  const cfg = NOISE_BALL_THEMES[state.theme] || NOISE_BALL_THEMES.bubbles;
+  const W = state.W, H = state.H;
 
-    /* Background */
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
+  /* Billiard table covers the whole canvas. */
+  if (cfg.mode === 'billiard') {
+    paintBilliardTable(ctx, W, H);
+    state.balls.forEach(b => this._presDrawBall(ctx, b, cfg, state));
+    if (state.shockwaves && state.shockwaves.length) this._presDrawShockwaves(state);
+    return;
+  }
+
+  /* Background */
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0,    cfg.bgTop);
     grad.addColorStop(0.55, cfg.bgMid);
     grad.addColorStop(1,    cfg.bgBot);
@@ -6967,6 +7483,14 @@ hub.innerHTML = `
     /* Shockwave ripples */
     if (state.shockwaves.length) {
       const now = performance.now();
+            // Compute the physics boundary. Billiard mode insets the walls so
+      // balls bounce off the felt instead of the wooden rails.
+      const wallInsetPx = cfg.wallInset
+        ? Math.min(W, H) * cfg.wallInset
+        : 0;
+      const wallL = wallInsetPx;
+      const wallR = W - wallInsetPx;
+
       for (let i = state.shockwaves.length - 1; i >= 0; i--) {
         const sw = state.shockwaves[i];
         const age = (now - sw.bornAt) / 1000;
@@ -7017,6 +7541,14 @@ hub.innerHTML = `
   },
 
   _presDrawBall(ctx, b, cfg, state) {
+        /* Billiard balls use the shared renderer. */
+    if (cfg.mode === 'billiard') {
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      drawBilliardBall(ctx, b);
+      ctx.restore();
+      return;
+    }
     const sq = b.squash;
     const rx = b.r * (1 + sq);
     const ry = b.r * (1 - sq);
@@ -14166,7 +14698,7 @@ async exportGrades() {
         <div class="progress-bar mb-16"><div style="width:${((idx+1)/a.questions.length)*100}%"></div></div></div>
         <h3 style="font-size:16px;margin-bottom:14px;">${Utils.esc(q.text)}</h3>`;
       if (q.type === 'Multiple Choice' && q.choices && q.choices.length) {
-        html += '<div style="display:flex;flex-direction:column;gap:6px;">' + q.choices.map((c, i) => 
+        html += '<div style="display:flex;flex-direction:column;gap:6px;">' + q.choices.map((c, i) =>
           `<button class="btn ${answers[q.id] === c ? 'btn-primary' : 'btn-outline'}" style="justify-content:flex-start;text-align:left;" data-quiz-pick="${Utils.attr(c)}">${String.fromCharCode(65+i)}. ${Utils.esc(c)}</button>`).join('') + '</div>';
       } else {
         html += `<input class="form-control" id="quiz-input" placeholder="Your answer" value="${Utils.attr(answers[q.id]||'')}">`;
@@ -14192,10 +14724,31 @@ async exportGrades() {
         let correct = 0, total = 0;
         a.questions.forEach(qq => {
           const pts = qq.points || 1; total += pts;
-          const ans = String(answers[qq.id]||'').trim().toLowerCase();
-          const corr = String(qq.answer||'').trim().toLowerCase();
-          if (ans && corr && ans === corr) correct += pts;
+
+          const rawAns = String(answers[qq.id] || '').trim();
+          let corr = String(qq.answer || '').trim();
+
+          // If the stored key is a bare letter but the learner clicked full text,
+          // resolve the letter against this question's choices on the fly.
+          const choices = Array.isArray(qq.choices) ? qq.choices : [];
+          if (choices.length >= 2 && /^[\(\[]?\s*[A-Za-z]\s*[\)\]\.\:\-]?$/.test(corr)) {
+            const lidx = corr.replace(/[^A-Za-z]/g, '').toUpperCase().charCodeAt(0) - 65;
+            if (lidx >= 0 && lidx < choices.length) corr = choices[lidx];
+          }
+
+          // True/False canonicalization so "T"/"True" and "F"/"False" both match.
+          const norm = (s) => {
+            const v = s.toLowerCase();
+            if (v === 't' || v === 'true')  return 'true';
+            if (v === 'f' || v === 'false') return 'false';
+            return v;
+          };
+
+          const a1 = norm(rawAns);
+          const c1 = norm(corr);
+          if (a1 && c1 && a1 === c1) correct += pts;
         });
+
         const pct = total ? Utils.round((correct/total)*100, 2) : 0;
         await DB.put('assessmentResults', {
           id: Utils.uid('r-'), classId: a.classId, assessmentId: a.id,
@@ -18909,7 +19462,11 @@ FIELD 2 — "questions": a structured array of EVERY question in the exam, in or
                 "Complex Multiple Choice (CMCQ)", "Performance Task")
     - text     (string, the full question stem, including any scenario/context)
     - choices  (array of strings; use an EMPTY ARRAY for open-ended types)
-    - answer   (string, the correct answer — a letter, word, or model answer)
+    - answer   (string, the FULL correct answer text)
+        · Multiple Choice → the EXACT text of the correct choice.
+          DO NOT write "A", "B", "C", or "D".
+        · True/False       → the literal string "True" or "False".
+        · Identification / Short Answer → the exact expected word or phrase.
     - points   (integer, point value; default 1 if unspecified)
 
 The "questions" array MUST have exactly one entry per question in "examHTML",
@@ -18946,7 +19503,10 @@ numbered sequentially. Do not skip, merge, or invent items.
             type:    { type: 'STRING',  description: 'Question type.' },
             text:    { type: 'STRING',  description: 'Full question stem, including any scenario.' },
             choices: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Options; empty for open-ended.' },
-            answer:  { type: 'STRING',  description: 'Correct answer.' },
+            answer:  {
+                        type: 'STRING',
+                        description: 'For Multiple Choice: the EXACT text of the correct choice — never a letter like A/B/C/D. For True/False: "True" or "False". For Identification or Short Answer: the exact expected word or phrase.'
+                      },
             points:  { type: 'INTEGER', description: 'Point value.' }
           },
           required: ['number','part','partInstruction','type','text','choices','answer','points']
@@ -19963,11 +20523,20 @@ async openCalendarEventById(id) {
   
   
   
-  async openLessonModal(id) {
+async openLessonModal(id, prefill) {
     if (!State.activeClass) { UI.toast('Select a class first', 'warning'); return; }
     const existing = id ? await DB.get('lessonPlans', id) : null;
     const sections = ['A. Reviewing Previous Lesson','B. Establishing Purpose','C. Presenting Examples','D. Discussing Concepts','E. Developing Mastery','F. Practical Application','G. Generalization','H. Evaluation','I. Additional Activities'];
-    const procedures = existing ? (existing.procedures||{}) : {};
+
+    // Clone so a prefill never mutates the original record, then merge in
+    // any caller-supplied section content (e.g. a Pedagogy strategy).
+    const procedures = existing ? Object.assign({}, existing.procedures || {}) : {};
+    if (prefill && prefill.section && prefill.content) {
+      const prev = (procedures[prefill.section] || '').trimEnd();
+      procedures[prefill.section] = prev
+        ? prev + '\n\n' + prefill.content
+        : prefill.content;
+    }
     const body = `
       <div class="form-row">
         <div class="form-group"><label>Date</label><input type="date" class="form-control" id="lp-date" value="${existing ? Utils.attr(existing.date||Utils.todayISO()) : Utils.attr(Utils.todayISO())}"></div>
@@ -20340,7 +20909,7 @@ async generateLessonPlanWithGemini({
   if (!model) throw new Error('No model selected.');
 
   const systemPrompt = `You are an expert Philippine DepEd curriculum developer implementing the ILAW framework under DO 16, s. 2026 (MATATAG). You unpack one week's competency into EXACTLY ${numSessions} chronological sessions and return a strict JSON object matching the requested schema.`;
-
+  const pedagogyBlock = Pages._buildPedagogyPromptBlock(gradeSection, designPattern);
   const prompt = `Generate a weekly ILAW lesson plan matrix.
 
 ILAW components you must structure the output around:
@@ -20350,6 +20919,7 @@ ILAW components you must structure the output around:
 - W (Ways Forward): per-session extended learning + per-session teacher reflections/next steps.
 
 Write the ENTIRE output in ${mediumOfInstruction}.
+${pedagogyBlock}
 
 WEEKLY CONTEXT:
 - Lesson Name: ${lessonName || '(auto-generate a concise title from the competency)'}
@@ -20932,6 +21502,58 @@ openGeminiKeyModal() {
   })();
 },
 
+/* ============================================================================
+   EXAM ANSWER NORMALIZATION
+   Converts whatever the AI returned as a "correct answer" into the exact text
+   of the matching choice, so the quiz grader can compare click-for-click.
+   Handles: "A", "B.", "(C)", "d)", "Choice A", "Option B", "answer: C",
+   "True"/"False"/"T"/"F", and already-correct full-text answers.
+   ============================================================================ */
+_normalizeExamAnswer(rawAnswer, choices, type) {
+  const raw = String(rawAnswer || '').trim();
+  if (!raw) return '';
+
+  const list = Array.isArray(choices)
+    ? choices.map(c => String(c || '').trim()).filter(Boolean)
+    : [];
+  const t = String(type || '').toLowerCase();
+
+  // Not a choice-based question? Return as-is.
+  const isChoiceBased = list.length >= 2;
+  if (!isChoiceBased) return raw;
+
+  // 1) Already matches a choice exactly? Return that exact choice.
+  const exact = list.find(c => c.toLowerCase() === raw.toLowerCase());
+  if (exact) return exact;
+
+  // 2) Bare letter: "A", "B.", "(C)", "d)", "A:" → map to choice text
+  const letterMatch = raw.match(/^[\(\[]?\s*([A-Za-z])\s*[\)\]\.\:\-]?$/);
+  if (letterMatch) {
+    const idx = letterMatch[1].toUpperCase().charCodeAt(0) - 65; // A=0, B=1, …
+    if (idx >= 0 && idx < list.length) return list[idx];
+  }
+
+  // 3) "Choice A", "Option B", "Letter C", "Answer: D"
+  const wordMatch = raw.match(/^(?:choice|option|letter|answer|ans)\s*[:\-]?\s*[\(\[]?\s*([A-Za-z])\b/i);
+  if (wordMatch) {
+    const idx = wordMatch[1].toUpperCase().charCodeAt(0) - 65;
+    if (idx >= 0 && idx < list.length) return list[idx];
+  }
+
+  // 4) True/False normalization
+  if (/^(true|t)$/i.test(raw)) {
+    const m = list.find(c => /^(true|t)$/i.test(c));
+    if (m) return m;
+  }
+  if (/^(false|f)$/i.test(raw)) {
+    const m = list.find(c => /^(false|f)$/i.test(c));
+    if (m) return m;
+  }
+
+  // 5) Not a letter and not a choice — return the raw string
+  //    (Identification, Short Answer, Essay, etc.)
+  return raw;
+},
 /* ============================================================
    SAVE TOS-GENERATED EXAM TO ASSESSMENT BUILDER
    ============================================================ */
@@ -21112,15 +21734,20 @@ async openSaveToAssessmentModal() {
         maxScore,
         timeLimit,
         instructions,
-        questions: questions.map(q => ({
-          id: Utils.uid('q-'),
-          text: q.text || '',
-          type: q.type || 'Short Answer',
-          points: Number(q.points) || 1,
-          choices: Array.isArray(q.choices) ? q.choices : [],
-          answer: q.answer || '',
-          part: q.part || ''
-        })),
+        questions: questions.map(q => {
+          const cleanChoices = Array.isArray(q.choices)
+            ? q.choices.map(c => String(c || '').trim()).filter(Boolean)
+            : [];
+          return {
+            id: Utils.uid('q-'),
+            text: q.text || '',
+            type: q.type || 'Short Answer',
+            points: Number(q.points) || 1,
+            choices: cleanChoices,
+            answer: Pages._normalizeExamAnswer(q.answer, cleanChoices, q.type),
+            part: q.part || ''
+          };
+        }),
         // Provenance
         aiGenerated: true,
         sourceModule: 'tos-generator',
@@ -25849,7 +26476,12 @@ async exportGroupingSetCSV(id) {
        Persistent preference state
        ───────────────────────────────────────────────────────────── */
     State._noiseDisplayMode  = State._noiseDisplayMode  || 'balls';
-    State._noiseBallTheme    = State._noiseBallTheme    || 'bubbles';
+    State._noiseBallTheme = State._noiseBallTheme || 'bubbles';
+    // Migration: 'emoji' was removed in favour of 'billiard'. Coerce any
+    // persisted value so users who had Emoji selected land on the new theme.
+    if (State._noiseBallTheme === 'emoji') State._noiseBallTheme = 'billiard';
+    // Defence-in-depth: any other unknown key falls back to bubbles.
+    if (!NOISE_BALL_THEMES[State._noiseBallTheme]) State._noiseBallTheme = 'bubbles';
     State._noiseTotalBalls   = State._noiseTotalBalls   || 40;
     State._noiseAlertMode    = State._noiseAlertMode    || 'none';
     State._noiseAlertThresh  = State._noiseAlertThresh  || 80;
@@ -26133,7 +26765,12 @@ async exportGroupingSetCSV(id) {
       maxBalls: 120
     };
 
-    function themeConfig() { return BALL_THEMES[ballTheme]; }
+    function themeConfig() {
+      // Always return a valid theme object. If ballTheme was carried over
+      // from a removed theme (e.g. 'emoji'), fall back to bubbles so the
+      // physics loop never dereferences undefined.
+      return BALL_THEMES[ballTheme] || BALL_THEMES.bubbles;
+    }
 
     function initBouncyEngine() {
       if (!canvasEl) return false;
@@ -26175,41 +26812,74 @@ async exportGroupingSetCSV(id) {
       while (bouncy.balls.length > want) bouncy.balls.pop();
     }
 
-    function makeBall() {
-      const cfg = themeConfig();
-      // Wider size range: tiny (5 px) → hero (60 px). Exponent 2.1 keeps
-      // most bubbles small while letting a few stand out, matching the
-      // distribution in the reference tool.
-      const r = 5 + Math.pow(Math.random(), 2.1) * 55;
-      const color = cfg.mode === 'eyeball'
-        ? '#ffffff'
-        : (cfg.colors[Math.floor(Math.random() * cfg.colors.length)]);
+function makeBall() {
+  const cfg = themeConfig();
+  // Real billiard balls are uniform. Pick a radius that scales gently with
+  // the table, then reuse it for every ball on the table.
+  const uniformBilliardR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
+  const r = cfg.mode === 'billiard'
+    ? uniformBilliardR
+    : 5 + Math.pow(Math.random(), 2.1) * 55;
 
-      return {
-        x: r + Math.random() * Math.max(1, bouncy.W - r * 2),
-        y: bouncy.floorY - r - Math.random() * 200,
-        vx: (Math.random() - 0.5) * 1.6,
-        vy: Math.random() * 3,
-        r,
-        color,
-        iris: cfg.mode === 'eyeball'
-          ? cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)]
-          : null,
-        glyph: cfg.mode === 'emoji'
-          ? cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)]
-          : null,
-        number: cfg.mode === 'number'
-          ? Math.floor(Math.random() * 99) + 1
-          : null,
-        squash: 0,
-        squashAngle: 0,
+  let color = '#888', number = null, isStriped = false, glyph = null, iris = null;
 
-        // Eyeball gaze state
-        _gazeX: 0, _gazeY: 0,          // current smoothed gaze (-1..1)
-        _gazeTargetX: 0, _gazeTargetY: 0,
-        _gazeNextAt: 0
-      };
-    }
+  if (cfg.mode === 'eyeball') {
+    color = '#ffffff';
+    iris = cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)];
+  } else if (cfg.mode === 'billiard') {
+    // Reset to the uniform billiard radius and re-spawn inside the felt
+    const newR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
+    const inset = Math.min(bouncy.W, bouncy.H) * (cfg.wallInset || 0);
+    b.r = newR;
+    b.x = Utils.clamp(b.x, inset + newR, bouncy.W - inset - newR);
+    b.y = Utils.clamp(b.y, inset + newR, bouncy.H - inset - newR);
+    b.vx = (Math.random() - 0.5) * 3;
+    b.vy = (Math.random() - 0.5) * 3;
+    b.squash = 0;
+
+    const useStripe = Math.random() < 0.5;
+    const pool = useStripe ? cfg.stripes : cfg.solids;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    b.color = pick.color;
+    b.number = pick.number;
+    b.isStriped = useStripe;
+    b.glyph = null;
+    b.iris = null;
+
+  } else if (cfg.mode === 'emoji') {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+    glyph = cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)];
+  } else if (cfg.mode === 'number') {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+    number = Math.floor(Math.random() * 99) + 1;
+  } else {
+    color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
+  }
+
+  const wallInsetPx = cfg.wallInset ? Math.min(bouncy.W, bouncy.H) * cfg.wallInset : 0;
+  const spawnX = cfg.mode === 'billiard'
+    ? wallInsetPx + r + Math.random() * Math.max(1, bouncy.W - wallInsetPx * 2 - r * 2)
+    : r + Math.random() * Math.max(1, bouncy.W - r * 2);
+  const spawnY = cfg.mode === 'billiard'
+    ? wallInsetPx + r + Math.random() * Math.max(1, bouncy.H - wallInsetPx * 2 - r * 2)
+    : bouncy.floorY - r - Math.random() * 200;
+  const initialVx = cfg.mode === 'billiard' ? (Math.random() - 0.5) * 3 : (Math.random() - 0.5) * 1.6;
+  const initialVy = cfg.mode === 'billiard' ? (Math.random() - 0.5) * 3 : Math.random() * 3;
+  return {
+    x: spawnX,
+    y: spawnY,
+    vx: initialVx,
+    vy: initialVy,
+    vx: (Math.random() - 0.5) * 1.6,
+    vy: Math.random() * 3,
+    r, color, iris, glyph, number, isStriped,
+    squash: 0,
+    squashAngle: 0,
+    _gazeX: 0, _gazeY: 0,
+    _gazeTargetX: 0, _gazeTargetY: 0,
+    _gazeNextAt: 0
+  };
+}
 
     function volumeToImpulse(v) {
       const t = Utils.clamp(v, 0, 100) / 100;
@@ -26224,6 +26894,103 @@ async exportGroupingSetCSV(id) {
       const isBubble = cfg.mode === 'bubble';
       const now = performance.now();
 
+      // ── Physics boundaries ────────────────────────────────────────
+      // Billiard mode insets the walls so balls bounce off the felt
+      // rather than the wooden rails. Every other theme gets inset 0,
+      // which reproduces the original full-canvas behaviour exactly.
+      const wallInsetPx = cfg.wallInset
+        ? Math.min(W, H) * cfg.wallInset
+        : 0;
+      const wallL = wallInsetPx;
+      const wallR = W - wallInsetPx;
+        const wallT = wallInsetPx;
+  const wallB = H - wallInsetPx;
+
+if (cfg.mode === 'billiard') {
+  // Real pool-table physics. Balls roll on the felt. No gravity, no
+  // buoyancy, no "float." They only move when the room is actually
+  // loud, and they coast to a full stop when it quiets down.
+
+  const ROLLING_FRICTION  = 0.985;   // gentle glide-down
+  const CUSHION_BOUNCE    = 0.82;    // rails absorb some energy
+  const BALL_BOUNCE       = 0.70;    // ball-on-ball restitution
+  const MAX_SPEED         = 10;      // top speed of a struck ball
+  const QUIET_SETTLE_V    = 0.10;    // below this with no sound → rest
+  const MIN_LOUD_VOLUME   = 8;       // volume % required to trigger a kick
+
+  const hasSound = vol >= MIN_LOUD_VOLUME;
+  const loudness = Utils.clamp(vol, 0, 100) / 100;   // 0.0 → 1.0
+
+  bouncy.balls.forEach(b => {
+    // Rolling friction — always applied, on both axes. This is what
+    // makes a billiard ball decelerate smoothly instead of drifting.
+    b.vx *= ROLLING_FRICTION;
+    b.vy *= ROLLING_FRICTION;
+
+    // Only kick when the room is loud enough. No sound → no push.
+    if (hasSound) {
+      const kick = 0.4 + loudness * 1.6;      // tuned to MAX_SPEED cap
+      const angle = Math.random() * Math.PI * 2;
+      b.vx += Math.cos(angle) * kick * dt;
+      b.vy += Math.sin(angle) * kick * dt;
+    }
+
+    // When quiet and already slow, snap to a dead stop so the ball
+    // does not creep along the felt forever.
+    if (!hasSound) {
+      if (Math.abs(b.vx) < QUIET_SETTLE_V) b.vx = 0;
+      if (Math.abs(b.vy) < QUIET_SETTLE_V) b.vy = 0;
+    }
+
+    // Integrate position
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    // Cushion collisions — all four rails
+    if (b.x - b.r < wallL) { b.x = wallL + b.r; b.vx =  Math.abs(b.vx) * CUSHION_BOUNCE; }
+    if (b.x + b.r > wallR) { b.x = wallR - b.r; b.vx = -Math.abs(b.vx) * CUSHION_BOUNCE; }
+    if (b.y - b.r < wallT) { b.y = wallT + b.r; b.vy =  Math.abs(b.vy) * CUSHION_BOUNCE; }
+    if (b.y + b.r > wallB) { b.y = wallB - b.r; b.vy = -Math.abs(b.vy) * CUSHION_BOUNCE; }
+
+    // Hard cap on speed — no runaway balls
+    b.vx = Utils.clamp(b.vx, -MAX_SPEED, MAX_SPEED);
+    b.vy = Utils.clamp(b.vy, -MAX_SPEED, MAX_SPEED);
+
+    b.squash *= 0.85;
+  });
+
+  // Ball-to-ball collisions. A quiet table is a peaceful table —
+  // but if two balls happen to be rolling, they transfer momentum.
+  const balls = bouncy.balls;
+  const n = balls.length;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      const minDist = a.r + b.r;
+      if (distSq >= minDist * minDist || distSq < 0.0001) continue;
+      const dist = Math.sqrt(distSq);
+      const overlap = minDist - dist;
+      const nx = dx / dist, ny = dy / dist;
+      const push = Math.min(overlap * 0.5, 2.4);
+      a.x -= nx * push; a.y -= ny * push;
+      b.x += nx * push; b.y += ny * push;
+      const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
+      const dot = dvx * nx + dvy * ny;
+      if (dot < 0) {
+        const k = dot * BALL_BOUNCE;
+        a.vx += k * nx; a.vy += k * ny;
+        b.vx -= k * nx; b.vy -= k * ny;
+      }
+    }
+  }
+
+  return;   // Skip the gravity-based physics below
+}
+
+
       bouncy.balls.forEach(b => {
         // ── Idle gaze target for eyeballs ─────────────────────────
         if (cfg.mode === 'eyeball') {
@@ -26232,7 +26999,6 @@ async exportGroupingSetCSV(id) {
             b._gazeTargetY = (Math.random() - 0.5) * 2;
             b._gazeNextAt = now + 1800 + Math.random() * 3200;
           }
-          // Slow ease toward the idle target
           b._gazeX += (b._gazeTargetX - b._gazeX) * 0.03 * dt;
           b._gazeY += (b._gazeTargetY - b._gazeY) * 0.03 * dt;
         }
@@ -26264,13 +27030,13 @@ async exportGroupingSetCSV(id) {
         b.vx *= bouncy.airFriction;
         b.vy *= 0.999;
 
-        // ── Walls ─────────────────────────────────────────────────
-        if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx) * 0.7; }
-        if (b.x + b.r > W) { b.x = W - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
+        // ── Walls (respect the inset) ─────────────────────────────
+        if (b.x - b.r < wallL) { b.x = wallL + b.r; b.vx = Math.abs(b.vx) * 0.7; }
+        if (b.x + b.r > wallR) { b.x = wallR - b.r; b.vx = -Math.abs(b.vx) * 0.7; }
 
         // ── Ceiling ───────────────────────────────────────────────
-        if (b.y - b.r < 0) {
-          b.y = b.r;
+        if (b.y - b.r < wallInsetPx) {
+          b.y = wallInsetPx + b.r;
           if (isBubble) {
             b.vy = Math.abs(b.vy) * 0.15;
             b.vx += (Math.random() - 0.5) * 0.6;
@@ -26280,11 +27046,11 @@ async exportGroupingSetCSV(id) {
         }
 
         // ── Floor ─────────────────────────────────────────────────
-        if (b.y + b.r > floorY) {
-          b.y = floorY - b.r;
+        if (b.y + b.r > floorY - wallInsetPx) {
+          b.y = floorY - wallInsetPx - b.r;
           if (isBubble) {
-            b.x = b.r + Math.random() * (W - b.r * 2);
-            b.y = b.r + Math.random() * 40;
+            b.x = wallL + b.r + Math.random() * ((wallR - wallL) - b.r * 2);
+            b.y = wallInsetPx + b.r + Math.random() * 40;
             b.vy = 0;
             b.vx = (Math.random() - 0.5) * 1.2;
           } else {
@@ -26306,7 +27072,7 @@ async exportGroupingSetCSV(id) {
         b.squash *= 0.86;
       });
 
-      // ── Ball-to-ball soft collision ────────────────────────────
+      // ── Ball-to-ball soft collision ────────────────────────────────
       const balls = bouncy.balls;
       const n = balls.length;
       for (let i = 0; i < n; i++) {
@@ -26429,6 +27195,15 @@ async exportGroupingSetCSV(id) {
        ───────────────────────────────────────────────────────────── */
     function drawBall(ctx, b) {
       const cfg = themeConfig();
+
+            /* Billiard balls have their own self-contained renderer. */
+      if (cfg.mode === 'billiard') {
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        drawBilliardBall(ctx, b);
+        ctx.restore();
+        return;
+      }
       const sq = b.squash;
       const rx = b.r * (1 + sq);
       const ry = b.r * (1 - sq);
@@ -26609,6 +27384,12 @@ async exportGroupingSetCSV(id) {
       const cfg = themeConfig();
       const ctx = bouncy.ctx;
       const W = bouncy.W, H = bouncy.H;
+
+            /* Billiard table covers the whole canvas in one pass. */
+      if (cfg.mode === 'billiard') {
+        paintBilliardTable(ctx, W, H);
+        return;
+      }
 
       const grad = ctx.createLinearGradient(0, 0, 0, H);
       grad.addColorStop(0,    cfg.bgTop);
@@ -26955,6 +27736,25 @@ async exportGroupingSetCSV(id) {
             b._gazeTargetX = (Math.random() - 0.5) * 2;
             b._gazeTargetY = (Math.random() - 0.5) * 2;
             b._gazeNextAt = performance.now() + 1800 + Math.random() * 3200;
+          } else if (cfg.mode === 'billiard') {
+            // Reset to the uniform billiard radius and re-spawn inside the felt
+            const newR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
+            const inset = Math.min(bouncy.W, bouncy.H) * (cfg.wallInset || 0);
+            b.r = newR;
+            b.x = Utils.clamp(b.x, inset + newR, bouncy.W - inset - newR);
+            b.y = Utils.clamp(b.y, inset + newR, bouncy.H - inset - newR);
+            b.vx = (Math.random() - 0.5) * 3;
+            b.vy = (Math.random() - 0.5) * 3;
+            b.squash = 0;
+
+            const useStripe = Math.random() < 0.5;
+            const pool = useStripe ? cfg.stripes : cfg.solids;
+            const pick = pool[Math.floor(Math.random() * pool.length)];
+            b.color = pick.color;
+            b.number = pick.number;
+            b.isStriped = useStripe;
+            b.glyph = null;
+            b.iris = null;
           } else if (cfg.mode === 'emoji') {
             b.glyph = cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)];
           } else if (cfg.mode === 'number') {
@@ -32012,10 +32812,12 @@ async teachingToolsHub(root) {
       desc: 'Generate DepEd ILAW weekly lesson plans with Gemini. Unpacks a competency across multiple sessions.' },
     { id: 'tos-generator',        label: 'TOS & Exam Generator',  icon: 'file',
       desc: 'Build a Table of Specifications, then generate a complete exam with answer key and rubrics.' },
-    { id: 'rubric-builder',       label: 'Rubric Builder (AI)',   icon: 'check',   // ← NEW
+    { id: 'rubric-builder',       label: 'Rubric Builder (AI)',   icon: 'check',  
       desc: 'Describe the task — AI drafts the full rubric: criteria, performance levels, descriptors, and points.' },
     { id: 'powerpoint-generator', label: 'PowerPoint Generator',  icon: 'play',
       desc: 'Convert a lesson plan into a ready-to-present slide deck with images and speaker notes.' },
+    { id: 'pedagogy-library',     label: 'Pedagogy Library',      icon: 'star',       
+      desc: 'Browse DepEd’s official learning-design strategies and plug them into any lesson.' },
     { id: 'weekly-planner',       label: 'Weekly Planner',        icon: 'calendar',
       desc: 'Your week at a glance — classes, preparations, meetings, breaks, and reminders.' },
     { id: 'calendar',             label: 'Calendar',              icon: 'calendar',
@@ -32064,6 +32866,628 @@ async teachingToolsHub(root) {
   root.querySelectorAll('[data-hub-open]').forEach(el => {
     el.onclick = () => App.navigate(el.dataset.hubOpen);
   });
+},
+/* ============================================================================
+   PEDAGOGY LIBRARY — DepEd Learning Design Strategies
+   ============================================================================ */
+async pedagogyLibrary(root) {
+  // Load the card data (imported at the top of main.ts)
+  const cards = (typeof PEDAGOGY_CARDS !== 'undefined') ? PEDAGOGY_CARDS : [];
+  const principles = (typeof PEDAGOGY_PRINCIPLES !== 'undefined') ? PEDAGOGY_PRINCIPLES : [];
+  const stageLabels = (typeof KEY_STAGE_LABELS !== 'undefined') ? KEY_STAGE_LABELS : {};
+
+  // ---- Persistent UI state ----
+  if (!State._plUI) {
+    State._plUI = {
+      query: '',
+      principle: '',    // '' = all
+      keyStage: '',     // '' = all
+      grouping: '',     // '' = all
+      sortBy: 'principle'
+    };
+  }
+  const U = State._plUI;
+
+  // ---- Principle metadata (icons + accent gradients) ----
+  const PRINCIPLE_META = {
+    'Clear Goals and Teaching': {
+      icon: 'shield',
+      gradient: 'linear-gradient(135deg, #0038A8 0%, #0057B8 100%)',
+      glow: 'rgba(0, 56, 168, 0.10)',
+      iconBg: 'rgba(0, 56, 168, 0.12)',
+      iconFg: '#0057B8'
+    },
+    'Active Retrieval and Spacing': {
+      icon: 'history',
+      gradient: 'linear-gradient(135deg, #7C3AED 0%, #A78BFA 100%)',
+      glow: 'rgba(124, 58, 237, 0.10)',
+      iconBg: 'rgba(124, 58, 237, 0.12)',
+      iconFg: '#7C3AED'
+    },
+    'Checks for Understanding': {
+      icon: 'check',
+      gradient: 'linear-gradient(135deg, #198754 0%, #22C55E 100%)',
+      glow: 'rgba(25, 135, 84, 0.10)',
+      iconBg: 'rgba(25, 135, 84, 0.12)',
+      iconFg: '#198754'
+    },
+    'Scaffolding': {
+      icon: 'analysis',
+      gradient: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+      glow: 'rgba(8, 145, 178, 0.10)',
+      iconBg: 'rgba(8, 145, 178, 0.12)',
+      iconFg: '#0891B2'
+    },
+    'Social Learning': {
+      icon: 'users',
+      gradient: 'linear-gradient(135deg, #BE185D 0%, #EC4899 100%)',
+      glow: 'rgba(190, 24, 93, 0.10)',
+      iconBg: 'rgba(190, 24, 93, 0.12)',
+      iconFg: '#BE185D'
+    },
+    'Inclusion': {
+      icon: 'star',
+      gradient: 'linear-gradient(135deg, #F59E0B 0%, #F7C948 100%)',
+      glow: 'rgba(245, 158, 11, 0.12)',
+      iconBg: 'rgba(245, 158, 11, 0.15)',
+      iconFg: '#B45309'
+    },
+    'Self-awareness and Metacognition': {
+      icon: 'eye',
+      gradient: 'linear-gradient(135deg, #4F46E5 0%, #818CF8 100%)',
+      glow: 'rgba(79, 70, 229, 0.10)',
+      iconBg: 'rgba(79, 70, 229, 0.12)',
+      iconFg: '#4F46E5'
+    },
+    'Values and Purpose Integration': {
+      icon: 'message',
+      gradient: 'linear-gradient(135deg, #DC2626 0%, #EF4444 100%)',
+      glow: 'rgba(220, 38, 38, 0.10)',
+      iconBg: 'rgba(220, 38, 38, 0.12)',
+      iconFg: '#DC2626'
+    }
+  };
+  const metaFor = (p) => PRINCIPLE_META[p] || PRINCIPLE_META['Clear Goals and Teaching'];
+
+  // ---- Apply filters ----
+  const q = U.query.trim().toLowerCase();
+  let filtered = cards.filter(c => {
+    if (U.principle && c.principle !== U.principle) return false;
+    if (U.keyStage && !c.keyStages.includes(U.keyStage)) return false;
+    if (U.grouping && c.grouping !== U.grouping) return false;
+    if (q) {
+      const hay = [c.title, c.summary, c.description, c.principle, ...(c.tags || [])]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // ---- Sort ----
+  const principleIndex = (p) => principles.indexOf(p);
+  if (U.sortBy === 'principle') {
+    filtered.sort((a, b) => principleIndex(a.principle) - principleIndex(b.principle));
+  } else if (U.sortBy === 'title') {
+    filtered.sort((a, b) => a.title.localeCompare(b.title));
+  } else if (U.sortBy === 'duration') {
+    filtered.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+  }
+
+  const hasFilter = U.query || U.principle || U.keyStage || U.grouping;
+
+  // ---- Principle counts (respecting current non-principle filters) ----
+  const countByPrinciple = {};
+  cards.forEach(c => {
+    // Apply all filters except the principle filter itself
+    if (U.keyStage && !c.keyStages.includes(U.keyStage)) return;
+    if (U.grouping && c.grouping !== U.grouping) return;
+    if (q) {
+      const hay = [c.title, c.summary, c.description, c.principle, ...(c.tags || [])]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return;
+    }
+    countByPrinciple[c.principle] = (countByPrinciple[c.principle] || 0) + 1;
+  });
+
+  // ---- Render page shell ----
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Pedagogy Library</h2>
+        <p>DepEd’s official Learning Design Principles and classroom-ready strategies</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="pl-how-to-use">${icon('info')} How to Use</button>
+      </div>
+    </div>
+
+    <!-- ══════════════ HERO BANNER ══════════════ -->
+    <div class="pl-hero">
+      <div class="pl-hero-badge">
+        ${icon('star')} Pro Feature · DepEd Aligned
+      </div>
+      <h1>Bite-sized strategies you can plug into any lesson.</h1>
+      <p>
+        Turn them into repeatable patterns in your teaching guides — so planning is faster
+        and learners build familiar routines that support independent learning.
+      </p>
+      <div class="pl-hero-stats">
+        <div class="pl-hero-stat">
+          <span class="n">${cards.length}</span>
+          <span class="l">Strategies</span>
+        </div>
+        <div class="pl-hero-stat">
+          <span class="n">${principles.length}</span>
+          <span class="l">Design Principles</span>
+        </div>
+        <div class="pl-hero-stat">
+          <span class="n">4</span>
+          <span class="l">Key Stages</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════ FILTER BAR ══════════════ -->
+    <div class="pl-filter-bar">
+      <div class="pl-filter-row">
+        <div class="pl-search">
+          ${icon('search')}
+          <input type="text" id="pl-search-input"
+                 placeholder="Search strategies by name, keyword, or tag…"
+                 value="${Utils.attr(U.query)}">
+        </div>
+        <select class="pl-select" id="pl-grouping" title="Filter by grouping">
+          <option value="">All groupings</option>
+          ${['Whole Class','Small Group','Pairs','Individual'].map(g =>
+            `<option value="${Utils.attr(g)}" ${U.grouping === g ? 'selected' : ''}>${Utils.esc(g)}</option>`
+          ).join('')}
+        </select>
+        <select class="pl-select" id="pl-sort" title="Sort order">
+          <option value="principle" ${U.sortBy === 'principle' ? 'selected' : ''}>Sort: By principle</option>
+          <option value="title"     ${U.sortBy === 'title'     ? 'selected' : ''}>Sort: A–Z</option>
+          <option value="duration"  ${U.sortBy === 'duration'  ? 'selected' : ''}>Sort: Shortest first</option>
+        </select>
+      </div>
+
+      <div class="pl-filter-row">
+        <div class="pl-stage-pills">
+          <button class="pl-stage-pill ${!U.keyStage ? 'active' : ''}" data-stage="">All Stages</button>
+          ${Object.entries(stageLabels).map(([k, label]) => `
+            <button class="pl-stage-pill ${U.keyStage === k ? 'active' : ''}" data-stage="${Utils.attr(k)}">
+              ${Utils.esc(k)} · ${Utils.esc(label.replace(/^Key Stage \d · /, ''))}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="pl-filter-row">
+        <div class="pl-principle-chips">
+          <button class="pl-principle-chip ${!U.principle ? 'active' : ''}" data-principle="">
+            All principles
+            <span class="cnt">${Object.values(countByPrinciple).reduce((a,b) => a+b, 0)}</span>
+          </button>
+          ${principles.map(p => {
+            const meta = metaFor(p);
+            const cnt = countByPrinciple[p] || 0;
+            const active = U.principle === p;
+            return `
+              <button class="pl-principle-chip ${active ? 'active' : ''}"
+                      data-principle="${Utils.attr(p)}"
+                      style="${active ? '' : 'border-color: var(--border);'}"
+                      title="${Utils.attr(p)}">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${meta.iconFg};"></span>
+                ${Utils.esc(p.split(' and ')[0])}
+                <span class="cnt">${cnt}</span>
+              </button>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════ RESULT COUNT + CLEAR ══════════════ -->
+    <div class="pl-result-row">
+      <div class="pl-result-count">
+        Showing <strong>${filtered.length}</strong> of ${cards.length} strateg${cards.length === 1 ? 'y' : 'ies'}
+        ${U.principle ? ` in <strong>${Utils.esc(U.principle)}</strong>` : ''}
+      </div>
+      ${hasFilter ? `<button class="pl-clear-btn" id="pl-clear-filters">${icon('xCircle')} Clear filters</button>` : ''}
+    </div>
+
+    <!-- ══════════════ GRID ══════════════ -->
+    <div id="pl-grid-container"></div>
+  `;
+
+  // ---- Render the grid (or empty state) ----
+  const gridContainer = root.querySelector('#pl-grid-container');
+  if (!filtered.length) {
+    gridContainer.innerHTML = `
+      <div class="pl-empty">
+        ${icon('search')}
+        <h3>No strategies match</h3>
+        <p>Try adjusting or clearing the filters above to see more of DepEd’s learning design strategies.</p>
+        <button class="btn btn-primary" id="pl-empty-clear">Clear all filters</button>
+      </div>`;
+    const btn = gridContainer.querySelector('#pl-empty-clear');
+    if (btn) btn.onclick = () => Pages._plClearFilters();
+  } else {
+    gridContainer.innerHTML = `
+      <div class="pl-grid">
+        ${filtered.map(c => Pages._plRenderCardHTML(c, metaFor)).join('')}
+      </div>`;
+  }
+
+  // ---- Bind filter controls ----
+  const searchInp = root.querySelector('#pl-search-input');
+  searchInp.addEventListener('input', Utils.debounce(() => {
+    State._plUI.query = searchInp.value;
+    Pages.pedagogyLibrary(root);
+    setTimeout(() => {
+      const s = root.querySelector('#pl-search-input');
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 20);
+  }, 200));
+
+  root.querySelector('#pl-grouping').onchange = (e) => {
+    State._plUI.grouping = e.target.value;
+    Pages.pedagogyLibrary(root);
+  };
+  root.querySelector('#pl-sort').onchange = (e) => {
+    State._plUI.sortBy = e.target.value;
+    Pages.pedagogyLibrary(root);
+  };
+
+  root.querySelectorAll('[data-stage]').forEach(btn => {
+    btn.onclick = () => {
+      State._plUI.keyStage = btn.dataset.stage;
+      Pages.pedagogyLibrary(root);
+    };
+  });
+  root.querySelectorAll('[data-principle]').forEach(btn => {
+    btn.onclick = () => {
+      State._plUI.principle = btn.dataset.principle;
+      Pages.pedagogyLibrary(root);
+    };
+  });
+
+  const clearBtn = root.querySelector('#pl-clear-filters');
+  if (clearBtn) clearBtn.onclick = () => Pages._plClearFilters();
+
+  root.querySelector('#pl-how-to-use').onclick = () => Pages._plShowHowToUseModal();
+
+  // ---- Bind card clicks ----
+  root.querySelectorAll('[data-pl-card]').forEach(el => {
+    el.onclick = () => Pages._plOpenDetailModal(el.dataset.plCard, metaFor);
+  });
+},
+
+_plClearFilters() {
+  State._plUI = { query: '', principle: '', keyStage: '', grouping: '', sortBy: 'principle' };
+  App.navigate('pedagogy-library');
+},
+
+_plRenderCardHTML(card, metaFor) {
+  const meta = metaFor(card.principle);
+  const stagePills = card.keyStages.map(s =>
+    `<span class="pl-meta-pill pl-meta-stage">${Utils.esc(s)}</span>`
+  ).join('');
+  const groupPill = `<span class="pl-meta-pill">${Utils.esc(card.grouping)}</span>`;
+
+  return `
+    <div class="pl-card" data-pl-card="${Utils.attr(card.id)}"
+         style="--pl-accent: ${meta.gradient};
+                --pl-glow: ${meta.glow};
+                --pl-icon-bg: ${meta.iconBg};
+                --pl-icon-fg: ${meta.iconFg};
+                --pl-accent-border: ${meta.iconFg};">
+      <div class="pl-card-top">
+        <div class="pl-card-icon">
+          ${icon(meta.icon)}
+        </div>
+        <div class="pl-card-duration" title="Suggested classroom time">
+          ${icon('timer')} ${card.duration}m
+        </div>
+      </div>
+      <div>
+        <div class="pl-card-title">${Utils.esc(card.title)}</div>
+      </div>
+      <div class="pl-card-summary">${Utils.esc(card.summary)}</div>
+      <div class="pl-card-meta">
+        ${stagePills}
+        ${groupPill}
+      </div>
+      <div class="pl-card-arrow">
+        View strategy ${icon('play')}
+      </div>
+    </div>`;
+},
+
+_plOpenDetailModal(cardId, metaFor) {
+  const cards = (typeof PEDAGOGY_CARDS !== 'undefined') ? PEDAGOGY_CARDS : [];
+  const card = cards.find(c => c.id === cardId);
+  if (!card) return;
+  const meta = metaFor(card.principle);
+
+  const stageBadges = card.keyStages.map(s => {
+    const label = (typeof KEY_STAGE_LABELS !== 'undefined' && KEY_STAGE_LABELS[s])
+      ? KEY_STAGE_LABELS[s].replace(/^Key Stage \d · /, '')
+      : s;
+    return `<span class="pl-detail-badge">${icon('users')} ${Utils.esc(label)}</span>`;
+  }).join('');
+
+  const m = UI.modal({
+    title: '',
+    size: 'modal-lg',
+    body: `
+      <div class="pl-detail">
+        <div class="pl-detail-head" style="--pl-accent: ${meta.gradient};">
+          <div class="pl-detail-principle">
+            ${icon(meta.icon)} ${Utils.esc(card.principle)}
+          </div>
+          <div class="pl-detail-title">${Utils.esc(card.title)}</div>
+          <div class="pl-detail-summary">${Utils.esc(card.summary)}</div>
+          <div class="pl-detail-badges">
+            <span class="pl-detail-badge">${icon('timer')} ~${card.duration} min</span>
+            <span class="pl-detail-badge">${icon('users')} ${Utils.esc(card.grouping)}</span>
+            ${stageBadges}
+          </div>
+        </div>
+
+        <div class="pl-detail-section">
+          <h4>${icon('info')} Overview</h4>
+          <p>${Utils.esc(card.description)}</p>
+        </div>
+
+        <div class="pl-detail-section">
+          <h4>${icon('list')} How to Run It</h4>
+          <ol class="pl-step-list">
+            ${card.steps.map(s => `<li>${Utils.esc(s)}</li>`).join('')}
+          </ol>
+        </div>
+
+        ${card.example ? `
+          <div class="pl-detail-section">
+            <h4>${icon('message')} Classroom Example</h4>
+            <div class="pl-example-box">${Utils.esc(card.example)}</div>
+          </div>` : ''}
+
+        <div class="pl-detail-section">
+          <h4>${icon('star')} Tags</h4>
+          <div class="pl-tags">
+            ${(card.tags || []).map(t => `<span class="pl-tag">#${Utils.esc(t)}</span>`).join('')}
+          </div>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" id="pl-detail-copy">
+        ${icon('file')} Copy Steps
+      </button>
+      <button class="btn btn-primary" id="pl-detail-use">
+        ${icon('play')} Use This Strategy
+      </button>
+    `
+  });
+
+  // Hide the empty title bar (the visual header is inside the body)
+  const headEl = m.overlay.querySelector('.modal-head h3');
+  if (headEl) headEl.textContent = card.title;
+
+  // Copy the steps to the clipboard
+  const copyBtn = m.overlay.querySelector('#pl-detail-copy');
+  if (copyBtn) copyBtn.onclick = async () => {
+    const text =
+      `${card.title}\n${'='.repeat(card.title.length)}\n\n` +
+      `${card.principle} · ${card.grouping} · ~${card.duration} min\n` +
+      `Stages: ${card.keyStages.join(', ')}\n\n` +
+      `${card.summary}\n\n${card.description}\n\n` +
+      `Steps:\n${card.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` +
+      `— Source: DepEd Pedagogy Cards (Bureau of Learning Delivery)`;
+    try {
+      await navigator.clipboard.writeText(text);
+      UI.toast('Strategy copied to clipboard', 'success', 2200);
+    } catch (e) {
+      UI.toast('Copy failed. Select the text manually.', 'warning');
+    }
+  };
+    // "Use This Strategy" — opens a section chooser, then the Lesson Plan editor
+  const useBtn = m.overlay.querySelector('#pl-detail-use');
+  if (useBtn) useBtn.onclick = () => {
+    m.close();
+    Pages._plUseStrategy(card);
+  };
+},
+
+_plShowHowToUseModal() {
+  const m = UI.modal({
+    title: 'How to Use the Pedagogy Library',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          These strategies come from the <strong>Bureau of Learning Delivery</strong> of the
+          Department of Education and support the implementation of
+          <strong>DepEd Order No. 016, s. 2026</strong> on Learning Design Principles.
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="flex-shrink:0;width:36px;height:36px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;">1</div>
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Pick a strategy for your lesson</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.65;">
+              Filter by <em>Key Stage</em>, <em>Learning Design Principle</em>, or search by keyword.
+              Each card tells you the suggested duration, grouping, and the exact steps to run it.
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="flex-shrink:0;width:36px;height:36px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;">2</div>
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Plug it into a lesson plan</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.65;">
+              Use the <strong>Copy Steps</strong> button to paste a strategy straight into your
+              Lesson Planner flow, or into a note you keep for a specific class.
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="flex-shrink:0;width:36px;height:36px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;">3</div>
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">Build repeatable routines</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.65;">
+              The more consistently you use the same strategies with a class, the faster they become
+              familiar routines — freeing up mental space for learners to focus on content.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider" style="margin:20px 0;"></div>
+      <p class="text-xs text-muted" style="line-height:1.7;margin:0;">
+        <strong>Source:</strong> Pedagogy Cards, Bureau of Learning Delivery, Department of Education.
+        Visit <a href="https://learning.deped.gov.ph/" target="_blank" rel="noopener">learning.deped.gov.ph</a>
+        for the official reference and any updates to the framework.
+      </p>
+    `,
+    footer: `<button class="btn btn-primary" data-close>Got it</button>`
+  });
+},
+
+/* ------------------------------------------------------------------
+   PEDAGOGY LIBRARY → LESSON PLAN insertion
+   ------------------------------------------------------------------ */
+
+/** Format a pedagogy card as clean, paste-friendly text. */
+_plFormatStrategyForLesson(card) {
+  return [
+    `[PEDAGOGY STRATEGY · ${card.title}]`,
+    `Principle: ${card.principle}`,
+    `Grouping: ${card.grouping}  ·  Suggested duration: ~${card.duration} min`,
+    '',
+    card.summary,
+    '',
+    'Steps:',
+    ...card.steps.map((s, i) => `  ${i + 1}. ${s}`),
+    '',
+    '[End strategy]'
+  ].join('\n');
+},
+
+/** Opens a small chooser, then the Lesson Plan editor with the strategy
+ *  pre-filled into the chosen section. */
+_plUseStrategy(card) {
+  const SECTIONS = [
+    'A. Reviewing Previous Lesson',
+    'B. Establishing Purpose',
+    'C. Presenting Examples',
+    'D. Discussing Concepts',
+    'E. Developing Mastery',
+    'F. Practical Application',
+    'G. Generalization',
+    'H. Evaluation',
+    'I. Additional Activities'
+  ];
+  const DEFAULT_SECTION = 'E. Developing Mastery';
+
+  const m = UI.modal({
+    title: 'Use This Strategy',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          <strong>${Utils.esc(card.title)}</strong> will be dropped into a lesson plan.
+          Choose which section of the plan it belongs in.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Lesson Plan Section</label>
+        <select class="form-control" id="pl-use-section">
+          ${SECTIONS.map(s => `
+            <option value="${Utils.attr(s)}" ${s === DEFAULT_SECTION ? 'selected' : ''}>
+              ${Utils.esc(s)}
+            </option>`).join('')}
+        </select>
+        <small class="text-muted">
+          Most strategies land best in <strong>Developing Mastery</strong> or
+          <strong>Practical Application</strong>. You can edit or move it afterwards.
+        </small>
+      </div>
+
+      <div class="divider"></div>
+
+      <p class="text-xs text-muted mb-8"><strong>Preview of the content that will be inserted:</strong></p>
+      <pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11.5px;line-height:1.55;max-height:220px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;margin:0;">${Utils.esc(Pages._plFormatStrategyForLesson(card))}</pre>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-primary" id="pl-use-confirm">
+        ${icon('edit')} Open Lesson Plan
+      </button>
+    `
+  });
+
+  m.overlay.querySelector('#pl-use-confirm').onclick = () => {
+    const section = m.overlay.querySelector('#pl-use-section').value;
+    const content = Pages._plFormatStrategyForLesson(card);
+    console.log('[PL] Confirm clicked. Section:', section, '· Content length:', content.length);
+    m.close();
+    Pages.openLessonModal(null, { section, content });
+    App.logActivity(`Pedagogy strategy "${card.title}" added to a lesson plan`, 'Lessons');
+    UI.toast(`Strategy added to ${section.split('. ')[1] || section}`, 'success', 3000);
+  };
+},
+/* ------------------------------------------------------------------
+   PEDAGOGY → AI PROMPT INTEGRATION
+   Builds a text block for Gemini that names the strategies most suited
+   to the lesson's key stage and design pattern.
+   ------------------------------------------------------------------ */
+_buildPedagogyPromptBlock(gradeSection, designPattern) {
+  const cards = (typeof PEDAGOGY_CARDS !== 'undefined') ? PEDAGOGY_CARDS : [];
+  if (!cards.length) return '';
+
+  // Resolve key stage from the free-text grade field
+  const g = String(gradeSection || '').toLowerCase();
+  let ks = 'KS3';
+  if (/kinder|\bgrade 1\b|\bgrade 2\b|\bgrade 3\b/.test(g)) ks = 'KS1';
+  else if (/\bgrade 4\b|\bgrade 5\b|\bgrade 6\b/.test(g)) ks = 'KS2';
+  else if (/\bgrade 7\b|\bgrade 8\b|\bgrade 9\b|\bgrade 10\b/.test(g)) ks = 'KS3';
+  else if (/\bgrade 11\b|\bgrade 12\b|\bshs\b/.test(g)) ks = 'KS4';
+
+  // Prefer strategies that match the requested design pattern when possible.
+  // Design-pattern keywords are matched loosely against tags + titles.
+  const dpWords = String(designPattern || '').toLowerCase();
+  const patternTags = [];
+  if (/5\s*e|6\s*e|inquiry|explore|investigate/.test(dpWords))  patternTags.push('inquiry', 'investigation');
+  if (/experiential|reflective/.test(dpWords))                  patternTags.push('reflection', 'metacognition');
+  if (/explicit|i do, we do, you do|direct/.test(dpWords))      patternTags.push('direct-instruction', 'modeling', 'worked-examples');
+  if (/5\s*as|activity|analysis|abstraction/.test(dpWords))     patternTags.push('practice', 'analysis');
+
+  const relevant = cards.filter(c => c.keyStages.includes(ks));
+
+  // Rank: pattern-matching cards first, then the rest. Cap at 10.
+  const ranked = relevant.slice().sort((a, b) => {
+    const scoreA = patternTags.some(t => (a.tags || []).includes(t)) ? 1 : 0;
+    const scoreB = patternTags.some(t => (b.tags || []).includes(t)) ? 1 : 0;
+    return scoreB - scoreA;
+  }).slice(0, 10);
+
+  if (!ranked.length) return '';
+
+  return `
+
+RELEVANT LEARNING DESIGN STRATEGIES — DepEd Pedagogy Cards (Bureau of Learning Delivery):
+In the per-session "flow" fields, you MUST explicitly incorporate at least TWO of the following strategies. Use their EXACT titles in the flow text, and describe concretely what the teacher does and what the learners do at each step. Do not merely mention a strategy by name — describe the mechanics.
+
+${ranked.map(s => `■ ${s.title}  (${s.principle})
+  Grouping: ${s.grouping}  ·  Suggested duration: ~${s.duration} min
+  Steps: ${s.steps.join(' → ')}`).join('\n\n')}
+
+Choose strategies that fit naturally with the lesson design pattern "${designPattern}" and the learner context provided. Do not bolt on strategies that don't fit — pick the two (or three) that genuinely serve this lesson.
+`;
 },
 
   async exportCenter(root) {
@@ -39448,6 +40872,18 @@ CONTEXT
 - Grade Level: ${inputs.gradeLevel || 'Not specified'}
 - Additional Description: ${inputs.description || 'None provided.'}
 
+ALIGNMENT WITH DEPED LEARNING DESIGN PRINCIPLES
+The rubric should reflect the following DepEd Learning Design Principles where they naturally apply to the task. At least ONE criterion must explicitly address either student reflection (self-awareness/metacognition), collaboration (social learning), or values integration — choose whichever best fits the task type "${taskTypeLabel}".
+
+- Clear Goals and Teaching
+- Active Retrieval and Spacing
+- Checks for Understanding
+- Scaffolding
+- Social Learning
+- Inclusion
+- Self-awareness and Metacognition
+- Values and Purpose Integration
+
 REQUIREMENTS
 - Rubric Style: ${inputs.rubricStyle} (${styleDesc})
 - Number of criteria rows: exactly ${inputs.criteriaCount}
@@ -40372,7 +41808,8 @@ const aliases = {
   'teaching-load': 'teachingLoad',
   'rubric-builder': 'rubricBuilder',
   'teaching-tools': 'teachingToolsHub',   
-  'planning': 'planningHub'               
+  'planning': 'planningHub',
+  'pedagogy-library': 'pedagogyLibrary',               
 };
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
@@ -40401,7 +41838,8 @@ for (const k in aliases) {
  'seatGridUniform','seatGridAutoFit','seatToggleOrientation','_seatInsertColumn','_seatInsertRow',
  '_seatDeleteColumn','_seatDeleteRow','_seatOpenContextMenu', '_seatToggleBlocked',
  'openCalendarEventById',
- 'openTeachingLoadModal','deleteTeachingLoad','openTeachingLoadNotifSettings'    // ← NEW
+ 'openTeachingLoadModal','deleteTeachingLoad','openTeachingLoadNotifSettings',
+ '_plShowHowToUseModal'    // ← NEW
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
 /* ============================================================================
    EXPORTS + BOOT
