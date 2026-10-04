@@ -1012,7 +1012,345 @@ export const PEDAGOGY_CARDS: PedagogyCard[] = [
       'Peers give one "I would support this because…" note.'
     ],
     tags: ['public-speaking', 'purpose', 'SHS', 'advocacy']
-  }
+  },
+  {
+    id: 'four-corners',
+    title: 'Four Corners',
+    principle: 'Clear Goals and Teaching',
+    keyStages: ['KS2', 'KS3', 'KS4'],
+    grouping: 'Whole Class',
+    duration: 15,
+    summary: 'Learners physically move to the corner matching their opinion.',
+    description: 'The teacher poses a debatable statement. Four corners of the room are labelled (Strongly Agree, Agree, Disagree, Strongly Disagree). Learners walk to their corner, then defend their position to peers with a similar view before the class debates.',
+    steps: [
+      'Pose a clear, debatable statement.',
+      'Label each corner of the room with a position.',
+      'Learners walk to their corner silently.',
+      'Each corner discusses why they chose it (2 minutes).',
+      'One speaker per corner presents their strongest reason.'
+    ],
+    tags: ['debate', 'movement', 'opinion', 'discussion']
+  },
+  {
+    id: 'think-aloud-pair-problem-solve',
+    title: 'Think Aloud Pair Problem Solving',
+    principle: 'Clear Goals and Teaching',
+    keyStages: ['KS2', 'KS3'],
+    grouping: 'Pairs',
+    duration: 15,
+    summary: 'One solves aloud; the other listens and prompts.',
+    description: 'Learners work in pairs on a problem. Partner A verbalises every thought while Partner B listens, asks clarifying questions, and catches errors. Then they swap roles on the next problem. Makes thinking visible and catches misconceptions early.',
+    steps: [
+      'Assign Partner A (solver) and Partner B (listener).',
+      'Partner A solves aloud, narrating every step.',
+      'Partner B prompts: "Why did you do that?" and listens for errors.',
+      'Swap roles and repeat with a new problem.',
+      'Both write a one-line reflection on what they learned.'
+    ],
+    tags: ['metacognition', 'problem-solving', 'pairs', 'thinking-aloud']
+  },
+
+  /* ---- Active Retrieval and Spacing ---- */
+  {
+    id: 'brain-dump',
+    title: 'Brain Dump',
+    principle: 'Active Retrieval and Spacing',
+    keyStages: ['KS2', 'KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 5,
+    summary: 'Write everything you remember about a topic in two minutes.',
+    description: 'A timed free-recall exercise. Learners write down every fact, term, or idea they can remember about a topic with no prompts or notes. The gap between what they recall and what they missed is the learning target.',
+    steps: [
+      'Name the topic and start a 2-minute timer.',
+      'Learners write down everything they remember.',
+      'Compare with a partner — add what you missed in a different colour.',
+      'Teacher reveals a master list on the board.',
+      'Learners circle one item to review before next class.'
+    ],
+    tags: ['retrieval', 'free-recall', 'spacing', 'quick-check']
+  },
+  {
+    id: 'two-minute-recall',
+    title: 'Two-Minute Recall',
+    principle: 'Active Retrieval and Spacing',
+    keyStages: ['KS1', 'KS2'],
+    grouping: 'Whole Class',
+    duration: 5,
+    summary: 'Rapid choral recall of last week\'s key facts.',
+    description: 'A fast, whole-class warm-up where the teacher fires rapid-fire questions from memory and the class answers in unison. Builds automaticity and gets every learner engaged from the first minute.',
+    steps: [
+      'Stand at the front with a list of 10–12 quick questions.',
+      'Fire questions one by one; class answers in chorus.',
+      'Speed up as the class warms up.',
+      'Pause on any question with a weak answer and re-explain.',
+      'End with a "challenge question" from a prior unit.'
+    ],
+    tags: ['retrieval', 'warm-up', 'choral-response', 'KS1']
+  },
+
+  /* ---- Checks for Understanding ---- */
+  {
+    id: 'hinge-question',
+    title: 'Hinge Question',
+    principle: 'Checks for Understanding',
+    keyStages: ['KS2', 'KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 4,
+    summary: 'One diagnostic question mid-lesson that decides the next move.',
+    description: 'A carefully designed question placed at a hinge point in the lesson. Every learner answers simultaneously. The teacher scans the responses and decides whether to move on, re-teach, or differentiate.',
+    steps: [
+      'Design one question that all learners must answer.',
+      'Pose it at the hinge point in the lesson.',
+      'All learners answer simultaneously (mini-whiteboards or digital poll).',
+      'Scan for the distribution of correct vs incorrect answers.',
+      'If >80% correct, move on. If not, re-teach before continuing.'
+    ],
+    tags: ['formative', 'diagnostic', 'decision-point', 'whole-class']
+  },
+  {
+    id: 'one-sentence-summary',
+    title: 'One-Sentence Summary',
+    principle: 'Checks for Understanding',
+    keyStages: ['KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 5,
+    summary: 'Summarise today\'s lesson in exactly one sentence.',
+    description: 'Learners condense the entire lesson into a single, well-crafted sentence. The constraint forces them to identify the most essential idea — and reveals whether they understand the big picture.',
+    steps: [
+      'Pose the prompt: "In one sentence, what did you learn today?"',
+      'Give 2 minutes of silent writing.',
+      'Read a few aloud — no commentary, just listen.',
+      'Ask: "Whose sentence captured the main idea best?"',
+      'Collect the sentences as a quick formative check.'
+    ],
+    tags: ['synthesis', 'writing', 'formative', 'summarising']
+  },
+
+  /* ---- Scaffolding ---- */
+  {
+    id: 'peel-paragraph',
+    title: 'PEEL Paragraph',
+    principle: 'Scaffolding',
+    keyStages: ['KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 25,
+    summary: 'A four-sentence structure for building a paragraph of argument.',
+    description: 'Point · Evidence · Explanation · Link. A scaffolded writing frame that turns a jumbled paragraph into a clear, evidence-based argument. Works across every subject that requires structured writing.',
+    steps: [
+      'Introduce the PEEL frame with a worked example.',
+      'Model writing a PEEL paragraph on a familiar topic.',
+      'Learners write their own on the current topic.',
+      'Peer review: does each sentence do its job?',
+      'Revise and submit one polished paragraph.'
+    ],
+    tags: ['writing', 'argumentation', 'structure', 'evidence']
+  },
+  {
+    id: 'i-do-we-do-you-do',
+    title: 'I Do · We Do · You Do',
+    principle: 'Scaffolding',
+    keyStages: ['KS1', 'KS2', 'KS3'],
+    grouping: 'Whole Class',
+    duration: 20,
+    summary: 'Three-stage release: teacher shows, class tries, learner flies solo.',
+    description: 'A gradual-release framework for teaching any new skill. The teacher models first (I Do), the class works through an example together (We Do), and finally learners practise independently (You Do).',
+    steps: [
+      'I Do — model the skill with a think-aloud.',
+      'We Do — solve a similar problem together on the board.',
+      'Check — ask one learner to explain a step in their own words.',
+      'You Do — learners practise independently while teacher circulates.',
+      'Close — review one common error and celebrate success.'
+    ],
+    tags: ['gradual-release', 'modeling', 'direct-instruction', 'scaffolding']
+  },
+
+  /* ---- Social Learning ---- */
+  {
+    id: 'numbered-heads-together',
+    title: 'Numbered Heads Together',
+    principle: 'Social Learning',
+    keyStages: ['KS2', 'KS3'],
+    grouping: 'Small Group',
+    duration: 15,
+    summary: 'Number off, discuss, then one number is called to answer.',
+    description: 'Learners in groups of four number off. After discussion, the teacher calls a number. Only that learner answers for the whole group — no one knows who will be called, so everyone must be ready.',
+    steps: [
+      'Form groups of four; each learner takes a number 1–4.',
+      'Pose the question and give 3 minutes to discuss.',
+      'All group members must agree on the answer.',
+      'Call a random number — that learner answers for the group.',
+      'Score the group, not the individual.'
+    ],
+    tags: ['accountability', 'cooperative-learning', 'discussion', 'whole-class']
+  },
+  {
+    id: 'circle-of-viewpoints',
+    title: 'Circle of Viewpoints',
+    principle: 'Social Learning',
+    keyStages: ['KS3', 'KS4'],
+    grouping: 'Whole Class',
+    duration: 20,
+    summary: 'Explore an issue from multiple stakeholder perspectives.',
+    description: 'After reading a text or studying an event, learners adopt different stakeholder viewpoints and discuss the issue from their assigned perspective. Builds empathy, critical thinking, and civil discourse.',
+    steps: [
+      'Identify 4–6 different stakeholder viewpoints.',
+      'Assign each group one viewpoint.',
+      'Groups prepare arguments from that perspective.',
+      'Form a circle: each group presents their view.',
+      'Discuss: what did each viewpoint miss?'
+    ],
+    tags: ['perspective-taking', 'discussion', 'empathy', 'critical-thinking']
+  },
+
+  /* ---- Inclusion ---- */
+  {
+    id: 'universal-design-for-learning',
+    title: 'Universal Design for Learning',
+    principle: 'Inclusion',
+    keyStages: ['KS1', 'KS2', 'KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 30,
+    summary: 'Offer multiple ways to take in, work with, and show learning.',
+    description: 'Provide the same content in three formats (text, audio, visual), allow multiple response modes (write, draw, record), and build in choice of tasks. Removes barriers before they appear.',
+    steps: [
+      'Present the core content in at least two formats.',
+      'Offer at least three ways to respond.',
+      'Provide choice in how learners demonstrate mastery.',
+      'Build in flexible pacing options.',
+      'Survey learners on which pathway worked best.'
+    ],
+    tags: ['UDL', 'accessibility', 'differentiation', 'choice']
+  },
+  {
+    id: 'visual-supports',
+    title: 'Visual Supports',
+    principle: 'Inclusion',
+    keyStages: ['KS1', 'KS2'],
+    grouping: 'Whole Class',
+    duration: 10,
+    summary: 'Anchor every spoken instruction with a visual.',
+    description: 'Pair every verbal instruction with a picture, icon, or written cue. Simple but powerful for learners with language processing difficulties, hearing loss, or attention challenges.',
+    steps: [
+      'Prepare visual cards for the day\'s key instructions.',
+      'Display each card while giving the verbal instruction.',
+      'Leave the cards visible for reference.',
+      'Ask a learner to re-explain using the visual.',
+      'Store the visuals for future reuse.'
+    ],
+    tags: ['visuals', 'accessibility', 'KS1', 'language-support']
+  },
+
+  /* ---- Self-awareness and Metacognition ---- */
+  {
+    id: 'traffic-lights',
+    title: 'Traffic Lights',
+    principle: 'Self-awareness and Metacognition',
+    keyStages: ['KS1', 'KS2'],
+    grouping: 'Whole Class',
+    duration: 5,
+    summary: 'Green, yellow, red — a silent signal of confidence.',
+    description: 'Learners show a green, yellow, or red card to indicate their confidence with the current task. Green means "I can do this alone." Yellow means "I need a little help." Red means "I need you now."',
+    steps: [
+      'Give every learner three coloured cards.',
+      'Explain what each colour means.',
+      'Learners show a card at the start of independent work.',
+      'Teacher prioritises red and yellow learners.',
+      'Re-check at the end of the lesson.'
+    ],
+    tags: ['confidence-check', 'self-assessment', 'silent-signal', 'KS1']
+  },
+  {
+    id: 'wonder-wall',
+    title: 'Wonder Wall',
+    principle: 'Self-awareness and Metacognition',
+    keyStages: ['KS2', 'KS3'],
+    grouping: 'Whole Class',
+    duration: 10,
+    summary: 'A visible wall of learner questions — asked and answered.',
+    description: 'A permanent classroom display where learners post questions they want answered about the current unit. Questions are grouped by theme, and answers are added as the unit progresses. Builds curiosity and ownership.',
+    steps: [
+      'Introduce the Wonder Wall at the start of a unit.',
+      'Learners write questions on sticky notes and post them.',
+      'Group similar questions into themes.',
+      'Return to the wall weekly — which questions can we answer now?',
+      'Celebrate the questions that drove the deepest learning.'
+    ],
+    tags: ['curiosity', 'student-questions', 'display', 'inquiry']
+  },
+  {
+    id: 'reflection-journal',
+    title: 'Reflection Journal',
+    principle: 'Self-awareness and Metacognition',
+    keyStages: ['KS3', 'KS4'],
+    grouping: 'Individual',
+    duration: 15,
+    summary: 'A structured, recurring journal entry after every major task.',
+    description: 'Learners keep a running journal with a fixed set of prompts (What did I do well? What was hard? What will I do differently next time?). Over time, the journal becomes a visible record of growth.',
+    steps: [
+      'Distribute or co-create the journal prompts.',
+      'Set aside 10–15 minutes after each major task.',
+      'Learners write in silence — no prompts during writing.',
+      'Teacher reads entries and responds with a short comment.',
+      'At the end of the term, learners read their first entry vs their latest.'
+    ],
+    tags: ['journal', 'reflection', 'growth-mindset', 'writing']
+  },
+
+  /* ---- Values and Purpose Integration ---- */
+  {
+    id: 'values-auction',
+    title: 'Values Auction',
+    principle: 'Values and Purpose Integration',
+    keyStages: ['KS3', 'KS4'],
+    grouping: 'Small Group',
+    duration: 20,
+    summary: 'Bid on the values you care about most — then explain why.',
+    description: 'Groups receive a budget of "value points" and must bid on a list of values (honesty, loyalty, justice, courage, etc.). The debrief explores what the winners truly value and why.',
+    steps: [
+      'Distribute a list of 10–15 values.',
+      'Give each group a budget of 100 points.',
+      'Groups bid on the values they want to "win".',
+      'Reveal which values each group won.',
+      'Discuss: what does this tell us about our priorities?'
+    ],
+    tags: ['values', 'decision-making', 'discussion', 'ethics']
+  },
+  {
+    id: 'real-world-connection',
+    title: 'Real-World Connection',
+    principle: 'Values and Purpose Integration',
+    keyStages: ['KS2', 'KS3', 'KS4'],
+    grouping: 'Whole Class',
+    duration: 10,
+    summary: 'Link today\'s lesson to a current event or community issue.',
+    description: 'A short closing routine where the teacher connects the lesson content to something happening in the world — a news story, a local issue, a community event. Answers the question: "Why does this matter?"',
+    steps: [
+      'Prepare one relevant real-world connection per lesson.',
+      'Share it in the last 5 minutes of class.',
+      'Ask: "How does today\'s lesson help us understand this?"',
+      'Take 2–3 responses.',
+      'End with: "Who in our community would care about this?"'
+    ],
+    tags: ['relevance', 'current-events', 'purpose', 'community']
+  },
+  {
+    id: 'legacy-project',
+    title: 'Legacy Project',
+    principle: 'Values and Purpose Integration',
+    keyStages: ['KS4'],
+    grouping: 'Small Group',
+    duration: 60,
+    summary: 'A culminating project that leaves the community better.',
+    description: 'Groups design and execute a small project that benefits the school or community — a cleanup drive, a tutorial program, a mural, a donation drive. The learning is measured by the impact, not just the process.',
+    steps: [
+      'Identify a real need in the school or community.',
+      'Design a realistic, achievable project.',
+      'Execute it — even if small.',
+      'Document the impact (photos, testimonials, numbers).',
+      'Present the outcomes to the class and the beneficiaries.'
+    ],
+    tags: ['service-learning', 'community', 'project-based', 'SHS']
+  },
 ];
 
 /* Convenience lookups */
