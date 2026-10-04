@@ -7,7 +7,8 @@ import {
 } from './pedagogy-cards';
 
 /* ============================================================================
-   KlazAssist v1.1.0 — Offline-First Teacher Toolkit · pydjianPH
+/* ============================================================================
+   KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
 
    SECURITY REALITY (client-side, single-file, offline-first):
      Authentication here protects application access on this device only.
@@ -1125,6 +1126,498 @@ const MergeEngine = {
 
     DB._invalidate();
     return { applied };
+  }
+};
+/* ============================================================================
+   QR ATTENDANCE SCANNER
+   ──────────────────────────────────────────────────────────────────────────
+   Opens the rear camera, decodes QR codes from learner ID cards, and writes
+   each successful scan directly to IndexedDB as Present. No save step.
+
+   Design notes:
+     • Scanning = committing. A scan is an explicit act; a save prompt would
+       be friction without safety. Undo is available in the modal.
+     • Debounce: the same QR stays in frame for many decode cycles. We mark
+       once, then ignore that learner for 4 seconds.
+     • No camera? Fall back to a manual LRN input. Never dead-end the teacher.
+   ============================================================================ */
+const QRAttendance = {
+  _modal: null,
+  _video: null,
+  _canvas: null,
+  _ctx: null,
+  _stream: null,
+  _timer: null,
+  _recentScans: new Map(),   // learnerId → timestamp (debounce)
+  _scans: [],                // { learner, at, status } in scan order
+  _beepCtx: null,
+  _attendanceRoot: null,
+
+  /* ---------- Public entry ---------- */
+  async open(attendanceRoot) {
+    this._attendanceRoot = attendanceRoot;
+
+    // Reset per-session state
+    this._recentScans = new Map();
+    this._scans = [];
+
+    const ok = await this._ensureLib();
+    if (!ok) {
+      UI.toast('Could not load the QR reader. Check your connection, or vendor vendor/jsQR.js locally.', 'error', 7000);
+      return;
+    }
+
+    this._renderModal();
+
+    // Try to start the camera. If it fails, fall back to manual entry.
+    try {
+      await this._startCamera();
+    } catch (e) {
+      console.warn('[QR] Camera start failed:', e);
+      this._showCameraError(e);
+    }
+  },
+
+  /* ---------- Library loading ---------- */
+  async _ensureLib() {
+    if (window.jsQR) return true;
+
+    return new Promise((resolve) => {
+      const tryLoad = (src, onFail) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = () => resolve(!!window.jsQR);
+        s.onerror = onFail;
+        document.head.appendChild(s);
+      };
+
+      // Prefer the vendored copy so the feature works offline.
+      tryLoad('./vendor/jsQR.js', () => {
+        // Fall back to CDN if the vendored file is missing.
+        console.warn('[QR] Vendored jsQR.js not found, falling back to CDN.');
+        tryLoad('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', () => resolve(false));
+      });
+    });
+  },
+
+  /* ---------- Modal construction ---------- */
+  _renderModal() {
+    const cls = State.activeClass || {};
+    const learners = State.attendanceIncludeInactive
+      ? State.learners
+      : State.learners.filter(Utils.isActiveLearner);
+
+    const modal = UI.modal({
+      title: 'Scan Learner ID Cards',
+      size: 'modal-lg',
+      body: `
+        <div class="qr-scanner-layout">
+          <div class="qr-video-wrap" id="qr-video-wrap">
+            <video id="qr-video" playsinline muted autoplay></video>
+            <canvas id="qr-canvas" style="display:none;"></canvas>
+            <div class="qr-reticle" aria-hidden="true">
+              <span class="qr-reticle-corner tl"></span>
+              <span class="qr-reticle-corner tr"></span>
+              <span class="qr-reticle-corner bl"></span>
+              <span class="qr-reticle-corner br"></span>
+              <div class="qr-scanline"></div>
+            </div>
+            <div class="qr-flash" id="qr-flash"></div>
+            <div class="qr-video-status" id="qr-video-status">Starting camera…</div>
+          </div>
+
+          <div class="qr-stats-row">
+            <div class="qr-stat">
+              <span class="qr-stat-label">Scanned</span>
+              <span class="qr-stat-value" id="qr-count">0</span>
+            </div>
+            <div class="qr-stat">
+              <span class="qr-stat-label">Total</span>
+              <span class="qr-stat-value">${learners.length}</span>
+            </div>
+            <div class="qr-progress-wrap">
+              <div class="qr-progress-bar"><div id="qr-progress-fill" style="width:0%"></div></div>
+            </div>
+          </div>
+
+          <div class="qr-scan-list-wrap">
+            <div class="qr-scan-list-head">
+              <span>Scanned learners</span>
+              <button type="button" class="btn btn-sm btn-ghost" id="qr-undo" disabled>Undo last</button>
+            </div>
+            <div class="qr-scan-list" id="qr-scan-list">
+              <div class="qr-scan-empty">Point the camera at a learner ID card. Scans are saved immediately.</div>
+            </div>
+          </div>
+
+          <div class="qr-manual-row">
+            <label for="qr-manual-input" class="qr-manual-label">Or type an LRN manually:</label>
+            <div class="qr-manual-input-wrap">
+              <input type="text" id="qr-manual-input" class="form-control"
+                     placeholder="12-digit LRN" inputmode="numeric" maxlength="14" autocomplete="off">
+              <button type="button" class="btn btn-primary btn-sm" id="qr-manual-submit">Mark Present</button>
+            </div>
+          </div>
+        </div>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="qr-close">Done</button>
+      `,
+      onClose: () => this._cleanup()
+    });
+
+    this._modal = modal;
+
+    // Wire DOM references
+    this._video = modal.overlay.querySelector('#qr-video');
+    this._canvas = modal.overlay.querySelector('#qr-canvas');
+    this._ctx = this._canvas.getContext('2d', { willReadFrequently: true });
+
+    modal.overlay.querySelector('#qr-close').onclick = () => modal.close();
+    modal.overlay.querySelector('#qr-undo').onclick = () => this._undoLast();
+    modal.overlay.querySelector('#qr-manual-submit').onclick = () => this._manualSubmit();
+
+    const manualInput = modal.overlay.querySelector('#qr-manual-input');
+    manualInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this._manualSubmit(); }
+    });
+  },
+
+  /* ---------- Camera lifecycle ---------- */
+  async _startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('This browser does not support camera access.');
+    }
+
+    this._stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+
+    this._video.srcObject = this._stream;
+    await this._video.play();
+
+    this._setStatus('Scanning…');
+    this._startDecodeLoop();
+  },
+
+  _stopCamera() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (this._stream) {
+      try { this._stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      this._stream = null;
+    }
+    if (this._video) {
+      try { this._video.srcObject = null; } catch (e) {}
+    }
+  },
+
+  _startDecodeLoop() {
+    const TICK_MS = 90;  // ~11 fps — plenty for QR, easy on the battery
+
+    const tick = () => {
+      if (!this._stream || !this._video) return;
+      this._timer = setTimeout(tick, TICK_MS);
+
+      const v = this._video;
+      if (v.readyState !== v.HAVE_ENOUGH_DATA || !v.videoWidth) return;
+
+      // Downscale for speed. jsQR on 800px-wide frames is ~4× faster
+      // than on 1920px frames, with no loss of accuracy for QR codes.
+      const MAX_W = 800;
+      const scale = Math.min(1, MAX_W / v.videoWidth);
+      this._canvas.width  = Math.round(v.videoWidth  * scale);
+      this._canvas.height = Math.round(v.videoHeight * scale);
+      this._ctx.drawImage(v, 0, 0, this._canvas.width, this._canvas.height);
+
+      const imageData = this._ctx.getImageData(0, 0, this._canvas.width, this._canvas.height);
+
+      let code = null;
+      try {
+        code = window.jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert'
+        });
+      } catch (e) {
+        // Some browsers throw on rapidly-recycled ImageData; ignore.
+      }
+
+      if (code && code.data) this._handleDecoded(code.data);
+    };
+
+    tick();
+  },
+
+  _cleanup() {
+    this._stopCamera();
+    if (this._beepCtx) { try { this._beepCtx.close(); } catch (e) {} this._beepCtx = null; }
+
+    // Refresh the attendance page behind us so the draft reflects every scan.
+    if (this._attendanceRoot && document.body.contains(this._attendanceRoot)) {
+      App.navigate('attendance');
+    }
+  },
+
+  /* ---------- QR payload parsing ---------- */
+  _parsePayload(text) {
+    if (!text) return null;
+    const s = String(text).trim();
+
+    // 1. JSON (what our ID cards emit)
+    if (s.startsWith('{')) {
+      try {
+        const obj = JSON.parse(s);
+        if (obj && obj.lrn) return { lrn: String(obj.lrn).trim(), name: obj.name || '' };
+      } catch (e) { /* fall through */ }
+    }
+
+    // 2. Bare numeric LRN
+    const numeric = s.replace(/\D/g, '');
+    if (numeric && numeric.length >= 6 && numeric.length <= 14) {
+      return { lrn: numeric, name: '' };
+    }
+
+    // 3. Anything else — treat as a name fallback
+    return { lrn: '', name: s };
+  },
+
+  /* ---------- Match a payload to a learner in the active class ---------- */
+  _matchLearner(payload) {
+    const learners = State.attendanceIncludeInactive
+      ? State.learners
+      : State.learners.filter(Utils.isActiveLearner);
+
+    // Best signal: exact LRN match
+    if (payload.lrn) {
+      const byLrn = learners.find(l => String(l.lrn || '').trim() === payload.lrn);
+      if (byLrn) return byLrn;
+    }
+
+    // Fallback: name match. Only used when no LRN was in the QR.
+    if (payload.name) {
+      const target = payload.name.toLowerCase().replace(/[,\s]+/g, ' ').trim();
+      const byName = learners.find(l => {
+        const full = Utils.fullName(l).toLowerCase().replace(/[,\s]+/g, ' ').trim();
+        return full === target;
+      });
+      if (byName) return byName;
+    }
+
+    return null;
+  },
+
+  /* ---------- Handle a successful decode ---------- */
+  async _handleDecoded(text) {
+    const payload = this._parsePayload(text);
+    if (!payload) return;
+
+    const learner = this._matchLearner(payload);
+    if (!learner) {
+      // Unknown QR — this is not spam, it might be a learner from another class.
+      // We throttle these warnings so they don't drown out the scans we care about.
+      const now = Date.now();
+      if (!this._lastUnknownWarn || now - this._lastUnknownWarn > 4000) {
+        this._lastUnknownWarn = now;
+        this._setStatus('QR not recognised in this class', 'warn');
+        UI.toast('QR code is not from a learner in this class.', 'warning', 2500);
+      }
+      return;
+    }
+
+    // Debounce: same learner can appear in many frames
+    const now = Date.now();
+    const last = this._recentScans.get(learner.id) || 0;
+    if (now - last < 4000) return;
+    this._recentScans.set(learner.id, now);
+
+    // Already scanned in this session?
+    if (this._scans.some(s => s.learner.id === learner.id)) return;
+
+    // Write to IndexedDB as Present
+    await this._commitScan(learner);
+  },
+
+  async _commitScan(learner) {
+    const date = State.attendanceDate || Utils.todayISO();
+    const classId = State.activeClass.id;
+
+    try {
+      // Find existing record for this learner+date
+      const existing = await DB.getAllByIndex('attendance', 'date', date);
+      const rec = existing.find(a => a.learnerId === learner.id && a.classId === classId)
+               || { id: Utils.uid('att-'), classId, learnerId: learner.id, date };
+
+      rec.status = 'Present';
+      rec.note = rec.note || '';
+      rec.updatedAt = new Date().toISOString();
+      if (!rec.createdAt) rec.createdAt = new Date().toISOString();
+      rec.scannedAt = new Date().toISOString();
+
+      await DB.put('attendance', rec);
+    } catch (e) {
+      console.error('[QR] Could not save scan:', e);
+      UI.toast('Could not save scan. Try again.', 'error', 4000);
+      return;
+    }
+
+    // Update in-memory draft so the attendance page reflects this immediately
+    State.attendanceDraft = State.attendanceDraft || {};
+    State.attendanceDraft[learner.id] = 'Present';
+    State.attendanceDirty = true;
+
+    // Keep the session from auto-locking while the teacher is scanning
+    Session.touch();
+
+    // Push into the visible list
+    this._scans.push({ learner, at: new Date() });
+    this._renderScanList();
+
+    // Feedback
+    this._beep();
+    this._flash();
+    this._setStatus(`✓ ${learner.firstName || Utils.fullName(learner)}`, 'ok');
+  },
+
+  async _undoLast() {
+    const last = this._scans.pop();
+    if (!last) return;
+    this._renderScanList();
+
+    // Remove the attendance record we just wrote
+    try {
+      const date = State.attendanceDate || Utils.todayISO();
+      const existing = await DB.getAllByIndex('attendance', 'date', date);
+      const rec = existing.find(a => a.learnerId === last.learner.id &&
+                                      a.classId === State.activeClass.id);
+      if (rec) await DB.delete('attendance', rec.id);
+
+      if (State.attendanceDraft) delete State.attendanceDraft[last.learner.id];
+    } catch (e) {
+      console.warn('[QR] Undo failed:', e);
+    }
+
+    UI.toast(`Undone: ${last.learner.firstName || Utils.fullName(last.learner)}`, 'info', 2000);
+  },
+
+  async _manualSubmit() {
+    const input = this._modal.overlay.querySelector('#qr-manual-input');
+    const lrn = String(input.value || '').trim().replace(/\D/g, '');
+    if (!lrn) { UI.toast('Enter an LRN.', 'warning'); return; }
+
+    const learner = this._matchLearner({ lrn, name: '' });
+    if (!learner) {
+      UI.toast(`No learner in this class has LRN ${lrn}.`, 'warning', 4000);
+      return;
+    }
+    if (this._scans.some(s => s.learner.id === learner.id)) {
+      UI.toast('Already marked present in this session.', 'info', 2000);
+      input.value = '';
+      return;
+    }
+
+    input.value = '';
+    await this._commitScan(learner);
+  },
+
+  /* ---------- Rendering ---------- */
+  _renderScanList() {
+    const list = this._modal.overlay.querySelector('#qr-scan-list');
+    const countEl = this._modal.overlay.querySelector('#qr-count');
+    const fill = this._modal.overlay.querySelector('#qr-progress-fill');
+    const undoBtn = this._modal.overlay.querySelector('#qr-undo');
+    if (!list) return;
+
+    const learners = State.attendanceIncludeInactive
+      ? State.learners
+      : State.learners.filter(Utils.isActiveLearner);
+    const total = Math.max(1, learners.length);
+
+    countEl.textContent = String(this._scans.length);
+    fill.style.width = Math.min(100, Math.round((this._scans.length / total) * 100)) + '%';
+    undoBtn.disabled = this._scans.length === 0;
+
+    if (this._scans.length === 0) {
+      list.innerHTML = `<div class="qr-scan-empty">Point the camera at a learner ID card. Scans are saved immediately.</div>`;
+      return;
+    }
+
+    // Newest first
+    const reversed = this._scans.slice().reverse();
+    list.innerHTML = reversed.map((s, i) => `
+      <div class="qr-scan-row">
+        <div class="qr-scan-avatar">${Utils.avatarHTML(s.learner, 30, 11)}</div>
+        <div class="qr-scan-body">
+          <div class="qr-scan-name">${Utils.esc(Utils.fullName(s.learner))}</div>
+          <div class="qr-scan-meta">LRN ${Utils.esc(s.learner.lrn || '—')}</div>
+        </div>
+        <div class="qr-scan-time">${s.at.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}</div>
+      </div>
+    `).join('');
+  },
+
+  _setStatus(text, kind) {
+    const el = this._modal && this._modal.overlay.querySelector('#qr-video-status');
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.kind = kind || '';
+  },
+
+  _flash() {
+    const el = this._modal && this._modal.overlay.querySelector('#qr-flash');
+    if (!el) return;
+    el.classList.add('on');
+    setTimeout(() => el.classList.remove('on'), 180);
+  },
+
+  _beep() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!this._beepCtx) this._beepCtx = new Ctx();
+      const ctx = this._beepCtx;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = 1200;
+      o.connect(g); g.connect(ctx.destination);
+
+      const t = ctx.currentTime;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.18, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+
+      o.start(t);
+      o.stop(t + 0.16);
+    } catch (e) { /* audio is optional */ }
+  },
+
+  _showCameraError(err) {
+    if (!this._modal) return;
+    const wrap = this._modal.overlay.querySelector('#qr-video-wrap');
+    if (!wrap) return;
+
+    let msg = 'Camera unavailable.';
+    if (err && err.name === 'NotAllowedError') msg = 'Camera permission was denied.';
+    else if (err && err.name === 'NotFoundError') msg = 'No camera found on this device.';
+    else if (err && err.name === 'NotReadableError') msg = 'Camera is already in use by another app.';
+    else if (err && err.message) msg = err.message;
+
+    wrap.innerHTML = `
+      <div class="qr-camera-error">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="42" height="42">
+          <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+          <line x1="2" y1="2" x2="22" y2="22"/>
+        </svg>
+        <div class="qr-camera-error-title">${Utils.esc(msg)}</div>
+        <div class="qr-camera-error-hint">You can still mark attendance using the LRN field below.</div>
+      </div>`;
   }
 };
 /* ============================================================================
@@ -13479,6 +13972,10 @@ _showClassMismatchDialog(comparison, classInfo) {
                 <input type="checkbox" id="att-include-inactive" ${includeInactive ? 'checked' : ''}>
                 <span>Include inactive learners</span>
               </label>` : ''}
+            <button class="btn btn-sm btn-primary" id="att-scan-qr-btn"
+                    onclick="Pages.openAttendanceScanner()">
+              ${icon('camera')} Scan QR
+            </button>
             <button class="btn btn-sm btn-success" onclick="Pages.markAll('Present')">Mark All Present</button>
             <button class="btn btn-sm btn-danger" onclick="Pages.markAll('Absent')">Mark All Absent</button>
             <button class="btn btn-sm btn-outline" onclick="Pages.clearAttendance()">Clear</button>
