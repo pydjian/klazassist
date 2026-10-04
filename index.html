@@ -418,9 +418,33 @@
     </div>
     <nav id="sidebar-nav"></nav>
   <div id="sidebar-footer">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div class="sidebar-footer-actions">
+      <button type="button" class="sidebar-footer-btn" id="sidebar-lock-btn"
+              title="Lock the app (session remains active)"
+              aria-label="Lock application">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2"/>
+          <path d="M7 11V7a5 5 0 0110 0v4"/>
+        </svg>
+        <span>Lock</span>
+      </button>
+      <button type="button" class="sidebar-footer-btn" id="sidebar-logout-btn"
+              title="Log out of this device"
+              aria-label="Log out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+          <path d="M16 17l5-5-5-5"/>
+          <path d="M21 12H9"/>
+        </svg>
+        <span>Log out</span>
+      </button>
+    </div>
+    <div class="sidebar-footer-meta">
       <span><span data-app-version>v—</span> · pydjianPH · © 2026</span>
-      <span id="db-status-dot" title="Database status" style="width:8px;height:8px;border-radius:50%;background:#4ade80;display:inline-block;"></span>
+      <span id="db-status-dot" title="Database status"
+            style="width:8px;height:8px;border-radius:50%;background:#4ade80;display:inline-block;"></span>
     </div>
   </div>
   </aside>
@@ -471,6 +495,21 @@
       <button onclick="App.quickAction('assignment')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> New Assignment</button>
       <button onclick="App.quickAction('note')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6"/></svg> New Note</button>
       <button onclick="App.quickAction('lesson')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2zM22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg> Lesson Plan</button>
+      <button onclick="App.quickAction('lessonAI')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/>
+          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+        </svg>
+        Lesson Plan (AI)
+      </button>
+      <button onclick="App.quickAction('examAI')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <path d="M14 2v6h6"/>
+          <path d="M9 13h6M9 17h3"/>
+        </svg>
+        Exam Builder (AI)
+      </button>
       <button onclick="Session.lock()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg> Lock App</button>
     </div>
     <button class="quick-fab-main" onclick="App.toggleQuickFab()" aria-label="Quick actions">
