@@ -24,7 +24,7 @@ const CONFIG = {
   APP_NAME: 'KlazAssist',
   VERSION: '2.0.0',
   DB_NAME: 'DepEdTeacherToolkitDB',
-  DB_VERSION: 10,  // hardened schema migration: atomic store/index repair
+  DB_VERSION: 12,  // hardened schema migration: atomic store/index repair
   STORES: [
     'teachers','schools','classes','learners','attendance',
     'subjects','assessments','questions','assessmentResults',
@@ -35,7 +35,7 @@ const CONFIG = {
     'calendarEvents',
     'presentations','teachingLoad',  
     'sf9Records',
-    'rubrics'
+    'rubrics', 'parentDigestLog'
   ],
   PAGE_SIZE: 20,
   PASSING_GRADE: 75,
@@ -97,6 +97,7 @@ const PRO_FEATURES = {
   // Power-user analytics
   'grade-summary':        { tier: 'pro', label: 'Grade Summary / GWA' },
   'item-analysis':        { tier: 'pro', label: 'Item Analysis' },
+  'parent-digest': { tier: 'pro', label: 'Parent Communication Digest' },
 
   // Printable reports & bulk exports
   'printable-reports':    { tier: 'pro', label: 'Printable Reports' },
@@ -939,6 +940,193 @@ const AttendancePolicy = {
   codes: { Present: '', Absent: 'A', Late: 'L', Excused: 'E' }
 };
 
+/* ============================================================================
+   MERGE ENGINE — non-destructive import
+   ──────────────────────────────────────────────────────────────────────────
+   Merges a KlazAssist backup into the live database without wiping.
+
+   Rules of engagement:
+     • Records that exist only in the backup → INSERT
+     • Records that exist on both sides → the newer one wins
+        · primary signal:  updatedAt
+        · fallback:        createdAt
+        · neither usable:  keep local (conservative)
+     • Records that exist only locally → UNTOUCHED (never deleted)
+     • Finalized termGrades that differ on both sides → CONFLICT
+     • Learners with the same LRN but different IDs → CONFLICT
+     • The `settings` store is SKIPPED entirely — it holds credentials,
+       API keys, and device-local UI state that must never travel.
+   ============================================================================ */
+const MergeEngine = {
+  SKIP_STORES: new Set(['settings']),
+
+  // Stores where a mismatch between two records has no safe automatic
+  // answer. A predicate returns true when the pair should be reported
+  // as a conflict rather than resolved silently.
+  CONFLICT_RULES: {
+    termGrades: (local, remote) =>
+      local.status   === 'finalized' &&
+      remote.status  === 'finalized' &&
+      (local.reportedGrade !== remote.reportedGrade ||
+       local.initialGrade  !== remote.initialGrade  ||
+       local.finalizedAt   !== remote.finalizedAt)
+  },
+
+  // Fields that should be preserved from local when applying a remote
+  // update whose value for that field is empty. Prevents a stale backup
+  // from blanking out a locally-captured learner photo.
+  PRESERVE_IF_REMOTE_EMPTY: {
+    learners: ['photo']
+  },
+
+  /* ---- Compare two records; decide the winner. ---- */
+  _compare(local, remote, store) {
+    const rule = this.CONFLICT_RULES[store];
+    if (rule && rule(local, remote)) {
+      return { winner: 'conflict', reason: 'Both copies are finalized and differ' };
+    }
+
+    // 1. Prefer updatedAt when both sides have it
+    if (local.updatedAt && remote.updatedAt) {
+      if (local.updatedAt > remote.updatedAt)  return { winner: 'local',  reason: 'Local is newer' };
+      if (remote.updatedAt > local.updatedAt)  return { winner: 'remote', reason: 'Backup is newer' };
+    }
+
+    // 2. Fall back to createdAt
+    if (local.createdAt && remote.createdAt) {
+      if (local.createdAt > remote.createdAt)  return { winner: 'local',  reason: 'Local created later' };
+      if (remote.createdAt > local.createdAt)  return { winner: 'remote', reason: 'Backup created later' };
+    }
+
+    // 3. If neither timestamp is usable, deep-compare
+    if (this._recordsEqual(local, remote)) return { winner: 'equal', reason: '' };
+
+    // 4. Cannot decide — keep local
+    return { winner: 'local', reason: 'No comparable timestamps — keeping local' };
+  },
+
+  _recordsEqual(a, b) {
+    try { return JSON.stringify(a) === JSON.stringify(b); }
+    catch (e) { return false; }
+  },
+
+  /* ---- Build a merge plan from a parsed backup. Pure; no writes. ---- */
+  async buildPlan(snapshot) {
+    if (!snapshot || !snapshot.data) throw new Error('Invalid snapshot.');
+
+    const plan = {
+      inserts: [], updates: [], conflicts: [], skips: [],
+      stats: { perStore: {} }
+    };
+
+    for (const store of CONFIG.STORES) {
+      if (this.SKIP_STORES.has(store)) continue;
+
+      const remoteRecords = Array.isArray(snapshot.data[store]) ? snapshot.data[store] : [];
+      let localRecords = [];
+      try { localRecords = await DB.getAll(store); } catch (e) { localRecords = []; }
+
+      const localById = new Map(localRecords.map(r => [r.id, r]));
+
+      // Secondary index by LRN for learner de-duplication
+      const localByLRN = new Map();
+      if (store === 'learners') {
+        for (const r of localRecords) {
+          if (r.lrn) localByLRN.set(String(r.lrn).trim(), r);
+        }
+      }
+
+      let ins = 0, upd = 0, conf = 0, skip = 0;
+
+      for (const remote of remoteRecords) {
+        if (!remote || !remote.id) { skip++; continue; }
+
+        const local = localById.get(remote.id);
+
+        if (!local) {
+          // Same LRN, different ID? Two devices independently created this
+          // learner — surface as a conflict rather than inserting a duplicate.
+          if (store === 'learners' && remote.lrn) {
+            const dupLocal = localByLRN.get(String(remote.lrn).trim());
+            if (dupLocal) {
+              plan.conflicts.push({
+                store, local: dupLocal, remote,
+                reason: `Same LRN ${remote.lrn} but different internal IDs`
+              });
+              conf++;
+              continue;
+            }
+          }
+          plan.inserts.push({ store, record: remote, reason: 'Not present locally' });
+          ins++;
+          continue;
+        }
+
+        const cmp = this._compare(local, remote, store);
+        if (cmp.winner === 'equal') {
+          skip++;
+        } else if (cmp.winner === 'remote') {
+          plan.updates.push({
+            store,
+            record:   this._applyPreserve(local, remote, store),
+            previous: local,
+            reason:   cmp.reason
+          });
+          upd++;
+        } else if (cmp.winner === 'conflict') {
+          plan.conflicts.push({ store, local, remote, reason: cmp.reason });
+          conf++;
+        } else {
+          skip++;
+        }
+      }
+
+      plan.stats.perStore[store] = {
+        local: localRecords.length,
+        remote: remoteRecords.length,
+        insert: ins, update: upd, conflict: conf, skip
+      };
+    }
+
+    return plan;
+  },
+
+  _applyPreserve(local, remote, store) {
+    const fields = this.PRESERVE_IF_REMOTE_EMPTY[store];
+    if (!fields) return remote;
+    const merged = Object.assign({}, remote);
+    for (const f of fields) {
+      if ((remote[f] === undefined || remote[f] === null || remote[f] === '') &&
+          (local[f]  !== undefined && local[f]  !== null && local[f]  !== '')) {
+        merged[f] = local[f];
+      }
+    }
+    return merged;
+  },
+
+  /* ---- Apply a plan. All writes go through the atomic bulkWrite path. ---- */
+  async applyPlan(plan, conflictPolicy = 'local') {
+    const writes = {};
+    const push = (store, rec) => {
+      (writes[store] = writes[store] || []).push(rec);
+    };
+
+    for (const item of plan.inserts) push(item.store, item.record);
+    for (const item of plan.updates) push(item.store, item.record);
+    if (conflictPolicy === 'remote') {
+      for (const item of plan.conflicts) push(item.store, item.remote);
+    }
+
+    let applied = 0;
+    for (const [store, records] of Object.entries(writes)) {
+      await DB.bulkWrite(store, records, 'put');
+      applied += records.length;
+    }
+
+    DB._invalidate();
+    return { applied };
+  }
+};
 /* ============================================================================
    VALIDATION ENGINE — checks required data is present before a report can be
    printed. Blocks on critical errors; allows (but flags) non-critical gaps.
@@ -1863,15 +2051,24 @@ const DB = {
         if (v) v(obj);
         this._invalidate();
         if (!obj.id) obj.id = Utils.uid();
+          // Auto-stamp modification time on user-data stores so the merge engine
+          // can tell which copy of a record is newer. Callers can override by
+          // setting obj.updatedAt themselves before calling put()/add().
+        if (this._isUserData(store) && !obj.updatedAt) {
+          obj.updatedAt = new Date().toISOString();
+        }
         const p = this.req(store, 'readwrite', os => os.add(obj));
         p.then(() => { if (this._isUserData(store)) this._bumpBackupCounter(); }).catch(() => {});
         return p;
     },
-    put(store, obj) {
+      put(store, obj) {
         const v = WRITE_VALIDATORS[store];
         if (v) v(obj);
         this._invalidate();
-        if (!obj.id) obj.id = Utils.uid();
+        if (!obj.id) obj.id = Utils.uid();  
+        if (this._isUserData(store) && !obj.updatedAt) {
+          obj.updatedAt = new Date().toISOString();
+        }        
         const p = this.req(store, 'readwrite', os => os.put(obj));
         p.then(() => { if (this._isUserData(store)) this._bumpBackupCounter(); }).catch(() => {});
         return p;
@@ -3128,7 +3325,8 @@ const NAV = [
     { id: 'schedule', label: 'Class Schedule', icon: 'calendar' },
     { id: 'assignments', label: 'Homework / Assignments', icon: 'file' },
     { id: 'behavior', label: 'Behavior / Discipline Log', icon: 'shield' },
-    { id: 'parent-notes', label: 'Parent/Guardian Notes', icon: 'message' }
+    { id: 'parent-notes', label: 'Parent/Guardian Notes', icon: 'message' },
+    { id: 'parent-digest', label: 'Parent Digest', icon: 'message' },
   ]},
   { section: 'GRADING & ASSESSMENT', items: [
     { id: 'gradebook', label: 'Gradebook', icon: 'chart' },
@@ -4425,6 +4623,14 @@ toggleTheme() {
     document.getElementById('sidebar-backdrop').onclick = () => this.toggleSidebar(false);
     document.getElementById('session-stay').onclick = () => { Session.touch(); AuthUI.hideSessionWarning(); };
     document.getElementById('session-lock-now').onclick = () => { AuthUI.hideSessionWarning(); Session.lock('manual'); };
+        const sidebarLockBtn = document.getElementById('sidebar-lock-btn');
+    if (sidebarLockBtn) {
+      sidebarLockBtn.onclick = () => Session.lock('manual');
+    }
+    const sidebarLogoutBtn = document.getElementById('sidebar-logout-btn');
+    if (sidebarLogoutBtn) {
+      sidebarLogoutBtn.onclick = () => this.confirmLogout();
+    }
     setupLoginBindings();
   },
 renderSidebar() {
@@ -4683,6 +4889,8 @@ _titleize(id) {
     else if (type === 'assignment') this.openAssignmentForm();
     else if (type === 'note') this.openNoteForm();
     else if (type === 'lesson') this.openLessonForm();
+    else if (type === 'lessonAI') this.navigate('lesson-planner');
+    else if (type === 'examAI')   this.navigate('tos-generator');
   },
   toggleNotifications() {
     const panel = document.getElementById('notif-panel');
@@ -22127,6 +22335,1094 @@ async printLesson(id) {
       </div>`;
     root.querySelectorAll('[data-pn-del]').forEach(el => el.addEventListener('click', () => Pages.deleteParentLog(el.dataset.pnDel)));
   },
+  /* ============================================================================
+   PARENT DIGEST — weekly / biweekly progress summaries
+   ============================================================================ */
+async parentDigest(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'message', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+  if (!State.learners.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No learners in this class',
+      message: 'Add learners before preparing digests.',
+      actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    return;
+  }
+
+  // ---- Persistent UI state ----
+  if (!State._pdUI) {
+    State._pdUI = {
+      period: 'this-week',
+      customStart: '',
+      customEnd: '',
+      include: { attendance: true, grades: true, behavior: true, upcoming: true, parentNotes: false },
+      tone: 'formal',
+      selected: new Set()
+    };
+  }
+  const U = State._pdUI;
+
+  // ---- Resolve the period dates once, share them everywhere ----
+  const period = Pages._pdGetPeriodDates(U.period, U.customStart, U.customEnd);
+
+  // ---- Check Web3Forms status (drives the "background send" hint) ----
+  const bgEmail = await Share.hasBackgroundEmail();
+
+  // ---- Gather data for every learner in the class (single pass) ----
+  const learnerData = await Pages._pdGatherAllLearnerData(State.learners, cls, period);
+
+  // ---- Count how many actually have an email ----
+  const withEmail = learnerData.filter(d => d.email);
+  const withoutEmail = learnerData.filter(d => !d.email);
+
+  // ---- Pre-select every learner who has an email (on first render only) ----
+  if (!U._seeded) {
+    withEmail.forEach(d => U.selected.add(d.learner.id));
+    U._seeded = true;
+  }
+
+  // ---- Prune selections that no longer exist ----
+  const validIds = new Set(State.learners.map(l => l.id));
+  U.selected.forEach(id => { if (!validIds.has(id)) U.selected.delete(id); });
+
+  // ---- Render ----
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Parent Digest</h2>
+        <p>Auto-composed progress summaries · ${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="pd-history-btn">${icon('history')} Send History</button>
+        <button class="btn btn-outline" id="pd-export-csv">${icon('download')} Export CSV</button>
+      </div>
+    </div>
+
+    <div class="alert alert-info mb-16">
+      ${icon('info')}
+      <div>
+        Digests are composed <strong>entirely on this device</strong> from your recorded data.
+        ${bgEmail
+          ? 'Sending uses your configured Web3Forms account — messages will be delivered silently in the background.'
+          : 'Sending opens your mail app once per parent. To send silently in the background, configure Web3Forms in <strong>Security → Email Sending</strong>.'}
+      </div>
+    </div>
+
+    <!-- ══════════ SETUP ══════════ -->
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:14px;">
+        <h3 style="font-size:14px;">1 · Reporting Period</h3>
+      </div>
+      <div class="pd-period-row mb-12">
+        <button class="pd-period-btn ${U.period === 'this-week'   ? 'active' : ''}" data-pd-period="this-week">This Week</button>
+        <button class="pd-period-btn ${U.period === 'last-week'   ? 'active' : ''}" data-pd-period="last-week">Last Week</button>
+        <button class="pd-period-btn ${U.period === 'last-2-weeks'? 'active' : ''}" data-pd-period="last-2-weeks">Last 2 Weeks</button>
+        <button class="pd-period-btn ${U.period === 'month'       ? 'active' : ''}" data-pd-period="month">Last 30 Days</button>
+        <button class="pd-period-btn ${U.period === 'custom'      ? 'active' : ''}" data-pd-period="custom">Custom Range</button>
+      </div>
+
+      ${U.period === 'custom' ? `
+        <div class="form-row mb-12">
+          <div class="form-group" style="margin-bottom:0;">
+            <label>From</label>
+            <input type="date" class="form-control" id="pd-custom-start" value="${Utils.attr(U.customStart)}">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label>To</label>
+            <input type="date" class="form-control" id="pd-custom-end" value="${Utils.attr(U.customEnd)}">
+          </div>
+        </div>` : ''}
+
+      <div class="text-xs text-muted">
+        ${Utils.formatDate(period.start.toISOString().slice(0, 10), { weekday:'short', month:'short', day:'numeric', year:'numeric' })}
+        &nbsp;→&nbsp;
+        ${Utils.formatDate(period.end.toISOString().slice(0, 10), { weekday:'short', month:'short', day:'numeric', year:'numeric' })}
+        &nbsp;·&nbsp; ${period.daysCount} day${period.daysCount === 1 ? '' : 's'}
+      </div>
+    </div>
+
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:14px;">
+        <h3 style="font-size:14px;">2 · What to Include</h3>
+      </div>
+      <div class="pd-options-grid">
+        <label class="pd-option">
+          <input type="checkbox" id="pd-inc-attendance" ${U.include.attendance ? 'checked' : ''}>
+          <div class="pd-option-body">
+            <div class="pd-option-title">Attendance</div>
+            <div class="pd-option-desc">Days present, absent, late, and percentage.</div>
+          </div>
+        </label>
+        <label class="pd-option">
+          <input type="checkbox" id="pd-inc-grades" ${U.include.grades ? 'checked' : ''}>
+          <div class="pd-option-body">
+            <div class="pd-option-title">Academic Progress</div>
+            <div class="pd-option-desc">Latest finalized term grade, or live assessment average.</div>
+          </div>
+        </label>
+        <label class="pd-option">
+          <input type="checkbox" id="pd-inc-behavior" ${U.include.behavior ? 'checked' : ''}>
+          <div class="pd-option-body">
+            <div class="pd-option-title">Behavior &amp; Engagement</div>
+            <div class="pd-option-desc">Recent classroom observations recorded this period.</div>
+          </div>
+        </label>
+        <label class="pd-option">
+          <input type="checkbox" id="pd-inc-upcoming" ${U.include.upcoming ? 'checked' : ''}>
+          <div class="pd-option-body">
+            <div class="pd-option-title">Upcoming Assignments</div>
+            <div class="pd-option-desc">Work due within the next 7 days.</div>
+          </div>
+        </label>
+        <label class="pd-option">
+          <input type="checkbox" id="pd-inc-parentnotes" ${U.include.parentNotes ? 'checked' : ''}>
+          <div class="pd-option-body">
+            <div class="pd-option-title">Prior Communication</div>
+            <div class="pd-option-desc">Reference recent parent notes and follow-ups.</div>
+          </div>
+        </label>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="form-group" style="margin-bottom:0; max-width:320px;">
+        <label>Tone</label>
+        <select class="form-control" id="pd-tone">
+          <option value="formal"   ${U.tone === 'formal'   ? 'selected' : ''}>Formal (recommended)</option>
+          <option value="friendly" ${U.tone === 'friendly' ? 'selected' : ''}>Friendly &amp; brief</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ══════════ RECIPIENTS ══════════ -->
+    <div class="card mb-16" style="padding:0;overflow:hidden;">
+      <div class="card-head" style="padding:16px 16px 12px;margin-bottom:0;">
+        <h3 style="font-size:14px;">3 · Recipients</h3>
+        <span class="text-xs text-muted">
+          ${U.selected.size} of ${withEmail.length} selected
+          ${withoutEmail.length ? `· ${withoutEmail.length} missing email` : ''}
+        </span>
+      </div>
+
+      <div class="flex gap-8" style="padding:0 16px 12px;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-outline" id="pd-select-all">Select All</button>
+        <button class="btn btn-sm btn-outline" id="pd-select-none">Clear</button>
+        <button class="btn btn-sm btn-outline" id="pd-select-missing">Select Missing Emails</button>
+      </div>
+
+      <div class="pd-recipient-head pd-recipient-row">
+        <div></div>
+        <div></div>
+        <div>Learner</div>
+        <div class="pd-col-guardian">Guardian</div>
+        <div>Email</div>
+        <div class="pd-col-last">Last Sent</div>
+        <div style="text-align:right;">Actions</div>
+      </div>
+
+      <div>
+        ${learnerData.map(d => Pages._pdRenderRecipientRow(d, U)).join('')}
+      </div>
+    </div>
+
+    <!-- ══════════ SEND BAR ══════════ -->
+    <div class="card" style="position:sticky;bottom:16px;z-index:20;box-shadow:0 -4px 20px rgba(0,0,0,.06),0 4px 20px rgba(0,0,0,.08);">
+      <div class="flex-between" style="gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;font-size:13.5px;">
+            ${U.selected.size} digest${U.selected.size === 1 ? '' : 's'} ready
+          </div>
+          <div class="text-xs text-muted">
+            ${bgEmail
+              ? 'Sent silently via Web3Forms — no mail app needed.'
+              : 'Your mail app will open once per recipient.'}
+          </div>
+        </div>
+        <div class="flex gap-8">
+          <button class="btn btn-outline" id="pd-preview-any" ${U.selected.size === 0 ? 'disabled' : ''}>
+            ${icon('eye')} Preview One
+          </button>
+          <button class="btn btn-primary" id="pd-send-all" ${U.selected.size === 0 ? 'disabled' : ''}>
+            ${icon('message')} Send ${U.selected.size} Digest${U.selected.size === 1 ? '' : 's'}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  /* ══════════ Bind ══════════ */
+
+  // Period buttons
+  root.querySelectorAll('[data-pd-period]').forEach(btn => {
+    btn.onclick = () => {
+      U.period = btn.dataset.pdPeriod;
+      U._seeded = false;              // re-seed selection when the period changes
+      Pages.parentDigest(root);
+    };
+  });
+
+  // Custom date inputs
+  const startInp = root.querySelector('#pd-custom-start');
+  if (startInp) startInp.onchange = (e) => {
+    U.customStart = e.target.value;
+    U._seeded = false;
+    Pages.parentDigest(root);
+  };
+  const endInp = root.querySelector('#pd-custom-end');
+  if (endInp) endInp.onchange = (e) => {
+    U.customEnd = e.target.value;
+    U._seeded = false;
+    Pages.parentDigest(root);
+  };
+
+  // Include checkboxes
+  const includeBindings = [
+    ['#pd-inc-attendance',  'attendance'],
+    ['#pd-inc-grades',      'grades'],
+    ['#pd-inc-behavior',    'behavior'],
+    ['#pd-inc-upcoming',    'upcoming'],
+    ['#pd-inc-parentnotes', 'parentNotes']
+  ];
+  includeBindings.forEach(([sel, key]) => {
+    const el = root.querySelector(sel);
+    if (el) el.onchange = (e) => { U.include[key] = e.target.checked; };
+  });
+
+  // Tone
+  root.querySelector('#pd-tone').onchange = (e) => { U.tone = e.target.value; };
+
+  // Selection controls
+  root.querySelector('#pd-select-all').onclick = () => {
+    withEmail.forEach(d => U.selected.add(d.learner.id));
+    Pages.parentDigest(root);
+  };
+  root.querySelector('#pd-select-none').onclick = () => {
+    U.selected.clear();
+    Pages.parentDigest(root);
+  };
+  root.querySelector('#pd-select-missing').onclick = () => {
+    withoutEmail.forEach(d => U.selected.add(d.learner.id));
+    Pages.parentDigest(root);
+  };
+
+  // Per-row toggles
+  root.querySelectorAll('[data-pd-toggle]').forEach(cb => {
+    cb.onchange = () => {
+      const id = cb.dataset.pdToggle;
+      if (cb.checked) U.selected.add(id); else U.selected.delete(id);
+      Pages.parentDigest(root);
+    };
+  });
+
+  // Per-row preview
+  root.querySelectorAll('[data-pd-preview]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.pdPreview;
+      Pages._pdOpenPreviewModal(id, learnerData, cls, period, U);
+    };
+  });
+
+  // Per-row send
+  root.querySelectorAll('[data-pd-send]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.pdSend;
+      const d = learnerData.find(x => x.learner.id === id);
+      if (!d) return;
+      if (!d.email) {
+        UI.toast('No email on file for this learner.', 'warning', 4000);
+        return;
+      }
+      Pages._pdSendSingle(d, cls, period, U);
+    };
+  });
+
+  // Preview one of the selected
+  root.querySelector('#pd-preview-any').onclick = () => {
+    const firstSelected = State.learners.find(l => U.selected.has(l.id));
+    if (!firstSelected) return;
+    Pages._pdOpenPreviewModal(firstSelected.id, learnerData, cls, period, U);
+  };
+
+  // Send all selected
+  root.querySelector('#pd-send-all').onclick = () => {
+    Pages._pdBatchSend(learnerData, U, cls, period);
+  };
+
+  // History / export
+  root.querySelector('#pd-history-btn').onclick = () => Pages._pdOpenHistory();
+  root.querySelector('#pd-export-csv').onclick = () => Pages._pdExportCSV(learnerData, period);
+},
+
+/* ------------------------------------------------------------------
+   PERIOD HELPERS
+   ------------------------------------------------------------------ */
+_pdGetPeriodDates(type, customStart, customEnd) {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const toISO = (d) => d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+
+  const dow = now.getDay();                     // 0 = Sunday
+  const daysFromMon = dow === 0 ? 6 : dow - 1;  // offset to this week's Monday
+
+  let start, end, label;
+
+  switch (type) {
+    case 'this-week': {
+      start = new Date(now); start.setDate(now.getDate() - daysFromMon);
+      end = new Date(start); end.setDate(start.getDate() + 6);
+      label = 'This Week';
+      break;
+    }
+    case 'last-week': {
+      end = new Date(now); end.setDate(now.getDate() - daysFromMon - 1);
+      start = new Date(end); start.setDate(end.getDate() - 6);
+      label = 'Last Week';
+      break;
+    }
+    case 'last-2-weeks': {
+      end = new Date(now);
+      start = new Date(now); start.setDate(now.getDate() - 13);
+      label = 'Last Two Weeks';
+      break;
+    }
+    case 'month': {
+      end = new Date(now);
+      start = new Date(now); start.setDate(now.getDate() - 29);
+      label = 'Last 30 Days';
+      break;
+    }
+    case 'custom':
+    default: {
+      start = customStart ? new Date(customStart + 'T00:00:00') : new Date(now);
+      end = customEnd ? new Date(customEnd + 'T00:00:00') : new Date(now);
+      if (isNaN(start.getTime())) start = new Date(now);
+      if (isNaN(end.getTime()))   end = new Date(now);
+      if (start > end) { const tmp = start; start = end; end = tmp; }
+      label = 'Custom Period';
+      break;
+    }
+  }
+
+  const startISO = toISO(start);
+  const endISO   = toISO(end);
+  const daysCount = Math.round((end - start) / 86400000) + 1;
+
+  return { start, end, startISO, endISO, daysCount, label, type };
+},
+
+/* ------------------------------------------------------------------
+   DATA GATHERING — one pass over the class
+   ------------------------------------------------------------------ */
+async _pdGatherAllLearnerData(learners, cls, period) {
+  // Load everything for the class ONCE, then fan out in memory.
+  const [attendance, behaviorLogs, parentLogs, assignments, termGrades, assessmentResults, assessments] = await Promise.all([
+    DB.getAllByIndex('attendance', 'classId', cls.id).catch(() => []),
+    DB.getAll('behaviorLogs').then(a => a.filter(x => x.classId === cls.id)).catch(() => []),
+    DB.getAll('parentLogs').then(a => a.filter(x => x.classId === cls.id)).catch(() => []),
+    DB.getAll('assignments').then(a => a.filter(x => x.classId === cls.id)).catch(() => []),
+    DB.getAllByIndex('termGrades', 'classId', cls.id).catch(() => []),
+    DB.getAll('assessmentResults').then(a => a.filter(x => x.classId === cls.id)).catch(() => []),
+    DB.getAll('assessments').then(a => a.filter(x => x.classId === cls.id)).catch(() => [])
+  ]);
+
+  // Pre-index by learner
+  const byLearner = {
+    att: {}, beh: {}, par: {}, tg: {}, res: {}
+  };
+  attendance.forEach(a => { (byLearner.att[a.learnerId] = byLearner.att[a.learnerId] || []).push(a); });
+  behaviorLogs.forEach(b => { (byLearner.beh[b.learnerId] = byLearner.beh[b.learnerId] || []).push(b); });
+  parentLogs.forEach(p => { (byLearner.par[p.learnerId] = byLearner.par[p.learnerId] || []).push(p); });
+  termGrades.forEach(t => { (byLearner.tg[t.learnerId] = byLearner.tg[t.learnerId] || []).push(t); });
+  assessmentResults.forEach(r => { (byLearner.res[r.learnerId] = byLearner.res[r.learnerId] || []).push(r); });
+
+  // Assignments due in the next 7 days (used for every learner)
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const in7 = new Date(today); in7.setDate(today.getDate() + 7);
+  const todayISO = today.toISOString().slice(0, 10);
+  const in7ISO   = in7.toISOString().slice(0, 10);
+  const upcomingAssignments = assignments
+    .filter(a => a.status !== 'Completed' && a.dueDate && a.dueDate >= todayISO && a.dueDate <= in7ISO)
+    .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+  const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+
+  return learners.map(l => {
+    const att = byLearner.att[l.id] || [];
+    const beh = byLearner.beh[l.id] || [];
+    const par = byLearner.par[l.id] || [];
+    const tg  = byLearner.tg[l.id]  || [];
+    const res = byLearner.res[l.id] || [];
+
+    // ---- Attendance within the period ----
+    const attInPeriod = att.filter(a => a.date >= period.startISO && a.date <= period.endISO);
+    const attStats = {
+      total:   attInPeriod.length,
+      present: attInPeriod.filter(a => a.status === 'Present').length,
+      late:    attInPeriod.filter(a => a.status === 'Late').length,
+      excused: attInPeriod.filter(a => a.status === 'Excused').length,
+      absent:  attInPeriod.filter(a => a.status === 'Absent').length,
+      absentDates: attInPeriod.filter(a => a.status === 'Absent').map(a => a.date).sort()
+    };
+    attStats.rate = attStats.total
+      ? Utils.round(((attStats.present + attStats.late + attStats.excused) / attStats.total) * 100, 1)
+      : null;
+
+    // ---- Behavior within the period ----
+    const behInPeriod = beh.filter(b => b.date && b.date >= period.startISO && b.date <= period.endISO);
+    const positive = behInPeriod.filter(b => /positive|recognition|excellent|great/i.test(b.category || ''));
+    const concerning = behInPeriod.filter(b => !positive.includes(b));
+
+    // ---- Parent logs within the period ----
+    const parInPeriod = par.filter(p => p.date && p.date >= period.startISO && p.date <= period.endISO);
+
+    // ---- Grades ----
+    const finalized = tg.filter(t => t.status === 'finalized' && t.reportedGrade !== '' && t.reportedGrade != null);
+    let gradeInfo = null;
+    if (finalized.length) {
+      const latest = finalized.slice().sort((a, b) =>
+        (b.finalizedAt || '').localeCompare(a.finalizedAt || '')
+      )[0];
+      gradeInfo = {
+        source: 'finalized',
+        term: latest.term,
+        grade: Number(latest.reportedGrade),
+        descriptor: GradingEngine.getDescriptor(Number(latest.reportedGrade), policy)
+      };
+    } else if (res.length) {
+      const pcts = res.map(r => Number(r.percentage) || 0).filter(p => p > 0);
+      if (pcts.length) {
+        gradeInfo = {
+          source: 'live',
+          average: Utils.round(Utils.avg(pcts), 1),
+          count: pcts.length
+        };
+      }
+    }
+
+    // ---- Upcoming assignments relevant to this learner's class ----
+    const upcoming = upcomingAssignments.slice(0, 5);
+
+    // ---- Recipient email resolution ----
+    const email = (l.learnerEmail || '').trim() || (l.parentEmail || '').trim();
+
+    return {
+      learner: l,
+      email,
+      attendance: attStats,
+      behavior: { positive, concerning, all: behInPeriod },
+      parentLogs: parInPeriod,
+      grade: gradeInfo,
+      upcoming,
+      guardian: l.guardian || l.parent || '',
+      guardianFirst: (l.guardian || l.parent || '').split(/\s+/)[0] || ''
+    };
+  });
+},
+
+/* ------------------------------------------------------------------
+   TEMPLATE ENGINE
+   ------------------------------------------------------------------ */
+_pdComposeDigest(data, cls, period, opts) {
+  const l = data.learner;
+  const teacher = State.currentUser || {};
+  const school  = State.schools[0] || {};
+  const formal  = opts.tone !== 'friendly';
+  const passing = (GRADING_POLICIES[cls.gradingPolicyVersion]?.passingGrade) || 75;
+
+  const subject = formal
+    ? `Progress Update · ${Utils.fullName(l)} · ${period.label}`
+    : `Quick update on ${l.firstName || Utils.fullName(l)}`;
+
+  const lines = [];
+  const add = (...s) => lines.push(...s);
+
+  // ---- Salutation ----
+  if (formal) {
+    const honorific = data.guardianFirst
+      ? `Mr./Ms. ${data.guardianFirst}`
+      : 'Parent / Guardian';
+    add(`Dear ${honorific},`, '');
+  } else {
+    add(`Hi${data.guardianFirst ? ' ' + data.guardianFirst : ''},`, '');
+  }
+
+  // ---- Opening line ----
+  if (formal) {
+    add(`I hope this message finds you well. This is a brief update on ${l.firstName || 'your child'}'s progress in ${cls.subject || 'our class'} for the period ${Utils.formatDate(period.startISO, { month:'long', day:'numeric' })} – ${Utils.formatDate(period.endISO, { month:'long', day:'numeric', year:'numeric' })}.`, '');
+  } else {
+    add(`Here's a quick look at how ${l.firstName || 'your child'} has been doing in ${cls.subject || 'class'} recently.`, '');
+  }
+
+  // ---- Attendance ----
+  if (opts.include.attendance && data.attendance.total > 0) {
+    const a = data.attendance;
+    add('ATTENDANCE');
+    add(`• Class days recorded: ${a.total}`);
+    add(`• Present: ${a.present}  ·  Late: ${a.late}  ·  Excused: ${a.excused}  ·  Absent: ${a.absent}`);
+    if (a.rate !== null) {
+      const tone = a.rate >= 95 ? 'excellent' : a.rate >= 90 ? 'strong' : a.rate >= 80 ? 'good' : 'a concern';
+      add(`• Attendance rate: ${a.rate}% — ${tone}.`);
+    }
+    if (a.absentDates.length && a.absentDates.length <= 5) {
+      add(`• Absent on: ${a.absentDates.map(d => Utils.formatDate(d, { month:'short', day:'numeric' })).join(', ')}.`);
+    }
+    add('');
+  } else if (opts.include.attendance) {
+    add('ATTENDANCE');
+    add('• No attendance was recorded for this period.');
+    add('');
+  }
+
+  // ---- Grades ----
+  if (opts.include.grades && data.grade) {
+    const g = data.grade;
+    add('ACADEMIC PROGRESS');
+    if (g.source === 'finalized') {
+      add(`• Latest finalized ${g.term} grade: ${g.grade}${g.descriptor?.label ? ` (${g.descriptor.label})` : ''}.`);
+      if (g.grade < passing) {
+        add(`• This is below the passing grade of ${passing}. I would like to discuss how we can support ${l.firstName || 'your child'} together.`);
+      } else if (g.grade >= 90) {
+        add(`• This is an outstanding result. ${l.firstName || 'Your child'} is doing excellent work.`);
+      }
+    } else {
+      add(`• Current live assessment average: ${g.average}% (across ${g.count} recorded score${g.count === 1 ? '' : 's'}).`);
+      if (g.average < passing) {
+        add(`• This is trending below our passing grade of ${passing}. I would appreciate the chance to talk through next steps.`);
+      }
+    }
+    add('');
+  }
+
+  // ---- Behavior ----
+  if (opts.include.behavior && data.behavior.all.length) {
+    const { positive, concerning } = data.behavior;
+    add('BEHAVIOR AND ENGAGEMENT');
+    if (positive.length && !concerning.length) {
+      positive.slice(0, 2).forEach(b => {
+        add(`• ${b.description || b.category}${b.actionTaken ? ' — ' + b.actionTaken : ''}`);
+      });
+    } else if (concerning.length && !positive.length) {
+      concerning.slice(0, 2).forEach(b => {
+        add(`• ${b.description || b.category}${b.actionTaken ? ' — ' + b.actionTaken : ''}`);
+      });
+    } else {
+      positive.slice(0, 1).forEach(b => add(`• Positive: ${b.description || b.category}`));
+      concerning.slice(0, 1).forEach(b => add(`• To work on: ${b.description || b.category}`));
+    }
+    add('');
+  }
+
+  // ---- Prior parent communication ----
+  if (opts.include.parentNotes && data.parentLogs.length) {
+    add('PRIOR COMMUNICATION');
+    data.parentLogs.slice(0, 2).forEach(p => {
+      add(`• ${Utils.formatDate(p.date, { month:'short', day:'numeric' })} — ${p.concern || p.method}: ${(p.discussion || '').slice(0, 120)}`);
+    });
+    add('');
+  }
+
+  // ---- Upcoming assignments ----
+  if (opts.include.upcoming && data.upcoming.length) {
+    add('COMING UP');
+    data.upcoming.forEach(a => {
+      add(`• "${a.title}" due ${Utils.formatDate(a.dueDate, { month:'short', day:'numeric' })}`);
+    });
+    add('');
+  }
+
+  // ---- Closing ----
+  if (formal) {
+    add('If you have any questions or would like to discuss this further, please do not hesitate to reply to this message or reach me through the school office.');
+    add('');
+    add('Thank you for your continued partnership in ' + (l.firstName || 'your child') + "'s education.");
+  } else {
+    add('Let me know if you have any questions — always happy to chat.');
+  }
+
+  add('');
+  add('Sincerely,');
+
+  // Sign-off block
+  const signer = Licensing.getReportSignatory(cls) || teacher.fullName || '';
+  if (signer) add(signer);
+  if (teacher.position) add(teacher.position);
+  if (school.name) add(school.name);
+  if (teacher.email) add(teacher.email);
+  if (teacher.contact) add(teacher.contact);
+
+  return {
+    subject,
+    body: lines.join('\n'),
+    learner: l,
+    recipient: data.email,
+    period
+  };
+},
+
+/* ------------------------------------------------------------------
+   RECIPIENT ROW
+   ------------------------------------------------------------------ */
+_pdRenderRecipientRow(data, U) {
+  const l = data.learner;
+  const hasEmail = !!data.email;
+  const checked = U.selected.has(l.id);
+  return `
+    <div class="pd-recipient-row ${hasEmail ? '' : 'no-email'}">
+      <div>
+        <input type="checkbox"
+               data-pd-toggle="${Utils.attr(l.id)}"
+               ${checked ? 'checked' : ''}
+               style="width:16px;height:16px;accent-color:var(--deped-blue);cursor:pointer;">
+      </div>
+      <div>${Utils.avatarHTML(l, 32, 12)}</div>
+      <div>
+        <div style="font-weight:700;font-size:13px;">${Utils.esc(Utils.fullName(l))}</div>
+        <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+      </div>
+      <div class="pd-col-guardian text-xs">
+        ${Utils.esc(data.guardian || '—')}
+      </div>
+      <div class="text-xs" style="${hasEmail ? '' : 'color:var(--warning);font-weight:700;'}">
+        ${hasEmail ? Utils.esc(data.email) : '⚠ No email on file'}
+      </div>
+      <div class="pd-col-last text-xs text-muted" data-pd-last="${Utils.attr(l.id)}">—</div>
+      <div class="flex gap-4" style="justify-content:flex-end;">
+        <button class="btn btn-sm btn-outline" data-pd-preview="${Utils.attr(l.id)}" title="Preview">
+          ${icon('eye')}
+        </button>
+        <button class="btn btn-sm btn-primary" data-pd-send="${Utils.attr(l.id)}"
+                ${hasEmail ? '' : 'disabled'}
+                title="${hasEmail ? 'Send this digest' : 'No email on file'}">
+          ${icon('message')}
+        </button>
+      </div>
+    </div>`;
+},
+
+/* ------------------------------------------------------------------
+   PREVIEW MODAL
+   ------------------------------------------------------------------ */
+_pdOpenPreviewModal(learnerId, learnerData, cls, period, U) {
+  const data = learnerData.find(d => d.learner.id === learnerId);
+  if (!data) return;
+
+  const digest = Pages._pdComposeDigest(data, cls, period, U);
+
+  const m = UI.modal({
+    title: 'Preview Digest',
+    size: 'modal-lg',
+    body: `
+      <div class="form-group">
+        <label>To</label>
+        <input class="form-control" id="pdp-to"
+               value="${Utils.attr(data.email || '')}"
+               placeholder="Type an email address…">
+        ${!data.email ? `<small class="text-muted" style="color:var(--warning);">No email on file for this learner. Type one above to send.</small>` : ''}
+      </div>
+      <div class="form-group">
+        <label>Subject</label>
+        <input class="form-control" id="pdp-subject" value="${Utils.attr(digest.subject)}">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label>Message</label>
+        <textarea class="form-control" id="pdp-body" rows="16"
+                  style="font-family:Georgia,'Times New Roman',serif;font-size:13px;line-height:1.55;resize:vertical;">${Utils.esc(digest.body)}</textarea>
+        <small class="text-muted">Edit freely — nothing is saved until you click Send.</small>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-outline" id="pdp-copy">${icon('file')} Copy</button>
+      <button class="btn btn-primary" id="pdp-send">
+        ${icon('message')} Send to Parent
+      </button>
+    `
+  });
+
+  m.overlay.querySelector('#pdp-copy').onclick = async () => {
+    const text = m.overlay.querySelector('#pdp-body').value;
+    try {
+      await navigator.clipboard.writeText(text);
+      UI.toast('Copied to clipboard', 'success', 1800);
+    } catch (e) {
+      UI.toast('Copy failed — select the text manually.', 'warning');
+    }
+  };
+
+  m.overlay.querySelector('#pdp-send').onclick = async () => {
+    const to = m.overlay.querySelector('#pdp-to').value.trim();
+    const subject = m.overlay.querySelector('#pdp-subject').value.trim();
+    const body = m.overlay.querySelector('#pdp-body').value;
+
+    if (!to) { UI.toast('Enter a recipient email address.', 'warning'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      UI.toast('That does not look like a valid email address.', 'warning');
+      return;
+    }
+
+    m.close();
+    await Pages._pdSendSingle(data, cls, period, U, { overrideTo: to, overrideSubject: subject, overrideBody: body });
+  };
+},
+
+/* ------------------------------------------------------------------
+   SEND — single learner
+   ------------------------------------------------------------------ */
+async _pdSendSingle(data, cls, period, U, overrides = {}) {
+  const l = data.learner;
+  const digest = Pages._pdComposeDigest(data, cls, period, U);
+
+  const payload = {
+    to: overrides.overrideTo || digest.recipient,
+    subject: overrides.overrideSubject || digest.subject,
+    body: overrides.overrideBody || digest.body
+  };
+
+  if (!payload.to) {
+    UI.toast('No recipient email.', 'warning');
+    return;
+  }
+
+  // Log as "pending" first so we have a record even if the mail app crashes
+  const logId = Utils.uid('pdl-');
+  const pendingLog = {
+    id: logId,
+    classId: cls.id,
+    learnerId: l.id,
+    period: { type: period.type, label: period.label, startISO: period.startISO, endISO: period.endISO },
+    sentAt: new Date().toISOString(),
+    recipient: payload.to,
+    subject: payload.subject,
+    bodyPreview: payload.body.slice(0, 300),
+    status: 'pending',
+    sentVia: 'unknown'
+  };
+  try { await DB.put('parentDigestLog', pendingLog); } catch (e) {}
+  try {
+    const result = await Share.sendSmart(payload);
+
+    // Update the log with success
+    pendingLog.status = 'sent';
+    pendingLog.sentVia = (result && result.method) || (await Share.getSendMethod());
+    try { await DB.put('parentDigestLog', pendingLog); } catch (e) {}
+
+    App.logActivity(`Parent digest sent to ${payload.to} · ${Utils.fullName(l)}`, 'Parent Digest');
+    UI.toast(`Digest sent to ${data.guardianFirst || 'parent'}`, 'success', 2500);
+  } catch (e) {
+    pendingLog.status = 'failed';
+    pendingLog.error = (e && e.message) || 'Unknown error';
+    try { await DB.put('parentDigestLog', pendingLog); } catch (err) {}
+    UI.toast('Send failed: ' + pendingLog.error, 'error', 5000);
+  }
+},
+
+/* ------------------------------------------------------------------
+   SEND — batch
+   ------------------------------------------------------------------ */
+async _pdBatchSend(learnerData, U, cls, period) {
+  const targets = learnerData.filter(d => U.selected.has(d.learner.id));
+  const withEmail = targets.filter(d => d.email);
+  const withoutEmail = targets.filter(d => !d.email);
+
+  if (!withEmail.length) {
+    UI.toast('None of the selected learners have an email address on file.', 'warning', 5000);
+    return;
+  }
+
+  const bgEmail = await Share.hasBackgroundEmail();
+
+  // ---- Confirmation ----
+  const confirmed = await new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+
+    const m = UI.modal({
+      title: 'Send Parent Digests?',
+      body: `
+        <div class="alert ${bgEmail ? 'alert-info' : 'alert-warning'} mb-16">
+          ${icon(bgEmail ? 'info' : 'alert')}
+          <div>
+            ${bgEmail
+              ? `You are about to send <strong>${withEmail.length}</strong> digest${withEmail.length === 1 ? '' : 's'} silently via Web3Forms.`
+              : `You are about to open your mail app <strong>${withEmail.length}</strong> time${withEmail.length === 1 ? '' : 's'} — one per parent. You will need to click Send for each.`}
+          </div>
+        </div>
+
+        <p style="font-size:13.5px;line-height:1.6;margin-bottom:12px;">
+          Each digest contains the data recorded for that learner during
+          <strong>${Utils.esc(period.label)}</strong> (${Utils.formatDate(period.startISO, { month:'short', day:'numeric' })} – ${Utils.formatDate(period.endISO, { month:'short', day:'numeric' })}).
+        </p>
+
+        ${withoutEmail.length ? `
+          <div class="alert alert-warning" style="font-size:12px;">
+            ${icon('alert')}
+            <div>${withoutEmail.length} learner${withoutEmail.length === 1 ? '' : 's'} will be skipped — no email on file:
+              <br><em>${withoutEmail.map(d => Utils.esc(Utils.fullName(d.learner))).join(', ')}</em>
+            </div>
+          </div>` : ''}
+
+        <p class="text-xs text-muted">
+          <strong>Privacy reminder:</strong> the digest contains attendance, grades, and behavior data.
+          Send only to verified parent/guardian email addresses.
+        </p>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="pdb-cancel">Cancel</button>
+        <button class="btn btn-primary" id="pdb-confirm">
+          ${icon('message')} Send ${withEmail.length} Digest${withEmail.length === 1 ? '' : 's'}
+        </button>
+      `,
+      onClose: () => done(false)
+    });
+
+    // IMPORTANT: resolve the promise BEFORE calling m.close().
+    // UI.modal's close() fires onClose(), which also calls done(false).
+    // If we closed first, settled would become true and our intended
+    // resolution (true) would be silently discarded.
+    m.overlay.querySelector('#pdb-cancel').onclick  = () => { done(false); m.close(); };
+    m.overlay.querySelector('#pdb-confirm').onclick = () => { done(true);  m.close(); };
+  });
+
+  if (!confirmed) return;
+
+  // ---- Progress modal ----
+  const progressModal = UI.modal({
+    title: 'Sending Digests',
+    body: `
+      <p class="text-sm text-muted">Sending in progress. Please do not close this window.</p>
+      <div class="pd-progress-bar"><div id="pdb-fill" style="width:0%"></div></div>
+      <div class="flex-between" style="margin-top:8px;">
+        <span id="pdb-stage" style="font-size:12.5px;color:var(--text-muted);">Preparing…</span>
+        <span id="pdb-count" style="font-size:12.5px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace;">0 / ${withEmail.length}</span>
+      </div>
+      <div class="divider"></div>
+      <div id="pdb-log" style="max-height:220px;overflow-y:auto;font-size:12px;line-height:1.7;"></div>
+    `,
+    footer: false,
+    onClose: () => {}
+  });
+
+  const fill   = progressModal.overlay.querySelector('#pdb-fill');
+  const stage  = progressModal.overlay.querySelector('#pdb-stage');
+  const count  = progressModal.overlay.querySelector('#pdb-count');
+  const logEl  = progressModal.overlay.querySelector('#pdb-log');
+
+  let done = 0, failed = 0;
+  const now = new Date();
+
+  for (const d of withEmail) {
+    const l = d.learner;
+    stage.textContent = `Sending to ${l.firstName || Utils.fullName(l)}…`;
+
+    const digest = Pages._pdComposeDigest(d, cls, period, U);
+    const logId = Utils.uid('pdl-');
+    const logRec = {
+      id: logId,
+      classId: cls.id,
+      learnerId: l.id,
+      period: { type: period.type, label: period.label, startISO: period.startISO, endISO: period.endISO },
+      sentAt: new Date().toISOString(),
+      recipient: digest.recipient,
+      subject: digest.subject,
+      bodyPreview: digest.body.slice(0, 300),
+      status: 'pending',
+      sentVia: 'unknown'
+    };
+    try { await DB.put('parentDigestLog', logRec); } catch (e) {}
+
+      try {
+        const result = await Share.sendSmart({
+          to:      digest.recipient,
+          subject: digest.subject,
+          body:    digest.body
+        });
+      logRec.status  = 'sent';
+      logRec.sentVia = (result && result.method) || (await Share.getSendMethod());
+      try { await DB.put('parentDigestLog', logRec); } catch (e) {}
+
+      logEl.insertAdjacentHTML('afterbegin', `
+        <div style="color:var(--success);">✓ ${Utils.esc(Utils.fullName(l))} → ${Utils.esc(digest.recipient)}</div>
+      `);
+      App.logActivity(`Parent digest sent to ${digest.recipient} · ${Utils.fullName(l)}`, 'Parent Digest');
+    } catch (e) {
+      failed++;
+      logRec.status = 'failed';
+      logRec.error = (e && e.message) || 'Unknown error';
+      try { await DB.put('parentDigestLog', logRec); } catch (err) {}
+
+      logEl.insertAdjacentHTML('afterbegin', `
+        <div style="color:var(--danger);">✗ ${Utils.esc(Utils.fullName(l))} → ${Utils.esc((e && e.message) || 'failed')}</div>
+      `);
+    }
+
+    done++;
+    fill.style.width = Math.round((done / withEmail.length) * 100) + '%';
+    count.textContent = `${done} / ${withEmail.length}`;
+
+    // Stagger mail-app opens — but only if the send method is mailto/share.
+    // Background sends (Web3Forms) go in parallel with no delay.
+    if (!bgEmail) await new Promise(r => setTimeout(r, 900));
+  }
+
+  stage.textContent = failed
+    ? `Completed with ${failed} failure${failed === 1 ? '' : 's'}.`
+    : `All digests sent successfully.`;
+
+  // Append inside the modal body (not the overlay), so the button
+  // sits inside the dialog box instead of beside it.
+  progressModal.body.insertAdjacentHTML('beforeend', `
+    <div style="margin-top:16px;padding-top:14px;
+                border-top:1px solid var(--border);
+                display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn btn-primary" id="pdb-done">Done</button>
+    </div>
+  `);
+  progressModal.body.querySelector('#pdb-done').onclick = () => {
+    progressModal.close();
+    App.navigate('parent-digest');
+  };
+
+  UI.toast(
+    failed
+      ? `Sent ${done - failed} of ${withEmail.length}. ${failed} failed.`
+      : `All ${done} digests sent.`,
+    failed ? 'warning' : 'success',
+    5000
+  );
+},
+
+/* ------------------------------------------------------------------
+   HISTORY
+   ------------------------------------------------------------------ */
+async _pdOpenHistory() {
+  const cls = State.activeClass;
+  if (!cls) { UI.toast('No class selected.', 'warning'); return; }
+
+  let all = [];
+  try {
+    all = (await DB.getAll('parentDigestLog')) || [];
+  } catch (e) {
+    console.error('[Parent Digest] Could not read send history:', e);
+    UI.toast(
+      'Send history could not be loaded — the log store is missing or unreachable. ' +
+      'Reload the app, then try again.',
+      'error', 7000
+    );
+    return;
+  }
+  all = all.filter(r => r.classId === cls.id);
+  all.sort((a, b) => (b.sentAt || '').localeCompare(a.sentAt || '')); 
+
+  const m = UI.modal({
+    title: 'Digest Send History',
+    size: 'modal-lg',
+    body: all.length
+      ? `
+        <p class="text-xs text-muted mb-12">${all.length} entr${all.length === 1 ? 'y' : 'ies'} for this class. Newest first.</p>
+        <div style="max-height:520px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+          ${all.map(r => {
+            const l = State.learners.find(x => x.id === r.learnerId);
+            const statusColor = r.status === 'sent' ? 'var(--success)' : r.status === 'failed' ? 'var(--danger)' : 'var(--warning)';
+            const statusLabel = r.status === 'sent' ? '✓ Sent' : r.status === 'failed' ? '✗ Failed' : '⏳ Pending';
+            return `
+              <div class="pd-history-item">
+                <div style="width:36px;flex-shrink:0;">
+                  ${l ? Utils.avatarHTML(l, 36, 12) : `<div class="avatar" style="width:36px;height:36px;background:var(--bg);color:var(--text-muted);">?</div>`}
+                </div>
+                <div style="flex:1;min-width:0;">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap;">
+                    <div style="font-weight:700;font-size:13px;">${l ? Utils.esc(Utils.fullName(l)) : '(deleted learner)'}</div>
+                    <div class="text-xs" style="color:${statusColor};font-weight:700;flex-shrink:0;">${statusLabel}</div>
+                  </div>
+                  <div class="text-xs text-muted" style="margin-top:2px;">${Utils.esc(r.recipient)}</div>
+                  <div class="text-xs text-muted" style="margin-top:2px;">${Utils.formatDateTime(r.sentAt)} · ${Utils.esc(r.period?.label || '')} · via ${Utils.esc(r.sentVia || '—')}</div>
+                  <div class="text-xs" style="margin-top:4px;color:var(--text-muted);font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                    ${Utils.esc(r.subject || '')}
+                  </div>
+                  ${r.error ? `<div class="text-xs" style="margin-top:4px;color:var(--danger);">${Utils.esc(r.error)}</div>` : ''}
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      `
+      : UI.emptyState({
+          icon: 'history',
+          title: 'No digests sent yet',
+          message: 'Once you send a digest, it will be recorded here.'
+        }),
+    footer: `
+      <button class="btn btn-outline" id="pdh-clear" style="color:var(--danger);">Clear History</button>
+      <button class="btn btn-primary" data-close>Close</button>
+    `
+  });
+
+  const clearBtn = m.overlay.querySelector('#pdh-clear');
+  if (clearBtn) clearBtn.onclick = () => {
+    UI.confirm({
+      title: 'Clear Digest History?',
+      message: 'This deletes only the send log. Your learners, grades, attendance, and behavior records are untouched.',
+      confirmText: 'Clear',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        for (const r of all) {
+          try { await DB.delete('parentDigestLog', r.id); } catch (e) {}
+        }
+        UI.toast('History cleared', 'success');
+        m.close();
+      }
+    });
+  };
+},
+
+/* ------------------------------------------------------------------
+   CSV EXPORT
+   ------------------------------------------------------------------ */
+_pdExportCSV(learnerData, period) {
+  const rows = learnerData.map(d => {
+    const l = d.learner;
+    const g = d.grade;
+    return {
+      'LRN': l.lrn || '',
+      'Learner': Utils.fullName(l),
+      'Guardian': d.guardian || '',
+      'Email': d.email || '',
+      'Period': period.label,
+      'Attendance Rate (%)': d.attendance.rate ?? '',
+      'Present': d.attendance.present,
+      'Late': d.attendance.late,
+      'Excused': d.attendance.excused,
+      'Absent': d.attendance.absent,
+      'Grade Source': g ? (g.source === 'finalized' ? `Finalized · ${g.term}` : 'Live assessments') : '',
+      'Grade': g ? (g.source === 'finalized' ? g.grade : g.average) : '',
+      'Descriptor': g && g.source === 'finalized' ? (g.descriptor?.label || '') : '',
+      'Behavior Notes': d.behavior.all.length,
+      'Upcoming Work': d.upcoming.length
+    };
+  });
+
+  const cls = State.activeClass;
+  const safe = `${cls.gradeLevel}_${cls.section}_${period.type}`.replace(/[^A-Za-z0-9]+/g, '_');
+  Utils.download(
+    `parent-digest_${safe}_${Utils.timestampForFilename()}.csv`,
+    Utils.toCSV(rows),
+    'text/csv;charset=utf-8'
+  );
+
+  App.logActivity(`Parent digest data exported (${rows.length} learners)`, 'Parent Digest');
+  UI.toast('CSV exported', 'success');
+},
   openParentModal() {
     if (!State.learners.length) { UI.toast('No learners in class', 'warning'); return; }
     const m = UI.modal({
@@ -33512,6 +34808,13 @@ Choose strategies that fit naturally with the lesson design pattern "${designPat
         <div class="card"><h3 style="font-size:15px;margin-bottom:8px;">Restore from JSON</h3>
           <p class="text-sm text-muted mb-12">Restore data from a backup file.</p>
           <button class="btn btn-outline btn-block" onclick="Pages.restoreFromJSON()">${icon('download')} Restore</button></div>
+          <div class="card">
+            <h3 style="font-size:15px;margin-bottom:8px;">Merge from JSON</h3>
+            <p class="text-sm text-muted mb-12">Non-destructive import — combine data from two devices without wiping either side.</p>
+            <button class="btn btn-primary btn-block" onclick="Pages.mergeFromJSON()">
+              ${icon('upload')} Merge
+            </button>
+          </div>
         <div class="card">
           <h3 style="font-size:15px;margin-bottom:8px;">Email Backup Link</h3>
           <p class="text-sm text-muted mb-12">Ask a colleague to hold a copy of your backup.</p>
@@ -33822,6 +35125,8 @@ Notes:
       }
     };
   },
+  
+  
 
   /* ---------- SETTINGS ---------- */
 async settings(root) {
@@ -34346,6 +35651,13 @@ async settings(root) {
               <span class="sab-desc">Replace current data with a backup</span>
             </span>
           </button>
+          <button class="settings-action-btn" id="st-merge">
+            <span class="sab-icon">${icon('upload')}</span>
+            <span class="sab-body">
+              <span class="sab-label">Merge from Backup</span>
+              <span class="sab-desc">Combine two devices without wiping</span>
+            </span>
+          </button>
         </div>
       </div>
 
@@ -34390,6 +35702,7 @@ async settings(root) {
     content.querySelector('#st-backup-all').onclick = () => Pages.backupAll();
     content.querySelector('#st-backup-hint').onclick = () => Pages.backupWithHint();
     content.querySelector('#st-restore').onclick = () => Pages.restoreFromJSON();
+    content.querySelector('#st-merge').onclick   = () => Pages.mergeFromJSON();
 
     // DepEd calendar re-sync
     content.querySelector('#st-resync-calendar').onclick = async () => {
@@ -41775,7 +43088,217 @@ Do not add commentary, markdown fences, or extra fields.`;
 
 Pages.rubricBuilder = function(root) { return RubricBuilder.render(root); };
 Pages.pptxGenerator = function(root) { return PptxGenerator.render(root); };
+Pages.mergeFromJSON = function () {
+  const modal = UI.modal({
+    title: 'Merge from Backup',
+    size: 'modal-xl',
+    body: `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          <strong>Safe import.</strong> Merge compares a backup against your current data
+          and applies only the differences. Nothing is ever deleted — records that exist
+          locally but not in the backup are kept.
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Select a KlazAssist backup file (.json)</label>
+        <input type="file" accept=".json,application/json" class="form-control" id="merge-file">
+      </div>
+      <div id="merge-preview"></div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="merge-run" disabled>Apply Merge</button>
+    `
+  });
 
+  const m = modal.overlay;
+  const fileInput = m.querySelector('#merge-file');
+  const preview   = m.querySelector('#merge-preview');
+  const mergeBtn  = m.querySelector('#merge-run');
+  let plan = null;
+  let conflictPolicy = 'local';
+
+  const fail = (msg) => {
+    preview.innerHTML = `<div class="alert alert-danger">${icon('alert')}<div>${Utils.esc(msg)}</div></div>`;
+    plan = null;
+    mergeBtn.disabled = true;
+  };
+
+  const describe = (store, r) => {
+    if (!r) return '—';
+    if (store === 'learners') return [r.lastName, r.firstName].filter(Boolean).join(', ') || r.id;
+    if (store === 'termGrades') return `${r.term || '—'} · ${r.reportedGrade ?? '—'}`;
+    return r.title || r.name || r.id;
+  };
+
+  const updateBtn = () => {
+    if (!plan) return;
+    const applyCount = plan.inserts.length + plan.updates.length +
+      (conflictPolicy === 'remote' ? plan.conflicts.length : 0);
+    if (applyCount === 0) {
+      mergeBtn.disabled = true;
+      mergeBtn.textContent = 'Already in sync';
+    } else {
+      mergeBtn.disabled = false;
+      mergeBtn.textContent = `Apply Merge (${applyCount} records)`;
+    }
+  };
+
+  const renderPlan = () => {
+    if (!plan) return;
+    const { inserts, updates, conflicts, skips, stats } = plan;
+
+    const nonEmpty = Object.entries(stats.perStore)
+      .filter(([_, s]) => s.insert || s.update || s.conflict)
+      .sort((a, b) =>
+        (b[1].insert + b[1].update + b[1].conflict) -
+        (a[1].insert + a[1].update + a[1].conflict));
+
+    const conflictBlock = conflicts.length === 0 ? '' : `
+      <div class="card mb-16" style="border-left:4px solid var(--warning);">
+        <div class="card-head" style="margin-bottom:8px;">
+          <h4 style="font-size:13px;">Conflicts · ${conflicts.length}</h4>
+        </div>
+        <p class="text-xs text-muted mb-12">
+          These exist on both sides but differ in a way that has no safe automatic
+          answer — e.g. both sides have a finalized term grade, or two devices
+          created the same learner independently.
+        </p>
+        <div class="flex gap-12 mb-12" style="flex-wrap:wrap;">
+          <label class="auth-check">
+            <input type="radio" name="merge-cp" value="local" checked>
+            <span>Keep my local version</span>
+          </label>
+          <label class="auth-check">
+            <input type="radio" name="merge-cp" value="remote">
+            <span>Use the backup version</span>
+          </label>
+        </div>
+        <div class="table-wrap" style="max-height:220px;overflow-y:auto;">
+          <table class="data-table" style="font-size:11.5px;">
+            <thead><tr><th>Store</th><th>Record</th><th>Reason</th></tr></thead>
+            <tbody>
+              ${conflicts.slice(0, 30).map(c => `
+                <tr>
+                  <td style="font-family:ui-monospace,monospace;">${Utils.esc(c.store)}</td>
+                  <td>${Utils.esc(describe(c.store, c.local))}</td>
+                  <td class="text-xs text-muted">${Utils.esc(c.reason)}</td>
+                </tr>`).join('')}
+              ${conflicts.length > 30
+                ? `<tr><td colspan="3" class="text-muted text-xs" style="text-align:center;">…and ${conflicts.length - 30} more</td></tr>`
+                : ''}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    preview.innerHTML = `
+      <div class="grid grid-4 mb-16">
+        <div class="stat-card accent-success">
+          <div class="stat-label">New Records</div>
+          <div class="stat-value">${inserts.length}</div>
+          <div class="text-xs text-muted">Added from backup</div>
+        </div>
+        <div class="stat-card accent-warning">
+          <div class="stat-label">Updated</div>
+          <div class="stat-value">${updates.length}</div>
+          <div class="text-xs text-muted">Backup is newer</div>
+        </div>
+        <div class="stat-card ${conflicts.length ? 'accent-danger' : ''}">
+          <div class="stat-label">Conflicts</div>
+          <div class="stat-value">${conflicts.length}</div>
+          <div class="text-xs text-muted">Need your decision</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Unchanged</div>
+          <div class="stat-value">${skips.length}</div>
+          <div class="text-xs text-muted">Already in sync</div>
+        </div>
+      </div>
+
+      ${conflictBlock}
+
+      <div class="card">
+        <div class="card-head" style="margin-bottom:8px;">
+          <h4 style="font-size:13px;">By Store</h4>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12px;">
+            <thead><tr>
+              <th>Store</th>
+              <th style="text-align:right;">Local</th>
+              <th style="text-align:right;">Backup</th>
+              <th style="text-align:right;">Insert</th>
+              <th style="text-align:right;">Update</th>
+              <th style="text-align:right;">Conflict</th>
+            </tr></thead>
+            <tbody>
+              ${nonEmpty.length === 0
+                ? `<tr><td colspan="6" class="text-muted" style="text-align:center;padding:16px;">Nothing to merge — everything is already in sync.</td></tr>`
+                : nonEmpty.map(([store, s]) => `
+                  <tr>
+                    <td style="font-family:ui-monospace,monospace;">${Utils.esc(store)}</td>
+                    <td style="text-align:right;">${s.local}</td>
+                    <td style="text-align:right;">${s.remote}</td>
+                    <td style="text-align:right;color:var(--success);font-weight:700;">${s.insert || ''}</td>
+                    <td style="text-align:right;color:var(--warning);font-weight:700;">${s.update || ''}</td>
+                    <td style="text-align:right;color:var(--danger);font-weight:700;">${s.conflict || ''}</td>
+                  </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    preview.querySelectorAll('input[name="merge-cp"]').forEach(r => {
+      r.onchange = () => { conflictPolicy = r.value; updateBtn(); };
+    });
+
+    updateBtn();
+  };
+
+  fileInput.onchange = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    if (f.size > 25 * 1024 * 1024) { fail('File is too large. Maximum 25 MB.'); return; }
+
+    try {
+      const snapshot = JSON.parse(await Utils.readFile(f));
+      if (!snapshot || snapshot.application !== CONFIG.APP_NAME ||
+          !snapshot.data || typeof snapshot.data !== 'object') {
+        throw new Error('This is not a valid KlazAssist backup.');
+      }
+      preview.innerHTML = `<p class="text-sm text-muted">Analysing the backup…</p>`;
+      plan = await MergeEngine.buildPlan(snapshot);
+      renderPlan();
+    } catch (e) {
+      console.error('[Merge] Preview failed:', e);
+      fail(e.message || 'Invalid backup file.');
+    }
+  };
+
+  m.querySelector('[data-cancel]').onclick = modal.close;
+
+  mergeBtn.onclick = async () => {
+    if (!plan) return;
+    mergeBtn.disabled = true;
+    mergeBtn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Merging…';
+    try {
+      const result = await MergeEngine.applyPlan(plan, conflictPolicy);
+      modal.close();
+      App.logActivity(`Merged backup — ${result.applied} records applied`, 'Security');
+      UI.toast(`Merge complete — ${result.applied} records applied`, 'success', 5000);
+      await App.loadState();
+      App.navigate(State.currentModule || 'dashboard');
+    } catch (e) {
+      console.error('[Merge] Apply failed:', e);
+      mergeBtn.disabled = false;
+      mergeBtn.innerHTML = 'Apply Merge';
+      UI.toast('Merge failed: ' + (e.message || 'unknown error'), 'error', 7000);
+    }
+  };
+};
 
 /* Aliases */
 const aliases = {
@@ -41809,7 +43332,8 @@ const aliases = {
   'rubric-builder': 'rubricBuilder',
   'teaching-tools': 'teachingToolsHub',   
   'planning': 'planningHub',
-  'pedagogy-library': 'pedagogyLibrary',               
+  'pedagogy-library': 'pedagogyLibrary',
+  'parent-digest': 'parentDigest',              
 };
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
@@ -41839,7 +43363,10 @@ for (const k in aliases) {
  '_seatDeleteColumn','_seatDeleteRow','_seatOpenContextMenu', '_seatToggleBlocked',
  'openCalendarEventById',
  'openTeachingLoadModal','deleteTeachingLoad','openTeachingLoadNotifSettings',
- '_plShowHowToUseModal'    // ← NEW
+ '_plShowHowToUseModal',
+ 'parentDigest','_pdGetPeriodDates','_pdGatherAllLearnerData','_pdComposeDigest',
+'_pdRenderRecipientRow','_pdOpenPreviewModal','_pdSendSingle','_pdBatchSend',
+'_pdOpenHistory','_pdExportCSV'    // ← NEW
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
 /* ============================================================================
    EXPORTS + BOOT
