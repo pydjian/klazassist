@@ -43585,6 +43585,14 @@ Do not add commentary, markdown fences, or extra fields.`;
 
 Pages.rubricBuilder = function(root) { return RubricBuilder.render(root); };
 Pages.pptxGenerator = function(root) { return PptxGenerator.render(root); };
+/* ── QR Attendance Scanner entry point ─────────────────────────────── */
+Pages.openAttendanceScanner = function () {
+  const content = document.getElementById('content');
+  if (!content) { UI.toast('App not ready.', 'warning'); return; }
+  const root = content.firstElementChild;
+  if (!root) { UI.toast('App not ready.', 'warning'); return; }
+  QRAttendance.open(root);
+};
 Pages.mergeFromJSON = function () {
   const modal = UI.modal({
     title: 'Merge from Backup',
