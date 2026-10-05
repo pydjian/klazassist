@@ -33862,67 +33862,234 @@ _renderPhilIriOverview(content, cls, learners, records, levels, totalAssessed) {
 },
 
 // ── Tab 2: GST Administration ──
-_renderPhilIriGst(content, cls, learners, records) {
+// ── Tab: GST Administration ──
+async _renderPhilIriGst(content, cls, learners, records) {
+  // ── Load every GST set (built-in samples + teacher-added customs) ──
+  const mats = await Pages._philIriGetAllMaterials();
+  const gstSets = mats.gstSets || [];
+
+  if (!gstSets.length) {
+    content.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'file',
+      title: 'No GST materials available',
+      message: 'The Group Screening Test sets ship with KlazAssist. If yours are missing, reload the app — if the problem persists, contact support.'
+    })}</div>`;
+    return;
+  }
+
+  // Prefer sets within ±2 grade levels of the class; fall back to all sets
+  const gradeNum = (s) => {
+    const m = String(s || '').match(/\d+/);
+    return m ? Number(m[0]) : null;
+  };
+  const classGradeNum = gradeNum(cls.gradeLevel);
+  const nearbySets = classGradeNum == null
+    ? gstSets
+    : gstSets.filter(g => {
+        const gn = gradeNum(g.gradeLevel);
+        return gn == null || Math.abs(gn - classGradeNum) <= 2;
+      });
+  const usableSets = nearbySets.length ? nearbySets : gstSets;
+
+  // ── Persist the selected GST set on State so tab switches remember it ──
+  if (!State._philIriUI) State._philIriUI = {};
+  let selectedGstId = State._philIriUI.selectedGstId;
+  if (!selectedGstId || !usableSets.find(g => g.id === selectedGstId)) {
+    selectedGstId = usableSets[0].id;
+    State._philIriUI.selectedGstId = selectedGstId;
+  }
+  const gst = usableSets.find(g => g.id === selectedGstId);
+  const totalItems = gst.items.length;
+  const passing = Math.max(1, Math.ceil(totalItems * 0.7)); // 14 of 20, 7 of 10, etc.
+
+  // ── Index records by learnerId ──
+  const recMap = {};
+  records.forEach(r => { recMap[r.learnerId] = r; });
+
+  // ── Summary counts ──
+  let passed = 0, failed = 0, unassessed = 0;
+  learners.forEach(l => {
+    const s = (recMap[l.id] || {}).gstScore;
+    if (s === undefined || s === null) unassessed++;
+    else if (s >= passing) passed++;
+    else failed++;
+  });
+
   content.innerHTML = `
+    <!-- ══════════ Set selector + summary ══════════ -->
     <div class="card mb-16">
       <div class="card-head">
-        <h3>Group Screening Test (GST) Administration</h3>
-        <span class="text-xs text-muted">20 items · 30 minutes · Passing score: 14–20</span>
+        <h3>Group Screening Test (GST)</h3>
+        <span class="text-xs text-muted">
+          ${totalItems} items · ${gst.timeLimitMin} minutes · Passing: ${passing}–${totalItems}
+        </span>
       </div>
+
       <div class="alert alert-info mb-16" style="font-size:12px;">
         ${icon('info')}
         <div>
-          Administer the GST to the whole class. Learners scoring <strong>below 14</strong> must undergo
-          individualized assessment with graded passages. Learners scoring <strong>14 or above</strong>
-          need no further assessment.
+          Administer the GST to the whole class. Learners scoring <strong>below ${passing}</strong>
+          must undergo individualized assessment with graded passages. Learners scoring
+          <strong>${passing} or above</strong> need no further assessment.
         </div>
       </div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr>
-            <th style="width:36px;">#</th>
-            <th>Learner</th>
-            <th style="width:120px;text-align:center;">GST Raw Score (0–20)</th>
-            <th style="width:140px;text-align:center;">Status</th>
-          </tr></thead>
-          <tbody>
-            ${learners.map((l, i) => {
-              const rec = records.find(r => r.learnerId === l.id) || {};
-              const score = rec.gstScore;
-              const passed = score >= 14;
-              return `<tr>
-                <td style="color:var(--text-muted);">${i + 1}</td>
-                <td><strong>${Utils.esc(Utils.displayName(l))}</strong></td>
-                <td style="text-align:center;">
-                  <input type="number" class="form-control pir-gst-input" min="0" max="20"
-                         data-learner="${Utils.attr(l.id)}"
-                         value="${score !== undefined && score !== null ? score : ''}"
-                         placeholder="—" style="width:80px;text-align:center;margin:0 auto;">
-                </td>
-                <td style="text-align:center;">
-                  ${score === undefined || score === null
-                    ? '<span class="badge badge-neutral">Not entered</span>'
-                    : passed
-                      ? '<span class="badge badge-success">Passed · No further assessment</span>'
-                      : '<span class="badge badge-danger">Below 14 · Individualized assessment required</span>'}
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
 
-  // ── GST score persistence ──
+      <div class="form-row" style="align-items:flex-end;gap:12px;">
+        <div class="form-group" style="flex:2;margin-bottom:0;min-width:240px;">
+          <label>GST Passage</label>
+          <select class="form-control" id="pir-gst-select">
+            ${usableSets.map(g => `
+              <option value="${Utils.attr(g.id)}" ${g.id === selectedGstId ? 'selected' : ''}>
+                [${Utils.esc(g.gradeLevel)}] ${Utils.esc(g.title)} · ${g.items.length} items · ${g.timeLimitMin} min${g.isSample ? ' (sample)' : ''}
+              </option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" style="flex:0 0 auto;margin-bottom:0;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-outline" id="pir-gst-view-passage">${icon('eye')} View Passage</button>
+          <button class="btn btn-outline" id="pir-gst-print">${icon('printer')} Print Test</button>
+          <button class="btn btn-primary" id="pir-gst-launch">${icon('play')} Launch Session</button>
+        </div>
+      </div>
+
+      <!-- Live summary tiles -->
+      <div id="pir-gst-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">
+        <div class="stat-card" style="padding:12px;">
+          <div class="stat-label">Total Learners</div>
+          <div class="stat-value" id="pir-gst-total" style="font-size:22px;">${learners.length}</div>
+        </div>
+        <div class="stat-card accent-success" style="padding:12px;">
+          <div class="stat-label">Passed</div>
+          <div class="stat-value" id="pir-gst-passed" style="font-size:22px;">${passed}</div>
+          <div class="text-xs text-muted">≥ ${passing} · No further assessment</div>
+        </div>
+        <div class="stat-card accent-danger" style="padding:12px;">
+          <div class="stat-label">Needs Individual Assessment</div>
+          <div class="stat-value" id="pir-gst-failed" style="font-size:22px;">${failed}</div>
+          <div class="text-xs text-muted">&lt; ${passing}</div>
+        </div>
+        <div class="stat-card" style="padding:12px;">
+          <div class="stat-label">Not Assessed</div>
+          <div class="stat-value" id="pir-gst-unassessed" style="font-size:22px;">${unassessed}</div>
+          <div class="text-xs text-muted">Scores not entered</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ Score entry table ══════════ -->
+    <div class="card">
+      <div class="card-head">
+        <h3>Enter GST Scores</h3>
+        <span class="text-xs text-muted">Type each learner's raw score (0–${totalItems})</span>
+      </div>
+      ${learners.length ? `
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr>
+              <th style="width:36px;">#</th>
+              <th>Learner</th>
+              <th style="width:130px;text-align:center;">GST Raw Score (0–${totalItems})</th>
+              <th style="width:260px;text-align:center;">Status</th>
+              <th style="width:120px;text-align:center;">Actions</th>
+            </tr></thead>
+            <tbody>
+              ${learners.map((l, i) => {
+                const rec = recMap[l.id] || {};
+                const score = rec.gstScore;
+                const hasScore = score !== undefined && score !== null;
+                const didPass = hasScore && score >= passing;
+                return `<tr data-pir-gst-row="${Utils.attr(l.id)}">
+                  <td style="color:var(--text-muted);">${i + 1}</td>
+                  <td>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      ${Utils.avatarHTML(l, 28, 11)}
+                      <div style="min-width:0;">
+                        <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                          ${Utils.esc(Utils.displayName(l))}
+                        </div>
+                        <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style="text-align:center;">
+                    <input type="number" class="form-control pir-gst-input"
+                           min="0" max="${totalItems}"
+                           data-learner="${Utils.attr(l.id)}"
+                           value="${hasScore ? score : ''}"
+                           placeholder="—"
+                           style="width:80px;text-align:center;margin:0 auto;">
+                  </td>
+                  <td style="text-align:center;" data-pir-gst-status="${Utils.attr(l.id)}">
+                    ${!hasScore
+                      ? '<span class="badge badge-neutral">Not entered</span>'
+                      : didPass
+                        ? `<span class="badge badge-success">✓ Passed · No further assessment</span>`
+                        : `<span class="badge badge-danger">⚠ Below ${passing} · Individualized assessment required</span>`}
+                  </td>
+                  <td style="text-align:center;" data-pir-gst-action="${Utils.attr(l.id)}">
+                    ${hasScore && !didPass ? `
+                      <button class="btn btn-sm btn-outline"
+                              data-pir-gst-go-individual="${Utils.attr(l.id)}"
+                              title="Start individualized assessment">
+                        ${icon('play')} Assess
+                      </button>` : ''}
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : UI.emptyState({
+        icon: 'users',
+        title: 'No learners in this class',
+        message: 'Add learners before administering the GST.'
+      })}
+    </div>
+  `;
+
+  /* ────────────────────────────────────────────────────────────────
+     BINDINGS
+     ──────────────────────────────────────────────────────────────── */
+
+  // Set selector — swap sets without a full page reload
+  const setSel = content.querySelector('#pir-gst-select');
+  if (setSel) setSel.onchange = (e) => {
+    State._philIriUI.selectedGstId = e.target.value;
+    App.navigate('phil-iri');
+  };
+
+  // View / print / launch — all delegate to the shared helpers
+  const viewBtn = content.querySelector('#pir-gst-view-passage');
+  if (viewBtn) viewBtn.onclick = () => Pages._openPhilIriGstPassagePreview(gst);
+
+  const printBtn = content.querySelector('#pir-gst-print');
+  if (printBtn) printBtn.onclick = () => Pages._philIriPrintGst(gst);
+
+  const launchBtn = content.querySelector('#pir-gst-launch');
+  if (launchBtn) launchBtn.onclick = () => Pages._openPhilIriGstSession(gst, cls, learners);
+
+  // Quick-jump from a failing learner straight into the Individual tab
+  content.querySelectorAll('[data-pir-gst-go-individual]').forEach(btn => {
+    btn.onclick = () => {
+      State._philIriUI.tab = 'individual';
+      State._philIriUI.selectedLearnerId = btn.dataset.pirGstGoIndividual;
+      App.navigate('phil-iri');
+    };
+  });
+
+  // ── Score persistence with in-place UI refresh ──
   content.querySelectorAll('.pir-gst-input').forEach(inp => {
     inp.addEventListener('change', Utils.debounce(async () => {
       const learnerId = inp.dataset.learner;
       const val = inp.value.trim();
       const score = val === '' ? null : Number(val);
-      if (score !== null && (isNaN(score) || score < 0 || score > 20)) {
-        UI.toast('GST score must be between 0 and 20.', 'warning');
+
+      if (score !== null && (isNaN(score) || score < 0 || score > totalItems)) {
+        UI.toast(`GST score must be between 0 and ${totalItems}.`, 'warning');
+        inp.value = recMap[learnerId] && recMap[learnerId].gstScore != null
+          ? recMap[learnerId].gstScore : '';
         return;
       }
+
       const recId = `philiri-${cls.id}-${learnerId}`;
       let rec = await DB.get('philIriRecords', recId) || {
         id: recId, classId: cls.id, learnerId,
@@ -33930,10 +34097,65 @@ _renderPhilIriGst(content, cls, learners, records) {
         createdAt: new Date().toISOString()
       };
       rec.gstScore = score;
+      rec.gstSetId = gst.id;
+      rec.gstTotalItems = totalItems;
+      rec.gstTakenAt = new Date().toISOString();
       rec.updatedAt = new Date().toISOString();
       await DB.put('philIriRecords', rec);
       App.showAutosave('saved');
-      App.navigate('phil-iri');
+
+      // Update the in-memory record so the summary recount is accurate
+      if (!recMap[learnerId]) recMap[learnerId] = {};
+      recMap[learnerId].gstScore = score;
+      recMap[learnerId].gstSetId = gst.id;
+      recMap[learnerId].gstTotalItems = totalItems;
+
+      // Refresh just this row's status badge
+      const statusCell = content.querySelector(`[data-pir-gst-status="${CSS.escape(learnerId)}"]`);
+      if (statusCell) {
+        if (score === null) {
+          statusCell.innerHTML = '<span class="badge badge-neutral">Not entered</span>';
+        } else if (score >= passing) {
+          statusCell.innerHTML = '<span class="badge badge-success">✓ Passed · No further assessment</span>';
+        } else {
+          statusCell.innerHTML = `<span class="badge badge-danger">⚠ Below ${passing} · Individualized assessment required</span>`;
+        }
+      }
+
+      // Refresh the action cell (Assess button appears/disappears as needed)
+      const actionCell = content.querySelector(`[data-pir-gst-action="${CSS.escape(learnerId)}"]`);
+      if (actionCell) {
+        if (score !== null && score < passing) {
+          actionCell.innerHTML = `
+            <button class="btn btn-sm btn-outline"
+                    data-pir-gst-go-individual="${Utils.attr(learnerId)}"
+                    title="Start individualized assessment">
+              ${icon('play')} Assess
+            </button>`;
+          actionCell.querySelector('[data-pir-gst-go-individual]').onclick = () => {
+            State._philIriUI.tab = 'individual';
+            State._philIriUI.selectedLearnerId = learnerId;
+            App.navigate('phil-iri');
+          };
+        } else {
+          actionCell.innerHTML = '';
+        }
+      }
+
+      // Recount and update summary tiles
+      let p = 0, f = 0, u = 0;
+      learners.forEach(l => {
+        const s = (recMap[l.id] || {}).gstScore;
+        if (s === undefined || s === null) u++;
+        else if (s >= passing) p++;
+        else f++;
+      });
+      const passEl = content.querySelector('#pir-gst-passed');
+      const failEl = content.querySelector('#pir-gst-failed');
+      const unEl   = content.querySelector('#pir-gst-unassessed');
+      if (passEl) passEl.textContent = p;
+      if (failEl) failEl.textContent = f;
+      if (unEl)   unEl.textContent   = u;
     }, 400));
   });
 },
@@ -33943,8 +34165,18 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
   const U = State._philIriUI;
   const candidates = learners.filter(l => {
     const rec = records.find(r => r.learnerId === l.id);
-    return !rec || rec.gstScore === null || rec.gstScore === undefined || rec.gstScore < 14;
-    });
+    if (!rec || rec.gstScore === null || rec.gstScore === undefined) return true;
+    const items = rec.gstTotalItems || 20;
+    const pass = Math.max(1, Math.ceil(items * 0.7));
+    return rec.gstScore < pass;
+  });
+
+    // Normalize: if the previously-selected learner is no longer a candidate
+    // (e.g. their GST was re-entered above the passing threshold), drop the
+    // stale ID so the tab doesn't silently fall back to candidates[0].
+    if (U.selectedLearnerId && !candidates.find(l => l.id === U.selectedLearnerId)) {
+      U.selectedLearnerId = null;
+    }
 
   const selectedId = U.selectedLearnerId && candidates.find(l => l.id === U.selectedLearnerId)
     ? U.selectedLearnerId
@@ -34142,7 +34374,10 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
         UI.toast('Passage not found.', 'error');
         return;
       }
-      // `selected` is the learner object resolved earlier in this function
+      if (!selected) {
+        UI.toast('Select a learner first.', 'warning');
+        return;
+      }
       Pages._openPhilIriPassageReader(passage, selected);
     };
   }            
@@ -34297,7 +34532,7 @@ async _philIriGetAllMaterials() {
 
 
 /* ---------- Read passage in a clean full-screen overlay ---------- */
-_openPhilIriPassageReader(passage, learner) {
+_openPhilIriPassagePreview(passage) {
   const m = UI.modal({
     title: passage.title,
     size: 'modal-xl',
@@ -34650,8 +34885,26 @@ _openPhilIriGstPassagePreview(gst) {
         <span class="badge badge-neutral">${gst.items.length} items</span>
         <span class="badge badge-neutral">${gst.wordCount} words</span>
       </div>
-      <div class="pir-reader-passage" style="font-size:20px;line-height:1.85;">
+
+      <div class="pir-reader-passage" style="font-size:20px;line-height:1.85;margin-bottom:24px;">
         ${Utils.esc(gst.passage).split(/\n\n+/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('')}
+      </div>
+
+      <h4 style="font-size:13px;margin:0 0 12px;">Questions</h4>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        ${gst.items.map(it => `
+          <div style="padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">
+              ${it.number}. ${Utils.esc(it.stem)}
+            </div>
+            ${Array.isArray(it.choices) && it.choices.length ? `
+              <div style="font-size:12px;color:var(--text-muted);padding-left:16px;">
+                ${it.choices.map((c, i) =>
+                  `<div>${String.fromCharCode(65 + i)}. ${Utils.esc(c)}</div>`
+                ).join('')}
+              </div>` : ''}
+          </div>
+        `).join('')}
       </div>`,
     footer: `
       <button class="btn btn-outline" id="pir-gst-print-from-preview">${icon('printer')} Print</button>
@@ -34661,114 +34914,7 @@ _openPhilIriGstPassagePreview(gst) {
   m.overlay.querySelector('#pir-gst-print-from-preview').onclick = () => Pages._philIriPrintGst(gst);
 },
 
-/* ---------- GST administration session (whole class) ---------- */
-_openPhilIriGstSession(gst, cls, learners) {
-  // Session state: score per learner
-  const scores = {};    // learnerId → score (0-20)
-  learners.forEach(l => { scores[l.id] = null; });
 
-  const m = UI.modal({
-    title: `GST Session · ${gst.title}`,
-    size: 'modal-xl',
-    body: `
-      <div class="alert alert-info mb-16" style="font-size:12px;">
-        ${icon('info')}
-        <div>
-          Administer the passage and items to the class. Enter each learner's total correct score (0–${gst.items.length}).
-          Learners with <strong>14 or higher</strong> need no individual assessment.
-        </div>
-      </div>
-
-      <div class="pir-gst-layout">
-        <div class="pir-gst-left">
-          <div class="pir-panel-head" style="margin-bottom:8px;">Answer Key</div>
-          <div class="pir-gst-key">
-            ${gst.items.map(it => `
-              <div class="pir-gst-key-row">
-                <span class="pir-gst-key-num">${it.number}</span>
-                <span class="pir-gst-key-answer">${Utils.esc(it.answer)}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <div class="pir-gst-right">
-          <div class="pir-panel-head" style="margin-bottom:8px;">Learner Scores</div>
-          <div class="pir-gst-scores">
-            ${learners.map(l => `
-              <div class="pir-gst-score-row" data-gst-row="${Utils.attr(l.id)}">
-                <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;">
-                  ${Utils.avatarHTML(l, 26, 10)}
-                  <span style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                    ${Utils.esc(Utils.displayName(l))}
-                  </span>
-                </div>
-                <input type="number" min="0" max="${gst.items.length}"
-                       class="form-control pir-gst-input-session"
-                       data-gst-learner="${Utils.attr(l.id)}"
-                       placeholder="—" style="width:70px;text-align:center;padding:4px;">
-                <span class="pir-gst-status" data-gst-status="${Utils.attr(l.id)}"></span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      </div>`,
-    footer: `
-      <button class="btn btn-outline" data-close>Cancel</button>
-      <button class="btn btn-primary" id="pir-gst-save">${icon('save')} Save All Scores</button>
-    `
-  });
-
-  const overlay = m.overlay;
-
-  // Live status update per learner
-  const updateStatus = (lid) => {
-    const el = overlay.querySelector(`[data-gst-status="${CSS.escape(lid)}"]`);
-    if (!el) return;
-    const v = scores[lid];
-    if (v === null || v === undefined) { el.textContent = ''; el.className = 'pir-gst-status'; return; }
-    if (v >= 14) { el.textContent = '✓'; el.className = 'pir-gst-status pass'; el.title = 'No individual assessment needed'; }
-    else         { el.textContent = '!'; el.className = 'pir-gst-status fail'; el.title = 'Individual assessment required'; }
-  };
-
-  overlay.querySelectorAll('.pir-gst-input-session').forEach(inp => {
-    inp.addEventListener('input', () => {
-      const lid = inp.dataset.gstLearner;
-      const v = inp.value.trim() === '' ? null : Number(inp.value);
-      if (v !== null && (isNaN(v) || v < 0 || v > gst.items.length)) return;
-      scores[lid] = v;
-      updateStatus(lid);
-    });
-  });
-
-  overlay.querySelector('[data-close]').onclick = m.close;
-
-  overlay.querySelector('#pir-gst-save').onclick = async () => {
-    const filled = Object.values(scores).filter(v => v !== null).length;
-    if (filled === 0) { UI.toast('Enter at least one score.', 'warning'); return; }
-
-    for (const lid of Object.keys(scores)) {
-      const v = scores[lid];
-      if (v === null) continue;
-      const recId = `philiri-${cls.id}-${lid}`;
-      let r = await DB.get('philIriRecords', recId) || {
-        id: recId, classId: cls.id, learnerId: lid,
-        schoolYear: cls.schoolYear || State.schoolYear,
-        createdAt: new Date().toISOString()
-      };
-      r.gstScore = v;
-      r.gstSetId = gst.id;
-      r.gstTotalItems = gst.items.length;
-      r.gstTakenAt = new Date().toISOString();
-      r.updatedAt = new Date().toISOString();
-      await DB.put('philIriRecords', r);
-    }
-    App.logActivity(`Phil-IRI GST scores saved (${filled} learners)`, 'Reports');
-    UI.toast(`Saved ${filled} GST score${filled === 1 ? '' : 's'}`, 'success');
-    m.close();
-    App.navigate('phil-iri');
-  };
-},
 
 /* ---------- Print a graded passage (for the learner) ---------- */
 _philIriPrintPassage(passage) {
@@ -35267,7 +35413,7 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
     el.onclick = (e) => {
       e.stopPropagation();
       const p = findPassageById(el.dataset.pirMatRead);
-      if (p) Pages._openPhilIriPassageReader(p, null);
+      if (p) Pages._openPhilIriPassagePreview(p);
     };
   });
   content.querySelectorAll('[data-pir-mat-print]').forEach(el => {
@@ -35287,7 +35433,7 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
   content.querySelectorAll('[data-pir-mat-id]').forEach(el => {
     el.onclick = () => {
       const p = findPassageById(el.dataset.pirMatId);
-      if (p) Pages._openPhilIriPassageReader(p, null);
+      if (p) Pages._openPhilIriPassagePreview(p);
     };
   });
 
@@ -35315,45 +35461,6 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
 
   const remBtn = content.querySelector('#pir-remove-customs');
   if (remBtn) remBtn.onclick = () => Pages._removeCustomPhilIriMaterials();
-},
-
-/* ---------- Read passage in a clean full-screen overlay ---------- */
-_openPhilIriPassageReader(passage, learner) {
-  const m = UI.modal({
-    title: passage.title,
-    size: 'modal-xl',
-    body: `
-      <div class="phil-iri-reader">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-          <div>
-            <span class="badge badge-blue">${Utils.esc(passage.gradeLevel)}</span>
-            <span class="badge badge-neutral">${Utils.esc(passage.form)}</span>
-            <span class="badge badge-neutral">${Utils.esc(passage.language)}</span>
-            <span class="text-xs text-muted">${passage.wordCount} words</span>
-          </div>
-          <button class="btn btn-sm btn-outline" id="pir-reader-bigger">${icon('eye')} Toggle Size</button>
-        </div>
-        <div id="pir-reader-passage" class="pir-reader-passage" style="font-size:22px;line-height:1.85;">
-          ${Utils.esc(passage.text).split(/\n\n+/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('')}
-        </div>
-        <div class="pir-reader-legend">
-          <div class="text-xs text-muted" style="margin-top:14px;">
-            <strong>Note:</strong> Show this to the learner. Do not scroll it yourself while they are reading.
-          </div>
-        </div>
-      </div>`,
-    footer: `
-      <button class="btn btn-outline" id="pir-reader-print">${icon('printer')} Print</button>
-      <button class="btn btn-primary" data-close>Close</button>
-    `
-  });
-  let big = true;
-  const passageEl = m.overlay.querySelector('#pir-reader-passage');
-  m.overlay.querySelector('#pir-reader-bigger').onclick = () => {
-    big = !big;
-    passageEl.style.fontSize = big ? '22px' : '16px';
-  };
-  m.overlay.querySelector('#pir-reader-print').onclick = () => Pages._philIriPrintPassage(passage);
 },
 
 /* ---------- Choose a learner, then launch the assessment runner ---------- */
@@ -35671,8 +35778,28 @@ _openPhilIriGstPassagePreview(gst) {
         <span class="badge badge-neutral">${gst.items.length} items</span>
         <span class="badge badge-neutral">${gst.wordCount} words</span>
       </div>
-      <div class="pir-reader-passage" style="font-size:20px;line-height:1.85;">
+
+      <div class="pir-reader-passage" style="font-size:20px;line-height:1.85;margin-bottom:24px;">
         ${Utils.esc(gst.passage).split(/\n\n+/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('')}
+      </div>
+
+      <h4 style="font-size:13px;margin:0 0 12px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">
+        Questions
+      </h4>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        ${gst.items.map(it => `
+          <div style="padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">
+              ${it.number}. ${Utils.esc(it.stem)}
+            </div>
+            ${Array.isArray(it.choices) && it.choices.length ? `
+              <div style="font-size:12px;color:var(--text-muted);padding-left:16px;display:flex;flex-direction:column;gap:3px;">
+                ${it.choices.map((c, i) =>
+                  `<div>${String.fromCharCode(65 + i)}. ${Utils.esc(c)}</div>`
+                ).join('')}
+              </div>` : ''}
+          </div>
+        `).join('')}
       </div>`,
     footer: `
       <button class="btn btn-outline" id="pir-gst-print-from-preview">${icon('printer')} Print</button>
@@ -35682,11 +35809,12 @@ _openPhilIriGstPassagePreview(gst) {
   m.overlay.querySelector('#pir-gst-print-from-preview').onclick = () => Pages._philIriPrintGst(gst);
 },
 
-/* ---------- GST administration session (whole class) ---------- */
 _openPhilIriGstSession(gst, cls, learners) {
-  // Session state: score per learner
-  const scores = {};    // learnerId → score (0-20)
+  const scores = {};
   learners.forEach(l => { scores[l.id] = null; });
+
+  const totalItems = gst.items.length;
+  const passing = Math.max(1, Math.ceil(totalItems * 0.7));
 
   const m = UI.modal({
     title: `GST Session · ${gst.title}`,
@@ -35695,19 +35823,47 @@ _openPhilIriGstSession(gst, cls, learners) {
       <div class="alert alert-info mb-16" style="font-size:12px;">
         ${icon('info')}
         <div>
-          Administer the passage and items to the class. Enter each learner's total correct score (0–${gst.items.length}).
-          Learners with <strong>14 or higher</strong> need no individual assessment.
+          Administer the passage and items to the class. Enter each learner's total correct score (0–${totalItems}).
+          Learners with <strong>${passing} or higher</strong> need no individual assessment.
         </div>
       </div>
 
       <div class="pir-gst-layout">
         <div class="pir-gst-left">
-          <div class="pir-panel-head" style="margin-bottom:8px;">Answer Key</div>
-          <div class="pir-gst-key">
+          <div class="pir-panel-head" style="margin-bottom:8px;">Passage &amp; Questions</div>
+
+          <!-- Passage -->
+          <div class="pir-gst-passage-block">
+            <div style="font-weight:700;font-size:13px;margin-bottom:6px;">
+              ${Utils.esc(gst.title)}
+            </div>
+            <div style="font-family:'Bookman Old Style','Georgia',serif;font-size:12.5px;line-height:1.65;">
+              ${Utils.esc(gst.passage).split(/\n\n+/).map(p => `<p style="margin:0 0 8px;">${p.replace(/\n/g, '<br>')}</p>`).join('')}
+            </div>
+          </div>
+
+          <!-- Questions -->
+          <div class="pir-gst-questions">
             ${gst.items.map(it => `
-              <div class="pir-gst-key-row">
-                <span class="pir-gst-key-num">${it.number}</span>
-                <span class="pir-gst-key-answer">${Utils.esc(it.answer)}</span>
+              <div class="pir-gst-question">
+                <div class="pir-gst-question-stem">
+                  <span class="pir-gst-key-num">${it.number}</span>
+                  <span style="flex:1;">${Utils.esc(it.stem)}</span>
+                  <span class="pir-gst-answer-pill"
+                        title="Correct answer — hidden from projection"
+                        onclick="this.classList.toggle('revealed')">
+                    ${Utils.esc(it.answer)}
+                  </span>
+                </div>
+                ${Array.isArray(it.choices) && it.choices.length ? `
+                  <div class="pir-gst-question-choices">
+                    ${it.choices.map((c, i) => `
+                      <div class="pir-gst-choice">
+                        <span class="pir-gst-choice-letter">${String.fromCharCode(65 + i)}.</span>
+                        <span>${Utils.esc(c)}</span>
+                      </div>
+                    `).join('')}
+                  </div>` : ''}
               </div>
             `).join('')}
           </div>
@@ -35724,7 +35880,7 @@ _openPhilIriGstSession(gst, cls, learners) {
                     ${Utils.esc(Utils.displayName(l))}
                   </span>
                 </div>
-                <input type="number" min="0" max="${gst.items.length}"
+                <input type="number" min="0" max="${totalItems}"
                        class="form-control pir-gst-input-session"
                        data-gst-learner="${Utils.attr(l.id)}"
                        placeholder="—" style="width:70px;text-align:center;padding:4px;">
@@ -35742,21 +35898,20 @@ _openPhilIriGstSession(gst, cls, learners) {
 
   const overlay = m.overlay;
 
-  // Live status update per learner
   const updateStatus = (lid) => {
     const el = overlay.querySelector(`[data-gst-status="${CSS.escape(lid)}"]`);
     if (!el) return;
     const v = scores[lid];
     if (v === null || v === undefined) { el.textContent = ''; el.className = 'pir-gst-status'; return; }
-    if (v >= 14) { el.textContent = '✓'; el.className = 'pir-gst-status pass'; el.title = 'No individual assessment needed'; }
-    else         { el.textContent = '!'; el.className = 'pir-gst-status fail'; el.title = 'Individual assessment required'; }
+    if (v >= passing) { el.textContent = '✓'; el.className = 'pir-gst-status pass'; el.title = 'No individual assessment needed'; }
+    else              { el.textContent = '!'; el.className = 'pir-gst-status fail'; el.title = 'Individual assessment required'; }
   };
 
   overlay.querySelectorAll('.pir-gst-input-session').forEach(inp => {
     inp.addEventListener('input', () => {
       const lid = inp.dataset.gstLearner;
       const v = inp.value.trim() === '' ? null : Number(inp.value);
-      if (v !== null && (isNaN(v) || v < 0 || v > gst.items.length)) return;
+      if (v !== null && (isNaN(v) || v < 0 || v > totalItems)) return;
       scores[lid] = v;
       updateStatus(lid);
     });
@@ -35779,7 +35934,7 @@ _openPhilIriGstSession(gst, cls, learners) {
       };
       r.gstScore = v;
       r.gstSetId = gst.id;
-      r.gstTotalItems = gst.items.length;
+      r.gstTotalItems = totalItems;
       r.gstTakenAt = new Date().toISOString();
       r.updatedAt = new Date().toISOString();
       await DB.put('philIriRecords', r);
@@ -35790,7 +35945,6 @@ _openPhilIriGstSession(gst, cls, learners) {
     App.navigate('phil-iri');
   };
 },
-
 /* ---------- Print a graded passage (for the learner) ---------- */
 _philIriPrintPassage(passage) {
   const school = State.schools[0] || {};
@@ -35871,187 +36025,7 @@ _philIriPrintGst(gst) {
   setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 900);
 },
 
-/* ---------- Add a teacher-provided custom passage ---------- */
-_openAddCustomPassageModal() {
-  const m = UI.modal({
-    title: 'Add Custom Passage',
-    size: 'modal-lg',
-    body: `
-      <div class="alert alert-info mb-16" style="font-size:12px;">
-        ${icon('info')}
-        <div>Paste the official DepEd passage text below. KlazAssist stores it only on this device. Nothing is uploaded.</div>
-      </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label>Grade Level <span class="req">*</span></label>
-          <select class="form-control" id="pir-cp-grade">
-            ${['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7'].map(g => `<option>${g}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Language <span class="req">*</span></label>
-          <select class="form-control" id="pir-cp-lang">
-            <option>English</option>
-            <option>Filipino</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Form <span class="req">*</span></label>
-          <select class="form-control" id="pir-cp-form">
-            <option>Pre-test</option>
-            <option>Post-test</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>Title <span class="req">*</span></label>
-        <input class="form-control" id="pir-cp-title" placeholder="e.g. The Monkey and the Turtle">
-      </div>
-
-      <div class="form-group">
-        <label>Passage Text <span class="req">*</span></label>
-        <textarea class="form-control" id="pir-cp-text" rows="10"
-                  placeholder="Paste the full passage text here. Use blank lines between paragraphs."></textarea>
-        <small class="text-muted">Word count is computed automatically.</small>
-      </div>
-
-      <div class="form-group">
-        <label>Expected Reading Rate (WPM) <span class="text-muted" style="font-weight:400;">(optional guidance)</span></label>
-        <input type="number" class="form-control" id="pir-cp-wpm" value="90" min="20" max="250">
-      </div>
-
-      <div class="divider"></div>
-      <h4 style="font-size:13px;margin-bottom:10px;">Comprehension Questions</h4>
-      <p class="text-xs text-muted mb-12">Add at least 3 questions. Each question needs a type (Literal / Inferential / Critical) and an expected answer.</p>
-      <div id="pir-cp-questions"></div>
-      <button class="btn btn-sm btn-outline btn-block mt-8" id="pir-cp-add-q">+ Add Question</button>
-
-      <div class="form-group mt-16">
-        <label>Source / Attribution <span class="text-muted" style="font-weight:400;">(optional)</span></label>
-        <input class="form-control" id="pir-cp-source" placeholder="e.g. DepEd Phil-IRI Grade 4 Passage, Form 1">
-      </div>
-    `,
-    footer: `
-      <button class="btn btn-outline" data-close>Cancel</button>
-      <button class="btn btn-primary" id="pir-cp-save">${icon('save')} Save Passage</button>
-    `
-  });
-
-  const overlay = m.overlay;
-  let qCounter = 0;
-
-  const renderQuestions = () => {
-    overlay.querySelector('#pir-cp-questions').innerHTML = Array.from({ length: qCounter }).map((_, i) => `
-      <div class="card" style="padding:10px;margin-bottom:8px;background:var(--bg);">
-        <div class="flex-between" style="margin-bottom:6px;">
-          <strong style="font-size:12px;">Question ${i + 1}</strong>
-          <button class="icon-btn" data-pir-cp-remove-q="${i}" title="Remove" style="color:var(--danger);width:24px;height:24px;">${icon('trash')}</button>
-        </div>
-        <div class="form-row" style="gap:8px;">
-          <div class="form-group" style="margin-bottom:6px;">
-            <select class="form-control pir-cp-q-type" data-idx="${i}">
-              <option>Literal</option><option>Inferential</option><option>Critical</option>
-            </select>
-          </div>
-          <div class="form-group" style="margin-bottom:6px;">
-            <input class="form-control pir-cp-q-answer" data-idx="${i}" placeholder="Expected answer">
-          </div>
-        </div>
-        <input class="form-control pir-cp-q-text" data-idx="${i}" placeholder="Question text">
-      </div>
-    `).join('');
-
-    overlay.querySelectorAll('[data-pir-cp-remove-q]').forEach(btn => {
-      btn.onclick = () => {
-        const idx = Number(btn.dataset.pirCpRemoveQ);
-        // collect current values first
-        const current = collectQuestions();
-        current.splice(idx, 1);
-        qCounter = current.length;
-        renderQuestions();
-        current.forEach((q, i) => {
-          overlay.querySelector(`.pir-cp-q-type[data-idx="${i}"]`).value = q.type;
-          overlay.querySelector(`.pir-cp-q-text[data-idx="${i}"]`).value = q.question;
-          overlay.querySelector(`.pir-cp-q-answer[data-idx="${i}"]`).value = q.answer;
-        });
-      };
-    });
-  };
-
-  const collectQuestions = () => {
-    const out = [];
-    overlay.querySelectorAll('.pir-cp-q-text').forEach(inp => {
-      const i = Number(inp.dataset.idx);
-      out[i] = {
-        type:     overlay.querySelector(`.pir-cp-q-type[data-idx="${i}"]`).value,
-        question: inp.value.trim(),
-        answer:   overlay.querySelector(`.pir-cp-q-answer[data-idx="${i}"]`).value.trim()
-      };
-    });
-    return out;
-  };
-
-  overlay.querySelector('#pir-cp-add-q').onclick = () => { qCounter++; renderQuestions(); };
-  renderQuestions();
-  overlay.querySelector('#pir-cp-add-q').click();
-  overlay.querySelector('#pir-cp-add-q').click();
-  overlay.querySelector('#pir-cp-add-q').click();
-
-  overlay.querySelector('[data-close]').onclick = m.close;
-
-  overlay.querySelector('#pir-cp-save').onclick = async () => {
-    const grade = overlay.querySelector('#pir-cp-grade').value;
-    const lang = overlay.querySelector('#pir-cp-lang').value;
-    const form = overlay.querySelector('#pir-cp-form').value;
-    const title = overlay.querySelector('#pir-cp-title').value.trim();
-    const text = overlay.querySelector('#pir-cp-text').value.trim();
-    const wpm = Number(overlay.querySelector('#pir-cp-wpm').value) || 90;
-    const source = overlay.querySelector('#pir-cp-source').value.trim();
-
-    if (!title)  { UI.toast('Title is required.', 'warning'); return; }
-    if (!text)   { UI.toast('Passage text is required.', 'warning'); return; }
-
-    const qs = collectQuestions().filter(q => q.question);
-    if (qs.length < 3) { UI.toast('Add at least 3 comprehension questions.', 'warning'); return; }
-    if (qs.some(q => !q.answer)) { UI.toast('Every question needs an expected answer.', 'warning'); return; }
-
-    const wordCount = text.split(/\s+/).filter(Boolean).length;
-
-    const passage = {
-      id: 'custom-' + Utils.uid('pir-'),
-      gradeLevel: grade,
-      language: lang,
-      form,
-      title,
-      text,
-      wordCount,
-      expectedWpm: wpm,
-      questions: qs.map((q, i) => ({
-        number: i + 1,
-        type: q.type,
-        question: q.question,
-        answer: q.answer
-      })),
-      source: source || 'Added by teacher',
-      isSample: false
-    };
-
-    try {
-      const existing = (await DB.getSetting('philIriCustomPassages', [])) || [];
-      existing.push(passage);
-      await DB.setSetting('philIriCustomPassages', existing);
-      App.logActivity(`Phil-IRI custom passage added: ${title}`, 'Reports');
-      UI.toast('Passage saved', 'success');
-      m.close();
-      App.navigate('phil-iri');
-    } catch (e) {
-      console.error(e);
-      UI.toast('Could not save: ' + (e.message || ''), 'error');
-    }
-  };
-},
 
 /* ---------- Remove all teacher-added custom materials ---------- */
 _removeCustomPhilIriMaterials() {
@@ -36095,6 +36069,152 @@ _renderPhilIriReports(content, cls, learners, records) {
   content.querySelector('#pir-print-school').onclick = () => Pages._philIriPrintSchoolProfile(cls, learners, records);
 },
 
+
+async _philIriPrintClassProfile(cls, learners, records) {
+  // ── Reading level distribution ──
+  const levels = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
+  learners.forEach(l => {
+    const rec = records.find(r => r.learnerId === l.id);
+    if (!rec || !rec.readingLevel) { levels['Not Assessed']++; return; }
+    levels[rec.readingLevel] = (levels[rec.readingLevel] || 0) + 1;
+  });
+
+  const total = learners.length || 1;
+  const pct = (n) => Math.round((n / total) * 100);
+
+  // ── Class-wide averages (assessed learners only) ──
+  const assessed = learners.filter(l => {
+    const rec = records.find(r => r.learnerId === l.id);
+    return rec && rec.readingLevel;
+  });
+  const avgWRS = assessed.length
+    ? Utils.round(Utils.avg(assessed.map(l => {
+        const rec = records.find(r => r.learnerId === l.id);
+        return Number(rec.wordReadingPct) || 0;
+      })), 1)
+    : null;
+  const avgCS = assessed.length
+    ? Utils.round(Utils.avg(assessed.map(l => {
+        const rec = records.find(r => r.learnerId === l.id);
+        return Number(rec.comprehensionPct) || 0;
+      })), 1)
+    : null;
+  const rateRows = assessed.filter(l => {
+    const rec = records.find(r => r.learnerId === l.id);
+    return rec && rec.readingRate;
+  });
+  const avgRate = rateRows.length
+    ? Math.round(Utils.avg(rateRows.map(l => {
+        const rec = records.find(r => r.learnerId === l.id);
+        return Number(rec.readingRate) || 0;
+      })))
+    : null;
+
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-phil-iri">
+      ${Pages._buildDepEdHeader()}
+      <h3 style="text-align:center;font-size:13pt;margin:10px 0 2px;text-transform:uppercase;">
+        Phil-IRI Class Reading Profile
+      </h3>
+      <p style="text-align:center;font-size:10pt;margin:0 0 12px;">
+        ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} &middot; SY ${Utils.esc(cls.schoolYear || State.schoolYear)}
+      </p>
+
+      <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
+        <tr>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Total Learners</div>
+            <div style="font-size:15pt;font-weight:800;">${learners.length}</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Independent</div>
+            <div style="font-size:15pt;font-weight:800;color:#198754;">${levels['IND'] || 0}</div>
+            <div style="font-size:7pt;">${pct(levels['IND'] || 0)}%</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Instructional</div>
+            <div style="font-size:15pt;font-weight:800;color:#B45309;">${levels['INS'] || 0}</div>
+            <div style="font-size:7pt;">${pct(levels['INS'] || 0)}%</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Frustration</div>
+            <div style="font-size:15pt;font-weight:800;color:#DC3545;">${levels['FR'] || 0}</div>
+            <div style="font-size:7pt;">${pct(levels['FR'] || 0)}%</div>
+          </td>
+          <td style="width:20%;padding:6px;border:1px solid #000;text-align:center;">
+            <div style="font-size:8pt;text-transform:uppercase;">Not Assessed</div>
+            <div style="font-size:15pt;font-weight:800;color:#627D98;">${levels['Not Assessed']}</div>
+            <div style="font-size:7pt;">${pct(levels['Not Assessed'])}%</div>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="5" style="padding:6px;border:1px solid #000;font-size:8.5pt;">
+            <strong>Class Averages (assessed learners only):</strong>
+            Word Reading Score <strong>${avgWRS !== null ? avgWRS + '%' : '—'}</strong> &middot;
+            Comprehension <strong>${avgCS !== null ? avgCS + '%' : '—'}</strong> &middot;
+            Reading Rate <strong>${avgRate !== null ? avgRate + ' WPM' : '—'}</strong>
+          </td>
+        </tr>
+      </table>
+
+      <table style="width:100%;font-size:8.5pt;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="border:1px solid #000;padding:4px;width:5%;">#</th>
+            <th style="border:1px solid #000;padding:4px;text-align:left;">Learner</th>
+            <th style="border:1px solid #000;padding:4px;width:9%;">GST</th>
+            <th style="border:1px solid #000;padding:4px;width:11%;">Word Reading</th>
+            <th style="border:1px solid #000;padding:4px;width:12%;">Comprehension</th>
+            <th style="border:1px solid #000;padding:4px;width:10%;">Rate</th>
+            <th style="border:1px solid #000;padding:4px;width:16%;">Reading Level</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${learners.map((l, i) => {
+            const rec = records.find(r => r.learnerId === l.id) || {};
+            const levelLabel = rec.readingLevel === 'IND' ? 'Independent'
+              : rec.readingLevel === 'INS' ? 'Instructional'
+              : rec.readingLevel === 'FR' ? 'Frustration'
+              : rec.readingLevel === 'Non-Reader' ? 'Non-Reader'
+              : '—';
+            const levelColor = rec.readingLevel === 'IND' ? '#198754'
+              : rec.readingLevel === 'INS' ? '#B45309'
+              : rec.readingLevel === 'FR' ? '#DC3545'
+              : '#627D98';
+            return `<tr>
+              <td style="border:1px solid #000;padding:3px;text-align:center;">${i + 1}</td>
+              <td style="border:1px solid #000;padding:3px;">${Utils.esc(Utils.fullName(l))}</td>
+              <td style="border:1px solid #000;padding:3px;text-align:center;">${rec.gstScore != null ? rec.gstScore : ''}</td>
+              <td style="border:1px solid #000;padding:3px;text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : ''}</td>
+              <td style="border:1px solid #000;padding:3px;text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : ''}</td>
+              <td style="border:1px solid #000;padding:3px;text-align:center;">${rec.readingRate ? rec.readingRate + ' WPM' : ''}</td>
+              <td style="border:1px solid #000;padding:3px;text-align:center;color:${levelColor};font-weight:700;">${levelLabel}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+
+      <div style="margin-top:24px;font-size:10pt;">
+        <div style="display:inline-block;text-align:center;min-width:260px;">
+          <div style="font-weight:700;">${Utils.esc(Licensing.getReportSignatory(cls) || teacher.fullName || '')}</div>
+          <div style="border-top:1px solid #000;margin-top:2px;padding-top:2px;font-size:9pt;">
+            ${Utils.esc(Pages._getTeacherDesignation())}
+          </div>
+        </div>
+      </div>
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  App.logActivity('Phil-IRI Class Profile printed — ' + cls.gradeLevel + ' - ' + cls.section, 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
+  });
+},
 // ── Print: Form 3 (Class Reading Profile) ──
 _philIriPrintForm3(cls, learners, records) {
   const school = State.schools[0] || {};
