@@ -8881,7 +8881,7 @@ const SpreadsheetReader = {
     if (window.XLSX) return Promise.resolve(true);
     if (this._sheetJSLoading) return this._sheetJSLoading;
 
-    const src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    const src = './vendor/xlsx.full.min.js';
     this._sheetJSLoading = new Promise((resolve) => {
       // Already in the DOM? Just wait for it to finish loading.
       if (document.querySelector(`script[src="${src}"]`)) {
@@ -9932,7 +9932,7 @@ const XlsxWriter = {
   async _loadQRCodeLib() {
   if (window.qrcode) return true;
   return new Promise((resolve) => {
-    const src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
+    const src = './vendor/qrcode.min.js';
     if (document.querySelector(`script[src="${src}"]`)) {
       const t = setInterval(() => { if (window.qrcode) { clearInterval(t); resolve(true); } }, 50);
       setTimeout(() => { clearInterval(t); resolve(!!window.qrcode); }, 3000);
@@ -21592,8 +21592,7 @@ openAILessonPlanModal() {
 async extractTextFromFiles(files) {
   const names = [];
   let combined = '';
-  if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
   for (const file of files) {
     names.push(file.name);
     try {
@@ -42557,18 +42556,17 @@ const S = {
 
     S._libsPromise = (async () => {
       try {
-        await Promise.all([
-          loadScript('https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js'),
-          loadScript('https://cdn.jsdelivr.net/gh/gitbrent/PptxGenJS@3.12.0/dist/pptxgen.bundle.js')
-        ]);
-        if (!window.pdfjsLib) {
-          await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js');
-        }
-        if (window.pdfjsLib) {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
-        }
-      } catch (e) {
+            await Promise.all([
+              loadScript('./vendor/mammoth.browser.min.js'),
+              loadScript('./vendor/pptxgen.bundle.js')
+            ]);
+            if (!window.pdfjsLib) {
+              await loadScript('./vendor/pdf.min.js');
+            }
+            if (window.pdfjsLib) {
+              window.pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
+            }
+                  } catch (e) {
         console.warn('[PptxGen] library load issue:', e);
       }
       S._libsReady = true;
@@ -47017,6 +47015,54 @@ document.addEventListener('DOMContentLoaded', () => {
     Presenter.initLearnerWindow();
     return;
   }
+    /* ==========================================================================
+     PWA — service worker + install prompt
+     ========================================================================== */
 
+  // Register the service worker so the app works offline once cached.
+  // Skipped inside the learner/presenter window — that view doesn't need
+  // its own SW registration.
+  if ('serviceWorker' in navigator && !Presenter.isLearnerWindow()) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(e =>
+        console.warn('[SW] Registration failed:', e)
+      );
+    });
+  }
+
+  // Capture the browser's install prompt so we can offer our own button.
+  let _deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    _deferredInstallPrompt = e;
+    const btn = document.getElementById('install-btn');
+    if (btn) btn.classList.remove('hidden');
+  });
+
+  window.addEventListener('appinstalled', () => {
+    _deferredInstallPrompt = null;
+    const btn = document.getElementById('install-btn');
+    if (btn) btn.classList.add('hidden');
+    if (window.App && App.logActivity) App.logActivity('App installed to home screen', 'System');
+    if (window.UI && UI.toast) UI.toast('KlazAssist installed. It will now work offline.', 'success', 5000);
+  });
+
+  App.promptInstall = async function () {
+    if (!_deferredInstallPrompt) {
+      UI.toast('Install prompt not available. Use your browser menu → Install app.', 'info', 5000);
+      return;
+    }
+    _deferredInstallPrompt.prompt();
+    try {
+      const choice = await _deferredInstallPrompt.userChoice;
+      if (choice && choice.outcome === 'accepted') {
+        UI.toast('Installing…', 'info', 2000);
+      }
+    } catch (e) { /* user dismissed */ }
+    _deferredInstallPrompt = null;
+    const btn = document.getElementById('install-btn');
+    if (btn) btn.classList.add('hidden');
+  };
   App.bootstrap();
 });
