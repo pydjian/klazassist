@@ -14,9 +14,9 @@
 <meta name="referrer" content="no-referrer">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=UnifrakturMaguntia&display=swap">
+<link rel="manifest" href="./manifest.webmanifest">
 <!--<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://image.pollinations.ai https://api.kavel.ai; font-src 'self' data:; connect-src 'self' https://generativelanguage.googleapis.com https://image.pollinations.ai https://api.kavel.ai https://api.web3forms.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"> -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script src="./vendor/pdf.min.js"></script>
 <title>KlazAssist · Simplify Teaching. Empower Learning</title>
 <!-- KlazAssist Favicon -->
 <link rel="icon" type="image/svg+xml" href="./icon/icon.svg">
@@ -482,6 +482,15 @@
       <button class="icon-btn" id="notif-btn" onclick="App.toggleNotifications()" aria-label="Notifications">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0"/></svg>
         <span class="dot hidden" id="notif-dot"></span>
+      </button>
+      <button class="icon-btn hidden" id="install-btn" onclick="App.promptInstall()"
+              aria-label="Install KlazAssist" title="Install KlazAssist for offline use">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <path d="M7 10l5 5 5-5"/>
+          <path d="M12 15V3"/>
+        </svg>
       </button>
     </header>
     <main id="content"></main>
