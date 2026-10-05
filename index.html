@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0038A8">
+<!-- PWA -->
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KlazAssist">
+<link rel="apple-touch-icon" href="./icon/icon-192.png">
 <meta name="referrer" content="no-referrer">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -558,7 +565,64 @@
 <div id="modal-root"></div>
 <div id="print-area"></div>
 
-
 <script type="module" src="/src/main.ts"></script>
+
+<!-- ============================================================
+     PWA — Service Worker registration
+     Place AFTER the main app script so it never blocks startup.
+     ============================================================ -->
+<script>
+(function registerKlazServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('./sw.js', { scope: './' })
+      .then(function (reg) {
+        console.log('[KlazAssist] Service worker ready. Scope:', reg.scope);
+
+        if (reg.waiting && navigator.serviceWorker.controller) {
+          window.dispatchEvent(new CustomEvent('klaz:update-ready'));
+        }
+
+        reg.addEventListener('updatefound', function () {
+          var nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', function () {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              window.dispatchEvent(new CustomEvent('klaz:update-ready'));
+            }
+          });
+        });
+      })
+      .catch(function (err) {
+        console.warn('[KlazAssist] SW registration failed:', err);
+      });
+
+    var refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
+  });
+})();
+</script>
+
+<!-- ============================================================
+     PWA — Install prompt capture
+     Must run early; Chrome fires beforeinstallprompt only once.
+     ============================================================ -->
+<script>
+window.addEventListener('beforeinstallprompt', function (e) {
+  e.preventDefault();
+  window.__klazInstallPrompt = e;
+  console.log('[KlazAssist] Install prompt captured.');
+});
+
+window.addEventListener('appinstalled', function () {
+  window.__klazInstallPrompt = null;
+  console.log('[KlazAssist] App installed.');
+});
+</script>
 </body>
 </html>
