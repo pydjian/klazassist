@@ -9610,6 +9610,30 @@ const XlsxWriter = {
     return e - s;
   },
 
+  /** Wait until a webfont is fully loaded and ready for print. Resolves
+ *  immediately if the font is already loaded or if the browser doesn't
+ *  support the Font Loading API. */
+async _waitForFontsForPrint() {
+  if (!document.fonts || !document.fonts.ready) return;
+
+  try {
+    // Force the browser to download UnifrakturMaguntia *now*, on demand.
+    // document.fonts.load() returns a promise that resolves once the font
+    // is fully fetched and decoded.
+    await Promise.race([
+      document.fonts.load('16px "UnifrakturMaguntia"'),
+      new Promise(resolve => setTimeout(resolve, 4000))   // 4s ceiling
+    ]);
+
+    // Then wait for the whole font set to settle.
+    await Promise.race([
+      document.fonts.ready,
+      new Promise(resolve => setTimeout(resolve, 4000))
+    ]);
+  } catch (e) {
+    console.warn('[Print] Font readiness check failed:', e);
+  }
+},
   async dashboard(root) {
     const cls = State.activeClass;
     const teacherName = (State.currentUser && State.currentUser.fullName)
@@ -32312,29 +32336,25 @@ _waitForPrintImagesThen(callback) {
   const area = document.getElementById('print-area');
   if (!area) { if (callback) callback(); return; }
 
+  const fontWait = (typeof Pages._waitForFontsForPrint === 'function')
+    ? Pages._waitForFontsForPrint()
+    : Promise.resolve();
+
   const images = area.querySelectorAll('img');
-  if (!images.length) {
-    requestAnimationFrame(() => requestAnimationFrame(() => callback && callback()));
-    return;
-  }
+  const imageWaits = images.length === 0
+    ? [Promise.resolve()]
+    : Array.from(images).map(img => {
+        if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+        return new Promise(resolve => {
+          let settled = false;
+          const done = () => { if (!settled) { settled = true; resolve(); } };
+          img.addEventListener('load', done, { once: true });
+          img.addEventListener('error', done, { once: true });
+          setTimeout(done, 2500);
+        });
+      });
 
-  const waits = Array.from(images).map(img => {
-    // Already decoded and laid out? Done.
-    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
-
-    // Otherwise wait for load OR error, whichever comes first.
-    return new Promise(resolve => {
-      let settled = false;
-      const done = () => { if (!settled) { settled = true; resolve(); } };
-      img.addEventListener('load',  done, { once: true });
-      img.addEventListener('error', done, { once: true });
-      // Hard ceiling so a stuck image never blocks the print dialog.
-      setTimeout(done, 2500);
-    });
-  });
-
-  Promise.all(waits).then(() => {
-    // Give the print pipeline one extra paint cycle to see the decoded pixels.
+  Promise.all([fontWait, ...imageWaits]).then(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (callback) callback();
     }));
