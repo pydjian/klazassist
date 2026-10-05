@@ -10582,3 +10582,332 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   .qr-scanline { animation: none; top: 50%; }
   .qr-scan-row { animation: none; }
 }
+/* ============================================================================
+   PHIL-IRI — Premium Reading Assessment
+   ============================================================================ */
+.pir-tab-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.pir-gst-input {
+  width: 80px;
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  .print-phil-iri table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5pt;
+  }
+  .print-phil-iri table th,
+  .print-phil-iri table td {
+    border: 0.5pt solid #000;
+    padding: 3px 5px;
+    vertical-align: middle;
+  }
+  .print-phil-iri table th {
+    background: #e8ecf2;
+    text-align: center;
+    font-weight: 700;
+  }
+}
+/* ============================================================================
+   PHIL-IRI · ASSESSMENT SESSION RUNNER
+   ============================================================================ */
+
+.pir-session-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .pir-session-grid { grid-template-columns: 1fr; }
+}
+
+.pir-session-passage {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 26px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+[data-theme="dark"] .pir-session-passage,
+[data-theme="navy"] .pir-session-passage,
+[data-theme="noir"] .pir-session-passage {
+  background: #f7f7f7;
+  color: #111;
+}
+.pir-session-meta { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.pir-session-text {
+  font-family: 'Bookman Old Style', 'Georgia', serif;
+  font-size: 20px;
+  line-height: 1.9;
+  color: #111;
+}
+.pir-session-text p { margin: 0 0 16px; }
+
+.pir-reader-passage {
+  font-family: 'Bookman Old Style', 'Georgia', serif;
+  font-size: 22px;
+  line-height: 1.85;
+  color: var(--text);
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 8px 4px;
+}
+.pir-reader-passage p { margin: 0 0 18px; }
+/* ============================================================================
+   PHIL-IRI · TEACHER CONTROL PANEL
+   ============================================================================ */
+
+.pir-session-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.pir-panel-section {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.pir-panel-head {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ---- Timer ---- */
+.pir-timer-display {
+  font-size: 34px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  line-height: 1;
+  color: var(--deped-blue);
+  padding: 8px 0;
+}
+
+/* ---- Miscue tally ---- */
+.pir-miscue-buttons {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.pir-miscue-btn {
+  padding: 10px 4px;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 800;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all .12s;
+}
+.pir-miscue-btn:hover {
+  background: var(--light-blue);
+  border-color: var(--deped-blue);
+  color: var(--deped-blue);
+}
+.pir-miscue-btn.pulse {
+  transform: scale(1.1);
+  background: var(--gradient-primary);
+  color: #fff;
+  border-color: transparent;
+}
+.pir-miscue-count {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--gradient-primary);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+/* ============================================================================
+   PHIL-IRI · COMPREHENSION QUESTION LIST
+   ============================================================================ */
+
+.pir-question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.pir-question {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition: background .15s, border-color .15s;
+}
+.pir-question.correct {
+  background: rgba(25, 135, 84, 0.08);
+  border-color: rgba(25, 135, 84, 0.4);
+}
+.pir-question-stem {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.pir-question-num {
+  min-width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--light-blue);
+  color: var(--deped-blue);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.pir-question-type {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+}
+.pir-question-type.type-literal     { background: rgba(0,56,168,0.12);  color: var(--deped-blue); }
+.pir-question-type.type-inferential { background: rgba(124,58,237,0.12); color: var(--accent-purple); }
+.pir-question-type.type-critical    { background: rgba(245,158,11,0.15); color: #B45309; }
+
+.pir-question-correct {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--card);
+  color: var(--text-muted);
+  font-weight: 800;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+}
+.pir-question-correct:hover { border-color: var(--success); color: var(--success); }
+.pir-question.correct .pir-question-correct {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+.pir-question-answer {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  padding-left: 28px;
+}
+/* ============================================================================
+   PHIL-IRI · GST SESSION
+   ============================================================================ */
+
+.pir-gst-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 1.6fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 800px) { .pir-gst-layout { grid-template-columns: 1fr; } }
+
+.pir-gst-key {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.pir-gst-key-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.pir-gst-key-row:last-child { border-bottom: none; }
+.pir-gst-key-num {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--light-blue);
+  color: var(--deped-blue);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.pir-gst-key-answer { font-weight: 700; }
+
+.pir-gst-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.pir-gst-score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.pir-gst-status {
+  width: 26px;
+  text-align: center;
+  font-weight: 800;
+  font-size: 14px;
+}
+.pir-gst-status.pass { color: var(--success); }
+.pir-gst-status.fail { color: var(--warning); }
+
+/* ============================================================================
+   PHIL-IRI · MATERIALS LIBRARY + PRINT
+   ============================================================================ */
+
+.pir-material-row:hover      { background: var(--light-blue); }
+.pir-material-row:last-child { border-bottom: none !important; }
+
+@media print {
+  .print-phil-iri-passage,
+  .print-phil-iri-gst {
+    font-family: 'Bookman Old Style', 'Georgia', serif;
+    color: #000;
+  }
+}
