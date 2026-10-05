@@ -5604,7 +5604,7 @@ _titleize(id) {
       } else if (step === 3) {
         html += `<h2 style="font-size:18px;margin-bottom:6px;">School Profile</h2>
           <p class="text-muted text-sm mb-16">This information will appear in your printable reports.</p>
-          <div class="form-group"><label>School Name</label><input class="form-control" id="wz-school" placeholder="e.g. Cabaliandanl High School"></div>
+          <div class="form-group"><label>School Name</label><input class="form-control" id="wz-school" placeholder="e.g. Cabalinandan High School"></div>
           <div class="form-row"><div class="form-group"><label>School ID</label><input class="form-control" id="wz-schoolid" placeholder="e.g. 123456"></div>
           <div class="form-group"><label>Division</label><input class="form-control" id="wz-division" placeholder="e.g. Division of Camarines Sur"></div></div>
           <div class="form-row"><div class="form-group"><label>Region</label><input class="form-control" id="wz-region" placeholder="e.g. Region V"></div>
@@ -35683,23 +35683,134 @@ async settings(root) {
   /* ══════════════════════════════════════════════════════════
      GENERAL
      ══════════════════════════════════════════════════════════ */
-  const renderGeneral = () => {
+    const renderGeneral = () => {
     const schoolName = school.name || 'Not configured';
     const teacherName = teacher.fullName || (Auth._account && Auth._account.name) || 'Not configured';
     const sy = State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
 
+        /* ─────────────────────────────────────────────────────────────
+       SCHOOL-YEAR DROPDOWN OPTIONS
+       DepEd SYs run June → March, so "2026-2027" is the label shape.
+       We anchor on the year of the currently-selected SY and generate
+       a ±3-year window around it. The current SY is always included
+       in the list, even if it falls outside that window.
+       ───────────────────────────────────────────────────────────── */
+    const syOptions = (() => {
+      const anchor = parseInt(String(sy).slice(0, 4), 10);
+      const base   = Number.isFinite(anchor) ? anchor : new Date().getFullYear();
+      const set    = new Set();
+      for (let i = -3; i <= 3; i++) set.add(`${base + i}-${base + i + 1}`);
+      set.add(String(sy));                       // always keep the active SY
+      return Array.from(set).sort();
+    })();
+
+    const syOptionsHTML = syOptions.map(y =>
+      `<option value="${Utils.attr(y)}" ${y === sy ? 'selected' : ''}>${Utils.esc(y)}</option>`
+    ).join('');
+
+    // ── PWA install-state detection ──────────────────────────────────
+    const pwaStandalone =
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || (typeof (navigator as any).standalone === 'boolean'
+          && (navigator as any).standalone === true);
+
+    const pwaHasPrompt = !!(window as any).__klazInstallPrompt;
+
+    const ua = navigator.userAgent || '';
+    const pwaIsIOS = /iPhone|iPad|iPod/.test(ua)
+      || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+
+    const installSectionHTML = pwaStandalone
+      ? `
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Installed as App</h3>
+            <p>KlazAssist is running as an installed app on this device.</p>
+          </div>
+          <div class="alert alert-success" style="margin:0;">
+            ${icon('check')}
+            <div>
+              Storage is upgraded to <strong>persistent</strong> — the browser
+              will not silently delete your data. You are receiving the full
+              offline experience.
+            </div>
+          </div>
+        </div>`
+      : `
+        <div class="settings-section">
+          <div class="settings-section-head">
+            <h3>Install as App</h3>
+            <p>Install KlazAssist to your device for a full-screen, offline-capable experience.</p>
+          </div>
+          <div class="setting-row" style="align-items:flex-start;">
+            <div style="flex:1;min-width:200px;">
+              <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Why install?</div>
+              <ul style="font-size:12.5px;color:var(--text-muted);line-height:1.7;margin:0;padding-left:18px;">
+                <li>Launches from your home screen or dock, without browser chrome.</li>
+                <li>Works fully offline — no internet needed after the first load.</li>
+                <li>Upgrades storage to <strong>persistent</strong> so the browser won't silently delete your data.</li>
+              </ul>
+              ${(!pwaHasPrompt && !pwaIsIOS) ? `
+                <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px;line-height:1.5;">
+                  <strong>Note:</strong> your browser hasn't offered a one-click install yet.
+                  You can still install manually from the browser menu — look for
+                  <em>“Install App”</em>, <em>“Add to Home Screen”</em>, or <em>“Create Shortcut”</em>.
+                </div>` : ''}
+            </div>
+            <button class="btn btn-primary" id="st-install-app">
+              ${icon('download')} ${pwaIsIOS ? 'How to Install' : 'Install as App'}
+            </button>
+          </div>
+        </div>`;
+    // ─────────────────────────────────────────────────────────────────
+
     content.innerHTML = `
+      <!-- ══════════════ SCHOOL YEAR ══════════════ -->
       <div class="settings-section">
-        <div class="settings-section-head">
-          <h3>School Year</h3>
-          <p>Used as the default for new classes, exports, and reports.</p>
+        <div class="settings-section-head" style="display:flex;align-items:flex-start;gap:14px;">
+          <div style="width:42px;height:42px;border-radius:11px;
+                      background:linear-gradient(135deg,var(--light-blue),rgba(0,87,184,0.08));
+                      color:var(--deped-blue);display:flex;align-items:center;justify-content:center;
+                      flex-shrink:0;box-shadow:0 1px 0 rgba(255,255,255,0.6) inset;">
+            ${icon('calendar')}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <h3 style="margin-bottom:3px;">School Year</h3>
+            <p style="margin:0;line-height:1.55;">
+              The default School Year for new classes, exports, and printable reports.
+            </p>
+          </div>
         </div>
-        <div class="setting-row">
-          <label class="setting-label">Active School Year</label>
-          <input class="form-control" id="st-sy" value="${Utils.attr(sy)}"
-                 placeholder="e.g. 2026-2027" style="max-width:180px;">
+
+        <div class="setting-row" style="padding:16px 0 0;border-top:1px solid var(--border);margin-top:14px;">
+          <div style="flex:1;min-width:0;">
+            <div class="setting-label" style="margin-bottom:5px;display:flex;align-items:center;gap:8px;">
+              Active School Year
+              <span class="badge badge-success" style="font-size:9.5px;padding:1px 7px;letter-spacing:0.6px;">
+                ${icon('check')} IN USE
+              </span>
+            </div>
+            <div class="text-xs text-muted" style="line-height:1.55;max-width:520px;">
+              DepEd SYs run <strong>June → March</strong>. Changing this only affects
+              <em>new</em> records — existing classes keep the SY they were created with.
+            </div>
+          </div>
+
+          <div class="sy-select-wrap">
+            <select class="form-control" id="st-sy" aria-label="Active School Year">
+              ${syOptionsHTML}
+            </select>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                 class="sy-select-chevron" aria-hidden="true">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </div>
         </div>
       </div>
+
+
+      ${installSectionHTML}
+
 
       <div class="settings-section">
         <div class="settings-section-head">
@@ -35833,15 +35944,21 @@ async settings(root) {
       </div>
     `;
 
-    // School year — auto-save on blur
-    const syInput = content.querySelector('#st-sy');
-    syInput.addEventListener('blur', () => {
-      const v = syInput.value.trim();
+    // School year — save immediately on selection
+    const sySelect = content.querySelector('#st-sy');
+    sySelect.addEventListener('change', () => {
+      const v = sySelect.value;
       if (!v || v === State.schoolYear) return;
+
+      const previous = State.schoolYear;
       State.schoolYear = v;
       App.savePreferences();
-      App.logActivity('School year changed to ' + v, 'Settings');
-      UI.toast('School year updated', 'success', 2000);
+      App.logActivity(`School year changed: ${previous} → ${v}`, 'Settings');
+      UI.toast(`School year updated to ${v}`, 'success', 2200);
+
+      // Re-render so the option list re-anchors around the new SY
+      // and the "IN USE" pill reflects the actual state.
+      renderGeneral();
     });
 
     // Theme cards — apply immediately
@@ -35853,10 +35970,26 @@ async settings(root) {
         App.applyTheme(t);
         App.savePreferences();
         App.logActivity('Theme changed to ' + t, 'Settings');
-        renderGeneral();     // refresh checkmark
+        renderGeneral();     // refresh checkmark 
       };
     });
+        // Install-as-App button
+    const installBtn = content.querySelector('#st-install-app');
+    if (installBtn) {
+      installBtn.onclick = () => {
+        if (typeof window.installKlazAssist === 'function') {
+          window.installKlazAssist();
+        } else {
+          UI.toast(
+            'Install isn\'t available right now. On iOS, use Share → Add to Home Screen.',
+            'info', 7000
+          );
+        }
+      };
+    }
+  
   };
+
 
   /* ══════════════════════════════════════════════════════════
      ACADEMICS
@@ -43900,52 +44033,162 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('unhandledrejection', (e) => { console.error('Unhandled promise rejection:', e.reason); });
 
   /* ============================================================================
-   VERSION LABEL SYNC
-   Single source of truth = CONFIG.VERSION. Writes "v" + version into every
-   element carrying a [data-app-version] attribute, and re-applies whenever
-   the app shell transitions (login → app, lock → app, setup → app).
-   ============================================================================ */
-(function syncAppVersion() {
-  function apply() {
-    try {
-      const raw = (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.VERSION)
-        ? String(CONFIG.VERSION).trim()
-        : '2.0.0';
-      const label = raw.charAt(0).toLowerCase() === 'v' ? raw : ('v' + raw);
-      const nodes = document.querySelectorAll('[data-app-version]');
-      nodes.forEach(el => { el.textContent = label; });
-      return nodes.length;
-    } catch (e) {
-      console.warn('[KlazAssist] Version sync failed:', e);
-      return -1;
+     VERSION LABEL SYNC
+     ============================================================================ */
+  (function syncAppVersion() {
+    function apply() {
+      try {
+        const raw = (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.VERSION)
+          ? String(CONFIG.VERSION).trim()
+          : '2.0.0';
+        const label = raw.charAt(0).toLowerCase() === 'v' ? raw : ('v' + raw);
+        const nodes = document.querySelectorAll('[data-app-version]');
+        nodes.forEach(el => { el.textContent = label; });
+        return nodes.length;
+      } catch (e) {
+        console.warn('[KlazAssist] Version sync failed:', e);
+        return -1;
+      }
     }
+
+    function boot() {
+      apply();
+      if (typeof MutationObserver === 'function') {
+        const obs = new MutationObserver(() => apply());
+        ['app', 'login-screen', 'setup-screen'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+        });
+      }
+      setTimeout(apply, 500);
+      setTimeout(apply, 2000);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
+  })();
+
+  /* ---------------------------------------------------------------------------
+     PWA — React to service-worker updates and expose an install trigger.
+     --------------------------------------------------------------------------- */
+  window.addEventListener('klaz:update-ready', () => {
+    UI.toast('A new version of KlazAssist is ready — reloading…', 'info', 3500);
+    setTimeout(async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+      } catch (e) { /* ignore */ }
+    }, 1200);
+  });
+
+(window as any).installKlazAssist = async function () {
+  // ---- Environment detection ----
+  const ua = navigator.userAgent || '';
+  const isIOS     = /iPhone|iPad|iPod/.test(ua)
+                 || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const isSafari  = /Safari/.test(ua)
+                 && !/Chrome|Chromium|Edg|OPR|CriOS|FxiOS|Brave/.test(ua);
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+                 || (typeof (navigator as any).standalone === 'boolean' && (navigator as any).standalone === true);
+
+  // ---- Already installed? ----
+  if (standalone) {
+    UI.toast('KlazAssist is already installed on this device.', 'info', 4000);
+    return;
   }
 
-  function boot() {
-    apply();
-    // Re-apply on the class toggle that reveals the app shell
-    if (typeof MutationObserver === 'function') {
-      const obs = new MutationObserver(() => apply());
-      ['app', 'login-screen', 'setup-screen'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) obs.observe(el, { attributes: true, attributeFilter: ['class'] });
-      });
-    }
-    // Belt-and-suspenders for slow-loading views
-    setTimeout(apply, 500);
-    setTimeout(apply, 2000);
+  // ---- iOS Safari: no beforeinstallprompt — show manual steps ----
+  if (isIOS) {
+    UI.modal({
+      title: 'Install KlazAssist',
+      body: `
+        <p style="font-size:13px;line-height:1.6;margin-bottom:14px;">
+          iOS Safari doesn't support one-click install. Add KlazAssist to your
+          Home Screen manually — it takes about 10 seconds.
+        </p>
+        <ol style="font-size:13.5px;line-height:1.9;padding-left:22px;color:var(--text);">
+          <li>Tap the <strong>Share</strong> button
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   style="width:14px;height:14px;display:inline-block;vertical-align:-2px;margin:0 2px;">
+                <path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/>
+                <polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+              </svg>
+              at the bottom of Safari.</li>
+          <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+          <li>Tap <strong>Add</strong> in the top-right corner.</li>
+        </ol>
+        <div class="alert alert-info" style="font-size:12px;margin-top:16px;">
+          ${icon('info')}
+          <div>
+            Once installed, Safari upgrades KlazAssist's storage to
+            <strong>persistent</strong> — the browser will no longer be allowed to
+            silently delete your data after 7 days of inactivity.
+          </div>
+        </div>`,
+      footer: `<button class="btn btn-primary" data-close>Got it</button>`
+    });
+    return;
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
+  // ---- Desktop Safari: File → Add to Dock ----
+  if (isSafari && !isIOS) {
+    UI.modal({
+      title: 'Install KlazAssist',
+      body: `
+        <p style="font-size:13px;line-height:1.6;margin-bottom:14px;">
+          Safari on macOS installs PWAs to the Dock rather than the Home Screen.
+        </p>
+        <ol style="font-size:13.5px;line-height:1.9;padding-left:22px;color:var(--text);">
+          <li>Open the <strong>File</strong> menu in the menu bar.</li>
+          <li>Choose <strong>Add to Dock…</strong>.</li>
+          <li>Confirm the name and click <strong>Add</strong>.</li>
+        </ol>`,
+      footer: `<button class="btn btn-primary" data-close>Got it</button>`
+    });
+    return;
   }
-})();
+
+  // ---- Chromium / Android: use the deferred prompt ----
+  const prompt = (window as any).__klazInstallPrompt;
+  if (!prompt) {
+    UI.toast(
+      'Install isn\'t available right now. Your browser may not support PWA installation, ' +
+      'or the app has already been installed. Try opening the browser menu and looking for ' +
+      '“Install App” or “Add to Home Screen”.',
+      'info', 8000
+    );
+    return;
+  }
+
+  try {
+    prompt.prompt();
+    const choice = await prompt.userChoice;
+    // Clear the deferred prompt immediately — it can only be used once.
+    (window as any).__klazInstallPrompt = null;
+
+    if (choice && choice.outcome === 'accepted') {
+      UI.toast('KlazAssist installed — open it from your home screen or dock.', 'success', 5000);
+      try { App.logActivity('PWA installed', 'System'); } catch (_) {}
+    } else {
+      UI.toast('Installation cancelled.', 'info', 3000);
+    }
+  } catch (e) {
+    // Some browsers throw if the prompt is stale. Clear it and tell the user.
+    console.warn('[KlazAssist] Install prompt failed:', e);
+    (window as any).__klazInstallPrompt = null;
+    UI.toast(
+      'Installation failed. Try reloading the page, then use your browser\'s ' +
+      '“Install App” option from the menu.',
+      'warning', 7000
+    );
+  }
+};
 
   // If this window was opened as a learner/presenter view, take over the
-  // entire page. Do NOT run the normal app bootstrap — no login, no
-  // sidebar, no dashboard. The Presenter module handles rendering.
+  // entire page. Do NOT run the normal app bootstrap.
   if (Presenter.isLearnerWindow()) {
     Presenter.initLearnerWindow();
     return;
@@ -43953,5 +44196,3 @@ document.addEventListener('DOMContentLoaded', () => {
 
   App.bootstrap();
 });
-
-
