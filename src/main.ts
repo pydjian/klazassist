@@ -34090,13 +34090,17 @@ async _renderPhilIriGst(content, cls, learners, records) {
         return;
       }
 
-      const recId = `philiri-${cls.id}-${learnerId}`;
+      const lang = State._philIriUI.language || 'English';
+      const langCode = Pages._philIriLangCode(lang);
+      const recId = `philiri-${cls.id}-${learnerId}-${langCode}`;
       let rec = await DB.get('philIriRecords', recId) || {
         id: recId, classId: cls.id, learnerId,
+        language: lang,
         schoolYear: cls.schoolYear || State.schoolYear,
         createdAt: new Date().toISOString()
       };
       rec.gstScore = score;
+      rec.language = lang;
       rec.gstSetId = gst.id;
       rec.gstTotalItems = totalItems;
       rec.gstTakenAt = new Date().toISOString();
@@ -34508,6 +34512,11 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
   };
 },
 
+/* Language → short code used in record IDs. */
+_philIriLangCode(lang) {
+  return lang === 'Filipino' ? 'fil' : 'eng';
+},
+
 /* ============================================================================
    PHIL-IRI · MATERIALS LIBRARY + ASSESSMENT RUNNER
    ============================================================================ */
@@ -34611,267 +34620,6 @@ _philIriChooseLearnerThenRun(passage, preselectedId) {
   };
 },
 
-/* ---------- Full assessment runner: passage + teacher recording panel ---------- */
-_openPhilIriPassageReader(passage, learner) {
-  // Reset per-session state
-  const session = {
-    passage,
-    learner: learner || null,
-    startTime: null,
-    endTime: null,
-    running: false,
-    elapsed: 0,
-    intervalId: null,
-    miscues: [],      // { at: 'word-index', kind: 'sub'|'ins'|'om'|'rev' }
-    answers: {},      // { questionNumber: true|false }
-    notes: ''
-  };
-  State._pirSession = session;
-
-  const learnerLabel = learner ? Utils.fullName(learner) : '—';
-
-  const m = UI.modal({
-    title: `Assessment Session · ${passage.title}`,
-    size: 'modal-xl',
-    body: `
-      <div class="pir-session-grid">
-        <!-- LEFT: the passage (learner sees this) -->
-        <div class="pir-session-passage">
-          <div class="pir-session-meta">
-            <span class="badge badge-blue">${Utils.esc(passage.gradeLevel)}</span>
-            <span class="badge badge-neutral">${passage.wordCount} words</span>
-            <span class="badge badge-neutral" style="font-weight:600;">${Utils.esc(learnerLabel)}</span>
-          </div>
-          <div class="pir-session-text" id="pir-session-text">
-            ${Utils.esc(passage.text).split(/\n\n+/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('')}
-          </div>
-        </div>
-
-        <!-- RIGHT: teacher controls -->
-        <div class="pir-session-panel">
-          <div class="pir-panel-section">
-            <div class="pir-panel-head">Reading Timer</div>
-            <div class="pir-timer-display" id="pir-timer">00:00</div>
-            <div class="flex gap-6" style="margin-top:8px;">
-              <button class="btn btn-sm btn-primary" id="pir-timer-start" style="flex:1;">${icon('play')} Start</button>
-              <button class="btn btn-sm btn-outline" id="pir-timer-stop" style="flex:1;">${icon('timer')} Stop</button>
-              <button class="btn btn-sm btn-ghost" id="pir-timer-reset" title="Reset">↺</button>
-            </div>
-          </div>
-
-          <div class="pir-panel-section">
-            <div class="pir-panel-head">Miscues <span class="pir-miscue-count" id="pir-miscue-count">0</span></div>
-            <div class="text-xs text-muted mb-8">Tap a button each time the learner miscues. Mistake ≠ correction.</div>
-            <div class="pir-miscue-buttons">
-              <button class="pir-miscue-btn" data-misc="sub" title="Substitution — learner said a different word">Sub</button>
-              <button class="pir-miscue-btn" data-misc="ins" title="Insertion — learner added a word">Ins</button>
-              <button class="pir-miscue-btn" data-misc="om"  title="Omission — learner skipped a word">Om</button>
-              <button class="pir-miscue-btn" data-misc="rev" title="Reversal — learner swapped word order">Rev</button>
-              <button class="pir-miscue-btn" data-misc="mis" title="Mispronunciation — learner misread the word">Mis</button>
-            </div>
-            <button class="btn btn-sm btn-ghost btn-block mt-8" id="pir-miscue-undo">Undo last miscue</button>
-          </div>
-
-          <div class="pir-panel-section">
-            <div class="pir-panel-head">Comprehension</div>
-            <div class="text-xs text-muted mb-8">Ask each question aloud. Tap ✓ if the learner answered correctly.</div>
-            <div class="pir-question-list" id="pir-question-list">
-              ${passage.questions.map(q => `
-                <div class="pir-question" data-pir-q="${q.number}">
-                  <div class="pir-question-stem">
-                    <span class="pir-question-num">${q.number}</span>
-                    <span class="pir-question-type type-${q.type.toLowerCase()}">${q.type}</span>
-                    <span style="flex:1;">${Utils.esc(q.question)}</span>
-                    <button class="pir-question-correct" data-pir-q-correct="${q.number}" title="Mark as correct">✓</button>
-                  </div>
-                  <div class="pir-question-answer" title="Expected answer">
-                    <span class="text-xs text-muted">Answer: </span>${Utils.esc(q.answer)}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-
-          <div class="pir-panel-section">
-            <div class="pir-panel-head">Notes</div>
-            <textarea class="form-control" id="pir-notes" rows="2" placeholder="Optional observations…"></textarea>
-          </div>
-        </div>
-      </div>`,
-    footer: `
-      <div style="flex:1;font-size:11.5px;color:var(--text-muted);" id="pir-live-stats">
-        Ready when you are.
-      </div>
-      <button class="btn btn-outline" data-close>Cancel</button>
-      <button class="btn btn-primary" id="pir-session-save">${icon('save')} Save Result</button>
-    `
-  });
-
-  const overlay = m.overlay;
-  const timerEl = overlay.querySelector('#pir-timer');
-  const miscueCountEl = overlay.querySelector('#pir-miscue-count');
-  const statsEl = overlay.querySelector('#pir-live-stats');
-
-  /* ---- Timer ---- */
-  const renderTimer = () => {
-    const s = session.elapsed | 0;
-    const mm = String(Math.floor(s / 60)).padStart(2, '0');
-    const ss = String(s % 60).padStart(2, '0');
-    timerEl.textContent = `${mm}:${ss}`;
-  };
-  overlay.querySelector('#pir-timer-start').onclick = () => {
-    if (session.running) return;
-    session.running = true;
-    session.intervalId = setInterval(() => {
-      session.elapsed++;
-      renderTimer();
-      updateLiveStats();
-    }, 1000);
-  };
-  overlay.querySelector('#pir-timer-stop').onclick = () => {
-    session.running = false;
-    if (session.intervalId) { clearInterval(session.intervalId); session.intervalId = null; }
-  };
-  overlay.querySelector('#pir-timer-reset').onclick = () => {
-    session.running = false;
-    if (session.intervalId) { clearInterval(session.intervalId); session.intervalId = null; }
-    session.elapsed = 0;
-    renderTimer();
-    updateLiveStats();
-  };
-
-  /* ---- Miscues ---- */
-  overlay.querySelectorAll('[data-misc]').forEach(btn => {
-    btn.onclick = () => {
-      session.miscues.push({ at: Date.now(), kind: btn.dataset.misc });
-      miscueCountEl.textContent = String(session.miscues.length);
-      // brief visual confirmation
-      btn.classList.add('pulse');
-      setTimeout(() => btn.classList.remove('pulse'), 240);
-      updateLiveStats();
-    };
-  });
-  overlay.querySelector('#pir-miscue-undo').onclick = () => {
-    session.miscues.pop();
-    miscueCountEl.textContent = String(session.miscues.length);
-    updateLiveStats();
-  };
-
-  /* ---- Comprehension toggles ---- */
-  overlay.querySelectorAll('[data-pir-q-correct]').forEach(btn => {
-    btn.onclick = () => {
-      const qnum = Number(btn.dataset.pirQCorrect);
-      session.answers[qnum] = !session.answers[qnum];
-      const row = btn.closest('.pir-question');
-      row.classList.toggle('correct', !!session.answers[qnum]);
-      updateLiveStats();
-    };
-  });
-
-  /* ---- Notes ---- */
-  overlay.querySelector('#pir-notes').addEventListener('input', (e) => {
-    session.notes = e.target.value;
-  });
-
-  /* ---- Live stats bar ---- */
-  const updateLiveStats = () => {
-    const total = passage.wordCount;
-    const misc = session.miscues.length;
-    const wrPct = total > 0 ? Utils.round(((total - misc) / total) * 100, 1) : 0;
-    const correct = Object.values(session.answers).filter(Boolean).length;
-    const compPct = passage.questions.length > 0
-      ? Utils.round((correct / passage.questions.length) * 100, 1)
-      : 0;
-    const rate = session.elapsed > 0 ? Math.round((total / session.elapsed) * 60) : 0;
-    const wrLevel = classifyWordReading(wrPct);
-    const compLevel = classifyComprehension(compPct);
-    const overall = combineReadingLevel(wrLevel, compLevel);
-    const label = { IND: 'Independent', INS: 'Instructional', FR: 'Frustration', '': '—' }[overall] || '—';
-
-    statsEl.innerHTML = `
-      <strong style="color:var(--text);">WRS</strong> ${wrPct}% ·
-      <strong style="color:var(--text);">CS</strong> ${compPct}% ·
-      <strong style="color:var(--text);">Rate</strong> ${rate || '—'} WPM ·
-      <strong style="color:var(--text);">Level</strong> ${label}
-    `;
-  };
-
-  /* ---- Save ---- */
-  overlay.querySelector('#pir-session-save').onclick = async () => {
-    if (!learner) {
-      UI.toast('No learner selected.', 'warning');
-      return;
-    }
-    // stop timer before saving
-    if (session.intervalId) { clearInterval(session.intervalId); session.intervalId = null; }
-
-    const cls = State.activeClass;
-    const recId = `philiri-${cls.id}-${learner.id}`;
-    let r = await DB.get('philIriRecords', recId) || {
-      id: recId, classId: cls.id, learnerId: learner.id,
-      schoolYear: cls.schoolYear || State.schoolYear,
-      createdAt: new Date().toISOString()
-    };
-
-    const total = passage.wordCount;
-    const misc = session.miscues.length;
-    const wrPct = total > 0 ? Utils.round(((total - misc) / total) * 100, 1) : 0;
-    const correct = Object.values(session.answers).filter(Boolean).length;
-    const compPct = passage.questions.length > 0
-      ? Utils.round((correct / passage.questions.length) * 100, 1)
-      : 0;
-    const rate = session.elapsed > 0 ? Math.round((total / session.elapsed) * 60) : 0;
-
-    const wrLevel = classifyWordReading(wrPct);
-    const compLevel = classifyComprehension(compPct);
-    const overall = combineReadingLevel(wrLevel, compLevel);
-
-    // Literal / inferential / critical tallies
-    let litC = 0, infC = 0, criC = 0;
-    let litT = 0, infT = 0, criT = 0;
-    passage.questions.forEach(q => {
-      if (q.type === 'Literal')     { litT++; if (session.answers[q.number]) litC++; }
-      if (q.type === 'Inferential') { infT++; if (session.answers[q.number]) infC++; }
-      if (q.type === 'Critical')    { criT++; if (session.answers[q.number]) criC++; }
-    });
-
-    Object.assign(r, {
-      passageId: passage.id,
-      passageLevel: passage.gradeLevel,
-      passageTitle: passage.title,
-      passageForm: passage.form,
-      passageLanguage: passage.language,
-      totalWords: total,
-      miscues: misc,
-      readingTime: session.elapsed,
-      wordReadingPct: wrPct,
-      readingRate: rate,
-      literalCorrect: litC,     literalTotal: litT,
-      inferentialCorrect: infC, inferentialTotal: infT,
-      criticalCorrect: criC,    criticalTotal: criT,
-      comprehensionPct: compPct,
-      readingLevel: overall,
-      notes: session.notes || '',
-      assessedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-
-    await DB.put('philIriRecords', r);
-    App.logActivity(`Phil-IRI assessment saved for ${Utils.fullName(learner)} — ${passage.title}`, 'Reports');
-    UI.toast('Assessment saved', 'success');
-    m.close();
-    App.navigate('phil-iri');
-  };
-
-  // Cancel closes and stops the timer
-  overlay.querySelector('[data-close]').onclick = () => {
-    if (session.intervalId) clearInterval(session.intervalId);
-    m.close();
-  };
-
-  renderTimer();
-  updateLiveStats();
-},
 
 /* ---------- Preview a GST passage (whole-class view) ---------- */
 _openPhilIriGstPassagePreview(gst) {
@@ -35699,12 +35447,15 @@ _openPhilIriPassageReader(passage, learner) {
     if (session.intervalId) { clearInterval(session.intervalId); session.intervalId = null; }
 
     const cls = State.activeClass;
-    const recId = `philiri-${cls.id}-${learner.id}`;
+    const langCode = Pages._philIriLangCode(passage.language);
+    const recId = `philiri-${cls.id}-${learner.id}-${langCode}`;
     let r = await DB.get('philIriRecords', recId) || {
       id: recId, classId: cls.id, learnerId: learner.id,
+      language: passage.language,
       schoolYear: cls.schoolYear || State.schoolYear,
       createdAt: new Date().toISOString()
     };
+    r.language = passage.language;
 
     const total = passage.wordCount;
     const misc = session.miscues.length;
@@ -35809,12 +35560,28 @@ _openPhilIriGstPassagePreview(gst) {
   m.overlay.querySelector('#pir-gst-print-from-preview').onclick = () => Pages._philIriPrintGst(gst);
 },
 
-_openPhilIriGstSession(gst, cls, learners) {
-  const scores = {};
-  learners.forEach(l => { scores[l.id] = null; });
-
+async _openPhilIriGstSession(gst, cls, learners) {
   const totalItems = gst.items.length;
   const passing = Math.max(1, Math.ceil(totalItems * 0.7));
+
+  // ── Load existing scores so the modal opens with prior data ──
+  const existingRecords = await DB.getAllByIndex('philIriRecords', 'classId', cls.id).catch(() => []);
+  const existingByLearner = {};
+  existingRecords.forEach(r => { existingByLearner[r.learnerId] = r; });
+
+  const scores = {};   // { learnerId: number | null }  — the score to save
+  const ticked = {};   // { learnerId: Set<questionNumber> }  — which questions were marked correct
+  let activeId = null;
+
+  learners.forEach(l => {
+    const rec = existingByLearner[l.id];
+    scores[l.id] = (rec && rec.gstScore != null) ? rec.gstScore : null;
+    ticked[l.id] = new Set();
+  });
+
+  // Auto-select the first learner without a score — the most common next task
+  const firstUnscored = learners.find(l => scores[l.id] == null);
+  if (firstUnscored) activeId = firstUnscored.id;
 
   const m = UI.modal({
     title: `GST Session · ${gst.title}`,
@@ -35823,16 +35590,21 @@ _openPhilIriGstSession(gst, cls, learners) {
       <div class="alert alert-info mb-16" style="font-size:12px;">
         ${icon('info')}
         <div>
-          Administer the passage and items to the class. Enter each learner's total correct score (0–${totalItems}).
-          Learners with <strong>${passing} or higher</strong> need no individual assessment.
+          Two ways to record a score:
+          <ul style="margin:6px 0 0 16px;padding:0;">
+            <li><strong>Tick method</strong> — click a learner on the right, then tick each question they
+              answered correctly. Their score updates automatically.</li>
+            <li><strong>Type method</strong> — type a number directly in the score input.</li>
+          </ul>
+          Learners scoring <strong>${passing} or higher</strong> need no individual assessment.
         </div>
       </div>
 
       <div class="pir-gst-layout">
+        <!-- LEFT: passage + questions + tick buttons -->
         <div class="pir-gst-left">
-          <div class="pir-panel-head" style="margin-bottom:8px;">Passage &amp; Questions</div>
+          <div class="pir-gst-marking-header" id="pir-gst-marking-header"></div>
 
-          <!-- Passage -->
           <div class="pir-gst-passage-block">
             <div style="font-weight:700;font-size:13px;margin-bottom:6px;">
               ${Utils.esc(gst.title)}
@@ -35842,18 +35614,28 @@ _openPhilIriGstSession(gst, cls, learners) {
             </div>
           </div>
 
-          <!-- Questions -->
           <div class="pir-gst-questions">
             ${gst.items.map(it => `
-              <div class="pir-gst-question">
+              <div class="pir-gst-question" data-pir-gst-q="${it.number}">
                 <div class="pir-gst-question-stem">
                   <span class="pir-gst-key-num">${it.number}</span>
                   <span style="flex:1;">${Utils.esc(it.stem)}</span>
                   <span class="pir-gst-answer-pill"
-                        title="Correct answer — hidden from projection"
+                        title="Correct answer — hover to peek, click to reveal"
                         onclick="this.classList.toggle('revealed')">
                     ${Utils.esc(it.answer)}
                   </span>
+                  <button type="button"
+                          class="pir-gst-tick"
+                          data-pir-gst-tick="${it.number}"
+                          title="Mark this question as correct for the active learner"
+                          aria-pressed="false"
+                          disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M20 6L9 17l-5-5"/>
+                    </svg>
+                  </button>
                 </div>
                 ${Array.isArray(it.choices) && it.choices.length ? `
                   <div class="pir-gst-question-choices">
@@ -35869,8 +35651,12 @@ _openPhilIriGstSession(gst, cls, learners) {
           </div>
         </div>
 
+        <!-- RIGHT: learner scores -->
         <div class="pir-gst-right">
-          <div class="pir-panel-head" style="margin-bottom:8px;">Learner Scores</div>
+          <div class="pir-panel-head" style="margin-bottom:8px;">
+            Learner Scores
+            <span class="text-xs text-muted" style="font-weight:400;text-transform:none;letter-spacing:0;">Click a row to mark</span>
+          </div>
           <div class="pir-gst-scores">
             ${learners.map(l => `
               <div class="pir-gst-score-row" data-gst-row="${Utils.attr(l.id)}">
@@ -35898,52 +35684,208 @@ _openPhilIriGstSession(gst, cls, learners) {
 
   const overlay = m.overlay;
 
-  const updateStatus = (lid) => {
-    const el = overlay.querySelector(`[data-gst-status="${CSS.escape(lid)}"]`);
-    if (!el) return;
+  /* ══════════════════════════════════════════════════════════════
+     RENDER HELPERS
+     ══════════════════════════════════════════════════════════════ */
+
+  const updateScoreInput = (lid) => {
+    const inp = overlay.querySelector(`[data-gst-learner="${CSS.escape(lid)}"]`);
+    const statusEl = overlay.querySelector(`[data-gst-status="${CSS.escape(lid)}"]`);
     const v = scores[lid];
-    if (v === null || v === undefined) { el.textContent = ''; el.className = 'pir-gst-status'; return; }
-    if (v >= passing) { el.textContent = '✓'; el.className = 'pir-gst-status pass'; el.title = 'No individual assessment needed'; }
-    else              { el.textContent = '!'; el.className = 'pir-gst-status fail'; el.title = 'Individual assessment required'; }
+
+    if (inp && document.activeElement !== inp) {
+      inp.value = v == null ? '' : String(v);
+    }
+
+    if (statusEl) {
+      if (v == null) {
+        statusEl.textContent = '';
+        statusEl.className = 'pir-gst-status';
+        statusEl.title = '';
+      } else if (v >= passing) {
+        statusEl.textContent = '✓';
+        statusEl.className = 'pir-gst-status pass';
+        statusEl.title = 'No individual assessment needed';
+      } else {
+        statusEl.textContent = '!';
+        statusEl.className = 'pir-gst-status fail';
+        statusEl.title = 'Individual assessment required';
+      }
+    }
   };
 
+  const updateTicks = () => {
+    const activeSet = activeId ? ticked[activeId] : new Set();
+
+    overlay.querySelectorAll('[data-pir-gst-tick]').forEach(btn => {
+      const n = Number(btn.dataset.pirGstTick);
+      const on = activeSet.has(n);
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+      btn.disabled = !activeId;
+    });
+
+    // Reveal the answer pill for every question marked correct
+    // — the teacher already knows the answer once it's been ticked.
+    overlay.querySelectorAll('[data-pir-gst-q]').forEach(qEl => {
+      const n = Number(qEl.dataset.pirGstQ);
+      qEl.classList.toggle('is-ticked', activeSet.has(n));
+    });
+  };
+
+  const updateMarkingHeader = () => {
+    const header = overlay.querySelector('#pir-gst-marking-header');
+    if (!header) return;
+
+    if (!activeId) {
+      header.innerHTML = `<div class="pir-gst-marking-none">Click a learner on the right to begin marking their answers.</div>`;
+      return;
+    }
+
+    const learner = learners.find(l => l.id === activeId);
+    const tickCount = ticked[activeId].size;
+    const scoreVal = scores[activeId];
+    const hasTypedScore = scoreVal != null && tickCount === 0;
+
+    header.innerHTML = `
+      <div class="pir-gst-marking-active">
+        <div class="pgm-left">
+          <span class="pgm-label">Marking</span>
+          <span class="pgm-name">${Utils.esc(Utils.fullName(learner))}</span>
+        </div>
+        <div class="pgm-right">
+          ${hasTypedScore
+            ? `<span class="pgm-count pgm-count-warn">Existing score: <strong>${scoreVal}</strong> · tick to replace</span>`
+            : `<span class="pgm-count"><strong>${tickCount}</strong> of ${totalItems} correct</span>`}
+          <button type="button" class="btn btn-sm btn-ghost" id="pir-gst-clear-ticks"
+                  ${tickCount === 0 && scoreVal == null ? 'disabled' : ''}>
+            Reset
+          </button>
+        </div>
+      </div>`;
+
+    const clearBtn = header.querySelector('#pir-gst-clear-ticks');
+    if (clearBtn) clearBtn.onclick = () => {
+      ticked[activeId].clear();
+      scores[activeId] = null;
+      updateScoreInput(activeId);
+      updateTicks();
+      updateMarkingHeader();
+    };
+  };
+
+  const setActive = (lid) => {
+    activeId = lid;
+    overlay.querySelectorAll('[data-gst-row]').forEach(row => {
+      row.classList.toggle('active-marking', row.dataset.gstRow === lid);
+    });
+    updateTicks();
+    updateMarkingHeader();
+    if (lid) {
+      const leftPanel = overlay.querySelector('.pir-gst-left');
+      if (leftPanel) leftPanel.scrollTop = 0;
+    }
+  };
+
+  /* ══════════════════════════════════════════════════════════════
+     EVENT HANDLERS
+     ══════════════════════════════════════════════════════════════ */
+
+  const toggleTick = (n) => {
+    if (!activeId) {
+      UI.toast('Click a learner on the right first.', 'warning', 2500);
+      return;
+    }
+    const set = ticked[activeId];
+    if (set.has(n)) set.delete(n);
+    else set.add(n);
+    scores[activeId] = set.size;
+    updateScoreInput(activeId);
+    updateTicks();
+    updateMarkingHeader();
+  };
+
+  overlay.querySelectorAll('[data-pir-gst-tick]').forEach(btn => {
+    btn.addEventListener('click', () => toggleTick(Number(btn.dataset.pirGstTick)));
+  });
+
+  // Row click → set active learner. Skips when clicking the score input.
+  overlay.querySelectorAll('[data-gst-row]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('input')) return;
+      setActive(row.dataset.gstRow);
+    });
+  });
+
+  // Manual score entry
   overlay.querySelectorAll('.pir-gst-input-session').forEach(inp => {
     inp.addEventListener('input', () => {
       const lid = inp.dataset.gstLearner;
-      const v = inp.value.trim() === '' ? null : Number(inp.value);
+      const raw = inp.value.trim();
+      const v = raw === '' ? null : Number(raw);
       if (v !== null && (isNaN(v) || v < 0 || v > totalItems)) return;
+
       scores[lid] = v;
-      updateStatus(lid);
+
+      // A manual value that differs from the tick count invalidates the ticks.
+      if (lid === activeId && v !== null && ticked[lid].size > 0 && v !== ticked[lid].size) {
+        ticked[lid].clear();
+        updateTicks();
+        updateMarkingHeader();
+      }
+
+      updateScoreInput(lid);
     });
+
+    inp.addEventListener('click', (e) => e.stopPropagation());
   });
 
   overlay.querySelector('[data-close]').onclick = m.close;
 
   overlay.querySelector('#pir-gst-save').onclick = async () => {
-    const filled = Object.values(scores).filter(v => v !== null).length;
-    if (filled === 0) { UI.toast('Enter at least one score.', 'warning'); return; }
-
-    for (const lid of Object.keys(scores)) {
-      const v = scores[lid];
-      if (v === null) continue;
-      const recId = `philiri-${cls.id}-${lid}`;
-      let r = await DB.get('philIriRecords', recId) || {
-        id: recId, classId: cls.id, learnerId: lid,
-        schoolYear: cls.schoolYear || State.schoolYear,
-        createdAt: new Date().toISOString()
-      };
-      r.gstScore = v;
-      r.gstSetId = gst.id;
-      r.gstTotalItems = totalItems;
-      r.gstTakenAt = new Date().toISOString();
-      r.updatedAt = new Date().toISOString();
-      await DB.put('philIriRecords', r);
+    const toSave = learners.filter(l => scores[l.id] != null);
+    if (toSave.length === 0) {
+      UI.toast('Enter at least one score before saving.', 'warning');
+      return;
     }
-    App.logActivity(`Phil-IRI GST scores saved (${filled} learners)`, 'Reports');
-    UI.toast(`Saved ${filled} GST score${filled === 1 ? '' : 's'}`, 'success');
-    m.close();
-    App.navigate('phil-iri');
+
+    const btn = overlay.querySelector('#pir-gst-save');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Saving…';
+
+    try {
+      for (const l of toSave) {
+        const recId = `philiri-${cls.id}-${l.id}`;
+        let r = await DB.get('philIriRecords', recId) || {
+          id: recId, classId: cls.id, learnerId: l.id,
+          schoolYear: cls.schoolYear || State.schoolYear,
+          createdAt: new Date().toISOString()
+        };
+        r.gstScore = scores[l.id];
+        r.gstSetId = gst.id;
+        r.gstTotalItems = totalItems;
+        r.gstTakenAt = new Date().toISOString();
+        r.updatedAt = new Date().toISOString();
+        await DB.put('philIriRecords', r);
+      }
+      App.logActivity(`Phil-IRI GST scores saved (${toSave.length} learners)`, 'Reports');
+      UI.toast(`Saved ${toSave.length} GST score${toSave.length === 1 ? '' : 's'}`, 'success');
+      m.close();
+      App.navigate('phil-iri');
+    } catch (e) {
+      console.error('[GST Session] Save failed:', e);
+      btn.disabled = false;
+      btn.innerHTML = icon('save') + ' Save All Scores';
+      UI.toast('Save failed: ' + (e.message || 'unknown error'), 'error', 5000);
+    }
   };
+
+  /* ══════════════════════════════════════════════════════════════
+     INITIAL PAINT
+     ══════════════════════════════════════════════════════════════ */
+
+  learners.forEach(l => updateScoreInput(l.id));
+  setActive(activeId);
 },
 /* ---------- Print a graded passage (for the learner) ---------- */
 _philIriPrintPassage(passage) {
