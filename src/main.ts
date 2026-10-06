@@ -33872,9 +33872,17 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
 
     // ── Persistent UI state ──
     if (!State._philIriUI) {
-      State._philIriUI = { tab: 'overview', selectedLearnerId: null };
+      State._philIriUI = {
+        tab: 'overview',
+        selectedLearnerId: null,
+        languageView: 'both',
+        language: 'English',
+        materialLang: ''        // '' | 'English' | 'Filipino' — Materials tab filter
+      };
     }
     const U = State._philIriUI;
+    if (!U.languageView) U.languageView = 'both';
+    if (!U.language)     U.language     = 'English';
 
     // ── Reading level distribution ──
     const levels = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
@@ -33926,6 +33934,25 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
         </div>
       </div>
 
+            <!-- ══════════ READING LANGUAGE VIEW ══════════ -->
+      <div class="card mb-16" style="padding:12px 14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);">
+              Reading Language
+            </span>
+            <span class="badge badge-blue" style="font-size:10px;">
+              Phil-IRI is administered in both Filipino &amp; English
+            </span>
+          </div>
+          <div class="rz-segment" role="tablist" aria-label="Reading language view">
+            <button type="button" data-pir-lang-view="both"     class="${U.languageView === 'both'     ? 'active' : ''}">Both</button>
+            <button type="button" data-pir-lang-view="English"  class="${U.languageView === 'English'  ? 'active' : ''}">English</button>
+            <button type="button" data-pir-lang-view="Filipino" class="${U.languageView === 'Filipino' ? 'active' : ''}">Filipino</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ══════════ TAB NAVIGATION ══════════ -->
       <div class="card mb-16" style="padding:12px;">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
@@ -33973,6 +34000,14 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
       b.onclick = () => { State._philIriUI.tab = b.dataset.pirTab; Pages.philIri(root); };
     });
 
+        // ── Language view toggle ──
+    root.querySelectorAll('[data-pir-lang-view]').forEach(b => {
+      b.onclick = () => {
+        State._philIriUI.languageView = b.dataset.pirLangView;
+        Pages.philIri(root);
+      };
+    });
+
     // ── Render current tab ──
     switch (U.tab) {
       case 'materials':    Pages._renderPhilIriMaterials(content, cls, learners, classRecords); break;
@@ -34015,15 +34050,37 @@ _renderProGate(root, featureId) {
 
 // ── Tab 1: Class Overview ──
 _renderPhilIriOverview(content, cls, learners, records, levels, totalAssessed) {
-  // Build SVG donut for level distribution
-  const total = learners.length || 1;
-  const donutData = [
-    { label: 'Independent', value: levels['IND'] || 0, color: '#198754' },
-    { label: 'Instructional', value: levels['INS'] || 0, color: '#F59E0B' },
-    { label: 'Frustration', value: levels['FR'] || 0, color: '#DC3545' },
-    { label: 'Non-Reader', value: levels['Non-Reader'] || 0, color: '#7C3AED' },
-    { label: 'Not Assessed', value: levels['Not Assessed'] || 0, color: '#627D98' }
-  ].filter(d => d.value > 0);
+  const viewLangs = Pages._philIriViewLanguages();
+
+  // Per-language distribution — each language gets its own buckets so a
+  // learner assessed in both is counted in both columns.
+  const distByLang = {};
+  viewLangs.forEach(lang => {
+    distByLang[lang] = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
+    learners.forEach(l => {
+      const r = Pages._philIriRecordFor(records, l.id, lang);
+      if (!r || !r.readingLevel) distByLang[lang]['Not Assessed']++;
+      else distByLang[lang][r.readingLevel] = (distByLang[lang][r.readingLevel] || 0) + 1;
+    });
+  });
+
+  // Aggregate distribution for the KPI row (uses both languages when "both").
+  const agg = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
+  viewLangs.forEach(lang => {
+    Object.keys(agg).forEach(k => { agg[k] += distByLang[lang][k] || 0; });
+  });
+  const aggTotal = viewLangs.length * learners.length || 1;
+
+  const donutFor = (lang) => {
+    const d = distByLang[lang];
+    return UI.donutChart([
+      { label: 'Independent',   value: d['IND']          || 0, color: '#198754' },
+      { label: 'Instructional', value: d['INS']          || 0, color: '#F59E0B' },
+      { label: 'Frustration',   value: d['FR']           || 0, color: '#DC3545' },
+      { label: 'Non-Reader',    value: d['Non-Reader']   || 0, color: '#7C3AED' },
+      { label: 'Not Assessed',  value: d['Not Assessed'] || 0, color: '#627D98' }
+    ], { size: 150, thickness: 24 });
+  };
 
   content.innerHTML = `
     <!-- ══════════ WORKFLOW PROGRESS ══════════ -->
@@ -34068,81 +34125,138 @@ _renderPhilIriOverview(content, cls, learners, records, levels, totalAssessed) {
       })()}
     </div>
 
-    <div class="grid grid-2 mb-16" style="align-items:start;">
-      <div class="card">
-        <div class="card-head"><h3>Reading Level Distribution</h3></div>
+    <!-- ══════════ DISTRIBUTION — one donut per language in view ══════════ -->
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px;align-items:start;">
+      ${viewLangs.map(lang => {
+        const d = distByLang[lang];
+        const n = learners.length || 1;
+        const pct = (x) => Math.round((x / n) * 100);
+        return `
+          <div class="card">
+            <div class="card-head">
+              <h3>${Utils.esc(lang)}</h3>
+              <span class="text-xs text-muted">${learners.length} learner${learners.length === 1 ? '' : 's'}</span>
+            </div>
+            <div style="display:flex;justify-content:center;margin-bottom:14px;">
+              ${donutFor(lang)}
+            </div>
+            <div style="font-size:12px;">
+              ${[
+                ['Independent',   d['IND'],          '#198754'],
+                ['Instructional', d['INS'],          '#F59E0B'],
+                ['Frustration',   d['FR'],           '#DC3545'],
+                ['Non-Reader',    d['Non-Reader'],   '#7C3AED'],
+                ['Not Assessed',  d['Not Assessed'], '#627D98']
+              ].map(([label, val, color]) => `
+                <div class="flex-between" style="padding:5px 0;border-bottom:1px solid var(--border);">
+                  <span style="display:flex;align-items:center;gap:8px;">
+                    <span style="width:9px;height:9px;border-radius:50%;background:${color};"></span>${label}
+                  </span>
+                  <span style="font-weight:700;">${val} <span class="text-xs text-muted">(${pct(val)}%)</span></span>
+                </div>`).join('')}
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
 
-      <div class="card">
-        <div class="card-head"><h3>Assessment Progress</h3></div>
-        <div style="margin-bottom:20px;">
-          <div class="flex-between mb-8" style="font-size:12.5px;">
-            <span>GST Completed</span>
-            <strong>${records.filter(r => r.gstScore !== undefined && r.gstScore !== null).length} / ${learners.length}</strong>
-          </div>
-          <div class="progress-bar" style="height:8px;">
-            <div style="width:${learners.length ? (records.filter(r => r.gstScore !== undefined).length / learners.length) * 100 : 0}%"></div>
-          </div>
-        </div>
-        <div style="margin-bottom:20px;">
-          <div class="flex-between mb-8" style="font-size:12.5px;">
-            <span>Individual Assessment Completed</span>
-            <strong>${totalAssessed} / ${learners.length}</strong>
-          </div>
-          <div class="progress-bar success" style="height:8px;">
-            <div style="width:${learners.length ? (totalAssessed / learners.length) * 100 : 0}%"></div>
-          </div>
-        </div>
-        <div class="alert alert-info" style="font-size:12px;margin-bottom:0;">
-          ${icon('info')}
-          <div>
-            <strong>DepEd Order 14, s. 2018</strong> requires Phil-IRI for Grades 3–6.
-            Learners scoring <strong>below 14/20</strong> in the GST must undergo
-            individualized assessment.
-          </div>
+    <!-- ══════════ ASSESSMENT PROGRESS ══════════ -->
+    <div class="card mb-16">
+      <div class="card-head"><h3>Assessment Progress</h3></div>
+      ${viewLangs.map(lang => {
+        const done = learners.filter(l => {
+          const r = Pages._philIriRecordFor(records, l.id, lang);
+          return r && r.gstScore !== undefined && r.gstScore !== null;
+        }).length;
+        const indiv = learners.filter(l => {
+          const r = Pages._philIriRecordFor(records, l.id, lang);
+          return r && r.readingLevel;
+        }).length;
+        return `
+          <div style="margin-bottom:20px;">
+            <div class="flex-between mb-8" style="font-size:12.5px;">
+              <span style="display:flex;align-items:center;gap:8px;">
+                ${Pages._philIriLangBadge(lang)}
+                <span>GST Completed</span>
+              </span>
+              <strong>${done} / ${learners.length}</strong>
+            </div>
+            <div class="progress-bar" style="height:8px;">
+              <div style="width:${learners.length ? (done / learners.length) * 100 : 0}%"></div>
+            </div>
+            <div class="flex-between mt-12 mb-8" style="font-size:12.5px;">
+              <span>Individual Assessment Completed</span>
+              <strong>${indiv} / ${learners.length}</strong>
+            </div>
+            <div class="progress-bar success" style="height:8px;">
+              <div style="width:${learners.length ? (indiv / learners.length) * 100 : 0}%"></div>
+            </div>
+          </div>`;
+      }).join('')}
+      <div class="alert alert-info" style="font-size:12px;margin-bottom:0;">
+        ${icon('info')}
+        <div>
+          <strong>DepEd Order 14, s. 2018</strong> requires Phil-IRI for Grades 3–6 in
+          both <strong>Filipino</strong> and the learner's <strong>dominant language</strong>
+          (for most learners, English). Learners scoring below <strong>14/20</strong> in
+          the GST must undergo individualized assessment.
         </div>
       </div>
     </div>
 
+    <!-- ══════════ LEARNER READING PROFILES — dual-column when "Both" ══════════ -->
     ${learners.length ? `
       <div class="card">
         <div class="card-head">
           <h3>Learner Reading Profiles</h3>
-          <span class="text-xs text-muted">${totalAssessed} of ${learners.length} assessed</span>
+          <span class="text-xs text-muted">
+            ${viewLangs.length === 2 ? 'English &amp; Filipino side by side' : 'Single language view'}
+          </span>
         </div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr>
-              <th style="width:36px;">#</th>
-              <th>Learner</th>
-              <th style="width:90px;text-align:center;">GST Score</th>
-              <th style="width:90px;text-align:center;">Word Reading</th>
-              <th style="width:90px;text-align:center;">Comprehension</th>
-              <th style="width:100px;text-align:center;">Reading Level</th>
-              <th style="width:80px;text-align:center;">Rate (WPM)</th>
-            </tr></thead>
+            <thead>
+              <tr>
+                <th style="width:36px;" rowspan="${viewLangs.length === 2 ? 2 : 1}">#</th>
+                <th rowspan="${viewLangs.length === 2 ? 2 : 1}">Learner</th>
+                ${viewLangs.map(lang => `<th colspan="5" style="text-align:center;background:rgba(0,56,168,0.06);">${Utils.esc(lang)}</th>`).join('')}
+              </tr>
+              ${viewLangs.length === 2 ? `
+                <tr>
+                  ${viewLangs.map(() => `
+                    <th style="width:70px;text-align:center;">GST</th>
+                    <th style="width:80px;text-align:center;">Word Read</th>
+                    <th style="width:80px;text-align:center;">Compreh.</th>
+                    <th style="width:100px;text-align:center;">Reading Level</th>
+                    <th style="width:70px;text-align:center;">Rate</th>
+                  `).join('')}
+                </tr>` : `
+                <tr>
+                  <th style="width:70px;text-align:center;">GST</th>
+                  <th style="width:80px;text-align:center;">Word Reading</th>
+                  <th style="width:80px;text-align:center;">Comprehension</th>
+                  <th style="width:100px;text-align:center;">Reading Level</th>
+                  <th style="width:70px;text-align:center;">Rate (WPM)</th>
+                </tr>`}
+            </thead>
             <tbody>
               ${learners.map((l, i) => {
-                const rec = records.find(r => r.learnerId === l.id) || {};
-                const levelColor = rec.readingLevel === 'IND' ? 'var(--success)'
-                  : rec.readingLevel === 'INS' ? 'var(--warning)'
-                  : rec.readingLevel === 'FR' ? 'var(--danger)'
-                  : rec.readingLevel === 'Non-Reader' ? 'var(--accent-purple)'
-                  : 'var(--text-muted)';
-                const levelLabel = rec.readingLevel === 'IND' ? 'Independent'
-                  : rec.readingLevel === 'INS' ? 'Instructional'
-                  : rec.readingLevel === 'FR' ? 'Frustration'
-                  : rec.readingLevel === 'Non-Reader' ? 'Non-Reader'
-                  : '—';
+                const cellsFor = (lang) => {
+                  const rec = Pages._philIriRecordFor(records, l.id, lang) || {};
+                  const levelLabel = Pages._philIriLevelLabel(rec.readingLevel);
+                  const levelColor = Pages._philIriLevelColor(rec.readingLevel);
+                  return `
+                    <td style="text-align:center;">${rec.gstScore !== undefined && rec.gstScore !== null ? rec.gstScore + '/20' : '—'}</td>
+                    <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : '—'}</td>
+                    <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : '—'}</td>
+                    <td style="text-align:center;">
+                      <span style="font-weight:700;color:${levelColor};font-size:12px;">${levelLabel}</span>
+                    </td>
+                    <td style="text-align:center;">${rec.readingRate || '—'}</td>`;
+                };
                 return `<tr>
                   <td style="color:var(--text-muted);">${i + 1}</td>
                   <td><strong>${Utils.esc(Utils.displayName(l))}</strong></td>
-                  <td style="text-align:center;">${rec.gstScore !== undefined && rec.gstScore !== null ? rec.gstScore + '/20' : '—'}</td>
-                  <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : '—'}</td>
-                  <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : '—'}</td>
-                  <td style="text-align:center;">
-                    <span style="font-weight:700;color:${levelColor};font-size:12px;">${levelLabel}</span>
-                  </td>
-                  <td style="text-align:center;">${rec.readingRate || '—'}</td>
+                  ${viewLangs.map(lang => cellsFor(lang)).join('')}
                 </tr>`;
               }).join('')}
             </tbody>
@@ -34152,117 +34266,80 @@ _renderPhilIriOverview(content, cls, learners, records, levels, totalAssessed) {
   `;
 },
 
-// ── Tab 2: GST Administration ──
 // ── Tab: GST Administration ──
 async _renderPhilIriGst(content, cls, learners, records) {
-  // ── Load every GST set (built-in samples + teacher-added customs) ──
   const mats = await Pages._philIriGetAllMaterials();
-  const gstSets = mats.gstSets || [];
 
-  if (!gstSets.length) {
-    content.innerHTML = `<div class="card">${UI.emptyState({
-      icon: 'file',
-      title: 'No GST materials available',
-      message: 'The Group Screening Test sets ship with KlazAssist. If yours are missing, reload the app — if the problem persists, contact support.'
-    })}</div>`;
-    return;
+  const viewLangs = Pages._philIriViewLanguages();
+
+  // Resolve a GST set per language in view.
+  const gstByLang = {};
+  viewLangs.forEach(lang => {
+    const pool = mats.gstSets.filter(g => g.language === lang);
+    const priorId = (State._philIriUI.selectedGstId && State._philIriUI.selectedGstId[lang]) || null;
+    const chosen = (priorId && pool.find(g => g.id === priorId)) || pool[0] || null;
+    gstByLang[lang] = chosen;
+  });
+
+  if (!State._philIriUI.selectedGstId || typeof State._philIriUI.selectedGstId !== 'object') {
+    State._philIriUI.selectedGstId = {};
   }
-
-  // Prefer sets within ±2 grade levels of the class; fall back to all sets
-  const gradeNum = (s) => {
-    const m = String(s || '').match(/\d+/);
-    return m ? Number(m[0]) : null;
-  };
-  const classGradeNum = gradeNum(cls.gradeLevel);
-  const nearbySets = classGradeNum == null
-    ? gstSets
-    : gstSets.filter(g => {
-        const gn = gradeNum(g.gradeLevel);
-        return gn == null || Math.abs(gn - classGradeNum) <= 2;
-      });
-  const usableSets = nearbySets.length ? nearbySets : gstSets;
-
-  // ── Persist the selected GST set on State so tab switches remember it ──
-  if (!State._philIriUI) State._philIriUI = {};
-  let selectedGstId = State._philIriUI.selectedGstId;
-  if (!selectedGstId || !usableSets.find(g => g.id === selectedGstId)) {
-    selectedGstId = usableSets[0].id;
-    State._philIriUI.selectedGstId = selectedGstId;
-  }
-  const gst = usableSets.find(g => g.id === selectedGstId);
-  const totalItems = gst.items.length;
-  const passing = Math.max(1, Math.ceil(totalItems * 0.7)); // 14 of 20, 7 of 10, etc.
-
-  // ── Index records by learnerId ──
-  const recMap = {};
-  records.forEach(r => { recMap[r.learnerId] = r; });
-
-  // ── Summary counts ──
-  let passed = 0, failed = 0, unassessed = 0;
-  learners.forEach(l => {
-    const s = (recMap[l.id] || {}).gstScore;
-    if (s === undefined || s === null) unassessed++;
-    else if (s >= passing) passed++;
-    else failed++;
+  viewLangs.forEach(lang => {
+    State._philIriUI.selectedGstId[lang] = gstByLang[lang] ? gstByLang[lang].id : null;
   });
 
   content.innerHTML = `
-    <!-- ══════════ Set selector + summary ══════════ -->
     <div class="card mb-16">
       <div class="card-head">
         <h3>Group Screening Test (GST)</h3>
         <span class="text-xs text-muted">
-          ${totalItems} items · ${gst.timeLimitMin} minutes · Passing: ${passing}–${totalItems}
+          Administered in BOTH languages — one test per language per learner.
         </span>
       </div>
 
       <div class="alert alert-info mb-16" style="font-size:12px;">
         ${icon('info')}
         <div>
-          Administer the GST to the whole class. Learners scoring <strong>below ${passing}</strong>
-          must undergo individualized assessment with graded passages. Learners scoring
-          <strong>${passing} or above</strong> need no further assessment.
+          Administer each language's GST separately. Learners who score
+          <strong>below the passing cut-off</strong> in a given language
+          must undergo individualized assessment <em>in that language</em>.
         </div>
       </div>
 
-      <div class="form-row" style="align-items:flex-end;gap:12px;">
-        <div class="form-group" style="flex:2;margin-bottom:0;min-width:240px;">
-          <label>GST Passage</label>
-          <select class="form-control" id="pir-gst-select">
-            ${usableSets.map(g => `
-              <option value="${Utils.attr(g.id)}" ${g.id === selectedGstId ? 'selected' : ''}>
-                [${Utils.esc(g.gradeLevel)}] ${Utils.esc(g.title)} · ${g.items.length} items · ${g.timeLimitMin} min${g.isSample ? ' (sample)' : ''}
-              </option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group" style="flex:0 0 auto;margin-bottom:0;display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-outline" id="pir-gst-view-passage">${icon('eye')} View Passage</button>
-          <button class="btn btn-outline" id="pir-gst-print">${icon('printer')} Print Test</button>
-          <button class="btn btn-primary" id="pir-gst-launch">${icon('play')} Launch Session</button>
-        </div>
-      </div>
-
-      <!-- Live summary tiles -->
-      <div id="pir-gst-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">
-        <div class="stat-card" style="padding:12px;">
-          <div class="stat-label">Total Learners</div>
-          <div class="stat-value" id="pir-gst-total" style="font-size:22px;">${learners.length}</div>
-        </div>
-        <div class="stat-card accent-success" style="padding:12px;">
-          <div class="stat-label">Passed</div>
-          <div class="stat-value" id="pir-gst-passed" style="font-size:22px;">${passed}</div>
-          <div class="text-xs text-muted">≥ ${passing} · No further assessment</div>
-        </div>
-        <div class="stat-card accent-danger" style="padding:12px;">
-          <div class="stat-label">Needs Individual Assessment</div>
-          <div class="stat-value" id="pir-gst-failed" style="font-size:22px;">${failed}</div>
-          <div class="text-xs text-muted">&lt; ${passing}</div>
-        </div>
-        <div class="stat-card" style="padding:12px;">
-          <div class="stat-label">Not Assessed</div>
-          <div class="stat-value" id="pir-gst-unassessed" style="font-size:22px;">${unassessed}</div>
-          <div class="text-xs text-muted">Scores not entered</div>
-        </div>
+      <!-- ══════════ Per-language set pickers ══════════ -->
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
+        ${viewLangs.map(lang => {
+          const gst = gstByLang[lang];
+          const totalItems = gst ? gst.items.length : 0;
+          const passing = gst ? Math.max(1, Math.ceil(totalItems * 0.7)) : 0;
+          const pool = mats.gstSets.filter(g => g.language === lang);
+          return `
+            <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--bg);">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                ${Pages._philIriLangBadge(lang)}
+                <span style="font-size:12px;font-weight:700;">${totalItems} items · ${gst ? gst.timeLimitMin : '—'} min</span>
+              </div>
+              <select class="form-control" data-pir-gst-picker="${Utils.attr(lang)}">
+                ${pool.length === 0
+                  ? `<option value="">— No GST set for ${Utils.esc(lang)} —</option>`
+                  : pool.map(g => `
+                      <option value="${Utils.attr(g.id)}" ${gst && gst.id === g.id ? 'selected' : ''}>
+                        [${Utils.esc(g.gradeLevel)}] ${Utils.esc(g.title)} · ${g.items.length} items
+                      </option>`).join('')}
+              </select>
+              <div class="flex gap-6" style="margin-top:10px;flex-wrap:wrap;">
+                <button class="btn btn-sm btn-outline" data-pir-gst-view="${Utils.attr(lang)}" ${gst ? '' : 'disabled'}>
+                  ${icon('eye')} View
+                </button>
+                <button class="btn btn-sm btn-outline" data-pir-gst-print="${Utils.attr(lang)}" ${gst ? '' : 'disabled'}>
+                  ${icon('printer')} Print
+                </button>
+                <button class="btn btn-sm btn-primary" data-pir-gst-launch="${Utils.attr(lang)}" ${gst ? '' : 'disabled'} style="flex:1;">
+                  ${icon('play')} Session
+                </button>
+              </div>
+            </div>`;
+        }).join('')}
       </div>
     </div>
 
@@ -34270,24 +34347,34 @@ async _renderPhilIriGst(content, cls, learners, records) {
     <div class="card">
       <div class="card-head">
         <h3>Enter GST Scores</h3>
-        <span class="text-xs text-muted">Type each learner's raw score (0–${totalItems})</span>
+        <span class="text-xs text-muted">
+          ${viewLangs.length === 2 ? 'Two inputs per learner — one per language' : 'One input per learner'}
+        </span>
       </div>
       ${learners.length ? `
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr>
-              <th style="width:36px;">#</th>
-              <th>Learner</th>
-              <th style="width:130px;text-align:center;">GST Raw Score (0–${totalItems})</th>
-              <th style="width:260px;text-align:center;">Status</th>
-              <th style="width:120px;text-align:center;">Actions</th>
-            </tr></thead>
+            <thead>
+              <tr>
+                <th style="width:36px;">#</th>
+                <th>Learner</th>
+                ${viewLangs.map(lang => {
+                  const gst = gstByLang[lang];
+                  const total = gst ? gst.items.length : 20;
+                  const pass = Math.max(1, Math.ceil(total * 0.7));
+                  return `
+                    <th style="text-align:center;background:rgba(0,56,168,0.05);">
+                      ${Pages._philIriLangBadge(lang)}
+                      <div class="text-xs text-muted" style="margin-top:2px;font-weight:400;">
+                        0–${total} · passing ${pass}
+                      </div>
+                    </th>`;
+                }).join('')}
+                <th style="width:120px;text-align:center;">Status</th>
+              </tr>
+            </thead>
             <tbody>
               ${learners.map((l, i) => {
-                const rec = recMap[l.id] || {};
-                const score = rec.gstScore;
-                const hasScore = score !== undefined && score !== null;
-                const didPass = hasScore && score >= passing;
                 return `<tr data-pir-gst-row="${Utils.attr(l.id)}">
                   <td style="color:var(--text-muted);">${i + 1}</td>
                   <td>
@@ -34301,28 +34388,25 @@ async _renderPhilIriGst(content, cls, learners, records) {
                       </div>
                     </div>
                   </td>
-                  <td style="text-align:center;">
-                    <input type="number" class="form-control pir-gst-input"
-                           min="0" max="${totalItems}"
-                           data-learner="${Utils.attr(l.id)}"
-                           value="${hasScore ? score : ''}"
-                           placeholder="—"
-                           style="width:80px;text-align:center;margin:0 auto;">
-                  </td>
+                  ${viewLangs.map(lang => {
+                    const rec = Pages._philIriRecordFor(records, l.id, lang) || {};
+                    const gst = gstByLang[lang];
+                    const total = gst ? gst.items.length : (rec.gstTotalItems || 20);
+                    const has = rec.gstScore !== undefined && rec.gstScore !== null;
+                    return `
+                      <td style="text-align:center;">
+                        <input type="number" class="form-control pir-gst-input"
+                               min="0" max="${total}"
+                               data-learner="${Utils.attr(l.id)}"
+                               data-language="${Utils.attr(lang)}"
+                               value="${has ? rec.gstScore : ''}"
+                               placeholder="—"
+                               style="width:80px;text-align:center;margin:0 auto;"
+                               ${gst ? '' : 'disabled title="No GST set for this language"'}>
+                      </td>`;
+                  }).join('')}
                   <td style="text-align:center;" data-pir-gst-status="${Utils.attr(l.id)}">
-                    ${!hasScore
-                      ? '<span class="badge badge-neutral">Not entered</span>'
-                      : didPass
-                        ? `<span class="badge badge-success">✓ Passed · No further assessment</span>`
-                        : `<span class="badge badge-danger">⚠ Below ${passing} · Individualized assessment required</span>`}
-                  </td>
-                  <td style="text-align:center;" data-pir-gst-action="${Utils.attr(l.id)}">
-                    ${hasScore && !didPass ? `
-                      <button class="btn btn-sm btn-outline"
-                              data-pir-gst-go-individual="${Utils.attr(l.id)}"
-                              title="Start individualized assessment">
-                        ${icon('play')} Assess
-                      </button>` : ''}
+                    ${Pages._philIriGstRowStatus(learners, l, records, gstByLang, viewLangs)}
                   </td>
                 </tr>`;
               }).join('')}
@@ -34341,47 +34425,54 @@ async _renderPhilIriGst(content, cls, learners, records) {
      BINDINGS
      ──────────────────────────────────────────────────────────────── */
 
-  // Set selector — swap sets without a full page reload
-  const setSel = content.querySelector('#pir-gst-select');
-  if (setSel) setSel.onchange = (e) => {
-    State._philIriUI.selectedGstId = e.target.value;
-    App.navigate('phil-iri');
-  };
-
-  // View / print / launch — all delegate to the shared helpers
-  const viewBtn = content.querySelector('#pir-gst-view-passage');
-  if (viewBtn) viewBtn.onclick = () => Pages._openPhilIriGstPassagePreview(gst);
-
-  const printBtn = content.querySelector('#pir-gst-print');
-  if (printBtn) printBtn.onclick = () => Pages._philIriPrintGst(gst);
-
-  const launchBtn = content.querySelector('#pir-gst-launch');
-  if (launchBtn) launchBtn.onclick = () => Pages._openPhilIriGstSession(gst, cls, learners);
-
-  // Quick-jump from a failing learner straight into the Individual tab
-  content.querySelectorAll('[data-pir-gst-go-individual]').forEach(btn => {
-    btn.onclick = () => {
-      State._philIriUI.tab = 'individual';
-      State._philIriUI.selectedLearnerId = btn.dataset.pirGstGoIndividual;
+  // Set picker per language
+  content.querySelectorAll('[data-pir-gst-picker]').forEach(sel => {
+    sel.onchange = (e) => {
+      const lang = sel.dataset.pirGstPicker;
+      State._philIriUI.selectedGstId[lang] = e.target.value || null;
       App.navigate('phil-iri');
     };
   });
 
-  // ── Score persistence with in-place UI refresh ──
+  // View / print / launch per language
+  content.querySelectorAll('[data-pir-gst-view]').forEach(btn => {
+    btn.onclick = () => {
+      const gst = gstByLang[btn.dataset.pirGstView];
+      if (gst) Pages._openPhilIriGstPassagePreview(gst);
+    };
+  });
+  content.querySelectorAll('[data-pir-gst-print]').forEach(btn => {
+    btn.onclick = () => {
+      const gst = gstByLang[btn.dataset.pirGstPrint];
+      if (gst) Pages._philIriPrintGst(gst);
+    };
+  });
+  content.querySelectorAll('[data-pir-gst-launch]').forEach(btn => {
+    btn.onclick = () => {
+      const gst = gstByLang[btn.dataset.pirGstLaunch];
+      if (gst) Pages._openPhilIriGstSession(gst, cls, learners);
+    };
+  });
+
+  // Score persistence — now language-aware
   content.querySelectorAll('.pir-gst-input').forEach(inp => {
     inp.addEventListener('change', Utils.debounce(async () => {
       const learnerId = inp.dataset.learner;
+      const lang      = inp.dataset.language;
+      const gst       = gstByLang[lang];
+      const totalItems = gst ? gst.items.length : 20;
+      const passing    = Math.max(1, Math.ceil(totalItems * 0.7));
+
       const val = inp.value.trim();
       const score = val === '' ? null : Number(val);
 
       if (score !== null && (isNaN(score) || score < 0 || score > totalItems)) {
-        UI.toast(`GST score must be between 0 and ${totalItems}.`, 'warning');
-        inp.value = recMap[learnerId] && recMap[learnerId].gstScore != null
-          ? recMap[learnerId].gstScore : '';
+        UI.toast(`GST score for ${lang} must be between 0 and ${totalItems}.`, 'warning');
+        const existing = Pages._philIriRecordFor(records, learnerId, lang);
+        inp.value = existing && existing.gstScore != null ? existing.gstScore : '';
         return;
       }
 
-      const lang = State._philIriUI.language || 'English';
       const langCode = Pages._philIriLangCode(lang);
       const recId = `philiri-${cls.id}-${learnerId}-${langCode}`;
       let rec = await DB.get('philIriRecords', recId) || {
@@ -34390,76 +34481,64 @@ async _renderPhilIriGst(content, cls, learners, records) {
         schoolYear: cls.schoolYear || State.schoolYear,
         createdAt: new Date().toISOString()
       };
-      rec.gstScore = score;
-      rec.language = lang;
-      rec.gstSetId = gst.id;
+      rec.gstScore      = score;
+      rec.language      = lang;
+      rec.gstSetId      = gst ? gst.id : rec.gstSetId;
       rec.gstTotalItems = totalItems;
-      rec.gstTakenAt = new Date().toISOString();
-      rec.updatedAt = new Date().toISOString();
+      rec.gstTakenAt    = new Date().toISOString();
+      rec.updatedAt     = new Date().toISOString();
       await DB.put('philIriRecords', rec);
       App.showAutosave('saved');
 
-      // Update the in-memory record so the summary recount is accurate
-      if (!recMap[learnerId]) recMap[learnerId] = {};
-      recMap[learnerId].gstScore = score;
-      recMap[learnerId].gstSetId = gst.id;
-      recMap[learnerId].gstTotalItems = totalItems;
+      // Update the in-memory cache for the status cell refresh
+      const idx = records.findIndex(r => r.learnerId === learnerId && (r.language || 'English') === lang);
+      if (idx >= 0) records[idx] = rec;
+      else records.push(rec);
 
-      // Refresh just this row's status badge
       const statusCell = content.querySelector(`[data-pir-gst-status="${CSS.escape(learnerId)}"]`);
       if (statusCell) {
-        if (score === null) {
-          statusCell.innerHTML = '<span class="badge badge-neutral">Not entered</span>';
-        } else if (score >= passing) {
-          statusCell.innerHTML = '<span class="badge badge-success">✓ Passed · No further assessment</span>';
-        } else {
-          statusCell.innerHTML = `<span class="badge badge-danger">⚠ Below ${passing} · Individualized assessment required</span>`;
-        }
+        statusCell.innerHTML = Pages._philIriGstRowStatus(learners, learners.find(x => x.id === learnerId), records, gstByLang, viewLangs);
       }
-
-      // Refresh the action cell (Assess button appears/disappears as needed)
-      const actionCell = content.querySelector(`[data-pir-gst-action="${CSS.escape(learnerId)}"]`);
-      if (actionCell) {
-        if (score !== null && score < passing) {
-          actionCell.innerHTML = `
-            <button class="btn btn-sm btn-outline"
-                    data-pir-gst-go-individual="${Utils.attr(learnerId)}"
-                    title="Start individualized assessment">
-              ${icon('play')} Assess
-            </button>`;
-          actionCell.querySelector('[data-pir-gst-go-individual]').onclick = () => {
-            State._philIriUI.tab = 'individual';
-            State._philIriUI.selectedLearnerId = learnerId;
-            App.navigate('phil-iri');
-          };
-        } else {
-          actionCell.innerHTML = '';
-        }
-      }
-
-      // Recount and update summary tiles
-      let p = 0, f = 0, u = 0;
-      learners.forEach(l => {
-        const s = (recMap[l.id] || {}).gstScore;
-        if (s === undefined || s === null) u++;
-        else if (s >= passing) p++;
-        else f++;
-      });
-      const passEl = content.querySelector('#pir-gst-passed');
-      const failEl = content.querySelector('#pir-gst-failed');
-      const unEl   = content.querySelector('#pir-gst-unassessed');
-      if (passEl) passEl.textContent = p;
-      if (failEl) failEl.textContent = f;
-      if (unEl)   unEl.textContent   = u;
     }, 400));
   });
+},
+
+/* Compact status pill for a GST row across all view languages. */
+_philIriGstRowStatus(learners, learner, records, gstByLang, viewLangs) {
+  if (!learner) return '';
+  const parts = [];
+  viewLangs.forEach(lang => {
+    const rec = Pages._philIriRecordFor(records, learner.id, lang) || {};
+    const gst = gstByLang[lang];
+    const total = gst ? gst.items.length : (rec.gstTotalItems || 20);
+    const pass = Math.max(1, Math.ceil(total * 0.7));
+    const has = rec.gstScore !== undefined && rec.gstScore !== null;
+    const short = lang === 'Filipino' ? 'FIL' : 'ENG';
+    if (!has) {
+      parts.push(`<span class="badge badge-neutral" style="font-size:9.5px;">${short} —</span>`);
+    } else if (rec.gstScore >= pass) {
+      parts.push(`<span class="badge badge-success" style="font-size:9.5px;">${short} ✓</span>`);
+    } else {
+      parts.push(`<span class="badge badge-danger"  style="font-size:9.5px;">${short} ⚠</span>`);
+    }
+  });
+  return `<div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap;">${parts.join('')}</div>`;
 },
 
 // ── Tab 3: Individual Assessment ──
 async _renderPhilIriIndividual(content, cls, learners, records) {
   const U = State._philIriUI;
+
+  // The Individual tab edits ONE language at a time. Default to the first
+  // language in the current view, and reset when the view changes.
+  const viewLangs = Pages._philIriViewLanguages();
+  if (!U.language || !viewLangs.includes(U.language)) {
+    U.language = viewLangs[0];
+  }
+  const activeLang = U.language;
+
   const candidates = learners.filter(l => {
-    const rec = records.find(r => r.learnerId === l.id);
+    const rec = Pages._philIriRecordFor(records, l.id, activeLang);
     if (!rec || rec.gstScore === null || rec.gstScore === undefined) return true;
     const items = rec.gstTotalItems || 20;
     const pass = Math.max(1, Math.ceil(items * 0.7));
@@ -34486,7 +34565,7 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
   }
 
   const selected = candidates.find(l => l.id === selectedId);
-  const rec = records.find(r => r.learnerId === selectedId) || {};
+  const rec = Pages._philIriRecordFor(records, selectedId, activeLang) || {};
     // Load all passages (built-in samples + teacher-added customs)
   const mats = await Pages._philIriGetAllMaterials();
 
@@ -34503,6 +34582,14 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
     <div class="card mb-16">
       <div class="card-head">
         <h3>Individual Assessment</h3>
+        <div class="rz-segment" role="tablist" aria-label="Assessment language">
+          ${viewLangs.map(lang => `
+            <button type="button" data-pir-indiv-lang="${Utils.attr(lang)}"
+                    class="${lang === activeLang ? 'active' : ''}">
+              ${Utils.esc(lang)}
+            </button>
+          `).join('')}
+        </div>
         <span class="text-xs text-muted">${candidates.length} learner${candidates.length === 1 ? '' : 's'} need assessment</span>
       </div>
       <div class="form-row" style="align-items:flex-start;">
@@ -34695,6 +34782,14 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
     Pages.philIri(document.getElementById('content').firstElementChild);
   };
 
+    // Language switcher for the Individual tab
+  content.querySelectorAll('[data-pir-indiv-lang]').forEach(b => {
+    b.onclick = () => {
+      State._philIriUI.language = b.dataset.pirIndivLang;
+      Pages.philIri(document.getElementById('content').firstElementChild);
+    };
+  });
+
   // ── Live computation ──
   const computeAll = () => {
     const totalWords = Number(content.querySelector('#pir-total-words').value) || 0;
@@ -34788,12 +34883,24 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
       UI.toast('Complete all fields before saving.', 'warning');
       return;
     }
-    const recId = `philiri-${cls.id}-${selectedId}`;
+
+    // ← CHANGED: recId now includes the language code so English and
+    //   Filipino records live side by side instead of overwriting each other.
+    const langCode = Pages._philIriLangCode(activeLang);
+    const recId = `philiri-${cls.id}-${selectedId}-${langCode}`;
+
     let r = await DB.get('philIriRecords', recId) || {
       id: recId, classId: cls.id, learnerId: selectedId,
+      language: activeLang,                                        // ← CHANGED
       schoolYear: cls.schoolYear || State.schoolYear,
       createdAt: new Date().toISOString()
     };
+
+    // ← CHANGED: always stamp the language, even on existing records,
+    //   so records created before this feature default correctly.
+    r.language = activeLang;
+    r.passageLanguage = activeLang;                                // ← CHANGED
+
     // Derive the passage grade level from the selected passage, falling
     // back to the active class grade level for manual entry. This keeps
     // the record consistent with whichever passage was actually used.
@@ -34802,7 +34909,8 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
       const picked = pid ? eligiblePassages.find(p => p.id === pid) : null;
       r.passageLevel = picked ? picked.gradeLevel : (cls.gradeLevel || '');
     }
-    r.totalWords = Number(content.querySelector('#pir-total-words').value) || 0;  
+
+    r.totalWords = Number(content.querySelector('#pir-total-words').value) || 0;
     r.miscues = Number(content.querySelector('#pir-miscues').value) || 0;
     r.readingTime = Number(content.querySelector('#pir-time').value) || 0;
     r.wordReadingPct = computed.wrPct;
@@ -34817,7 +34925,7 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
     r.readingLevel = computed.finalLevel;
     r.updatedAt = new Date().toISOString();
     await DB.put('philIriRecords', r);
-    App.logActivity(`Phil-IRI assessment saved for ${Utils.fullName(selected)}`, 'Reports');
+    App.logActivity(`Phil-IRI assessment saved for ${Utils.fullName(selected)} (${activeLang})`, 'Reports');
     UI.toast('Assessment saved', 'success');
     App.navigate('phil-iri');
   };
@@ -34828,6 +34936,105 @@ _philIriLangCode(lang) {
   return lang === 'Filipino' ? 'fil' : 'eng';
 },
 
+/* Short visual badge for a language. */
+_philIriLangBadge(lang, opts = {}) {
+  const isFil = (lang || 'English') === 'Filipino';
+  const cls   = isFil ? 'badge-blue' : 'badge-neutral';
+  const label = opts.short ? (isFil ? 'FIL' : 'ENG') : (isFil ? 'Filipino' : 'English');
+  return `<span class="badge ${cls}" style="font-size:9.5px;">${label}</span>`;
+},
+
+/* Card used by the PDF importer's review step. */
+_philIriImportCandidateCard(rec, idx, isSelected) {
+  const isGst  = rec.kind === 'gst';
+  const qCount = isGst ? rec.items.length : rec.questions.length;
+  const body   = isGst ? rec.passage : rec.text;
+
+  const badge = isGst
+    ? '<span class="badge badge-gold" style="font-size:10px;">GST SET</span>'
+    : '<span class="badge badge-blue" style="font-size:10px;">GRADED PASSAGE</span>';
+
+  // Count answers Gemini couldn't derive — surface this, don't hide it.
+  const missingAnswers = isGst
+    ? rec.items.filter(it => !it.answer).length
+    : rec.questions.filter(q => !q.answer).length;
+
+  // Sanity-check the question-type tally so a misclassification is visible.
+  const typeTally = isGst ? '' : (() => {
+    const t = { Literal: 0, Inferential: 0, Critical: 0 };
+    rec.questions.forEach(q => { t[q.type] = (t[q.type] || 0) + 1; });
+    return `<span class="text-xs text-muted" style="margin-left:6px;">
+      · ${t.Literal}L / ${t.Inferential}I / ${t.Critical}C
+    </span>`;
+  })();
+
+  return `
+    <label style="display:flex;gap:12px;align-items:flex-start;padding:14px;
+                  background:${isSelected ? 'var(--light-blue)' : 'var(--card)'};
+                  border:2px solid ${isSelected ? 'var(--deped-blue)' : 'var(--border)'};
+                  border-radius:10px;cursor:pointer;transition:border-color .15s,background .15s;">
+      <input type="checkbox" data-pir-import-tick="${idx}" ${isSelected ? 'checked' : ''}
+             style="margin-top:3px;width:16px;height:16px;accent-color:var(--deped-blue);flex-shrink:0;">
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+          ${badge}
+          ${Pages._philIriLangBadge(rec.language)}
+          <span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(rec.gradeLevel)}</span>
+          ${rec.form ? `<span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(rec.form)}</span>` : ''}
+        </div>
+        <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${Utils.esc(rec.title)}</div>
+        <div class="text-xs text-muted" style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:0 10px;align-items:center;">
+          <span>${rec.wordCount} words · ${qCount} question${qCount === 1 ? '' : 's'}${isGst ? ` · ${rec.timeLimitMin} min` : ''}</span>
+          ${typeTally}
+          ${missingAnswers ? `<span style="color:var(--warning);font-weight:700;">${missingAnswers} missing answer${missingAnswers === 1 ? '' : 's'}</span>` : ''}
+        </div>
+        <div style="font-size:12px;line-height:1.5;color:var(--text-muted);max-height:80px;overflow:hidden;">
+          ${Utils.esc(body.slice(0, 260))}${body.length > 260 ? '…' : ''}
+        </div>
+      </div>
+    </label>`;
+},
+/* Return the record for a learner in a given language. */
+_philIriRecordFor(records, learnerId, language) {
+  return records.find(r =>
+    r.learnerId === learnerId &&
+    ((r.language || 'English') === language)
+  ) || null;
+},
+
+/* Languages the current page should render, based on the user's toggle. */
+_philIriViewLanguages() {
+  const v = (State._philIriUI && State._philIriUI.languageView) || 'both';
+  if (v === 'both') return ['English', 'Filipino'];
+  return [v];
+},
+
+/* Friendly label for a reading level code. */
+_philIriLevelLabel(code) {
+  return code === 'IND' ? 'Independent'
+       : code === 'INS' ? 'Instructional'
+       : code === 'FR'  ? 'Frustration'
+       : code === 'Non-Reader' ? 'Non-Reader'
+       : '—';
+},
+
+/* Reading-level color. */
+_philIriLevelColor(code) {
+  return code === 'IND' ? 'var(--success)'
+       : code === 'INS' ? 'var(--warning)'
+       : code === 'FR'  ? 'var(--danger)'
+       : code === 'Non-Reader' ? 'var(--accent-purple)'
+       : 'var(--text-muted)';
+},
+
+/* True when a learner has been assessed in EVERY language under the current view. */
+_philIriHasAllViewLangs(records, learnerId) {
+  const langs = Pages._philIriViewLanguages();
+  return langs.every(lang => {
+    const r = Pages._philIriRecordFor(records, learnerId, lang);
+    return !!(r && r.readingLevel);
+  });
+},
 /* ============================================================================
    PHIL-IRI · MATERIALS LIBRARY + ASSESSMENT RUNNER
    ============================================================================ */
@@ -35321,6 +35528,315 @@ async _openAddCustomPassageModal(existingId = null) {
   };
 },
 
+/* ---------- Add or edit a teacher-provided GST set ---------- */
+async _openAddCustomGstModal(existingId = null) {
+  // ── Load the set being edited (if any) ────────────────────────────
+  let editing = null;
+  if (existingId) {
+    const existing = (await DB.getSetting('philIriCustomGstSets', [])) || [];
+    editing = existing.find(g => g.id === existingId) || null;
+    if (!editing) { UI.toast('GST set not found.', 'error'); return; }
+  }
+
+  const m = UI.modal({
+    title: editing ? 'Edit GST Set' : 'Add Custom GST Set',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16" style="font-size:12px;">
+        ${icon('info')}
+        <div>${editing
+          ? 'Changes are saved only on this device. The built-in original is untouched.'
+          : 'Create a Group Screening Test set from scratch. It will appear alongside the built-in GST sets and can be used for any class.'}</div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Grade Level <span class="req">*</span></label>
+          <select class="form-control" id="pir-cg-grade">
+            ${['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9','Grade 10','Grades 4-6','Grades 7-10']
+              .map(g => `<option ${editing && editing.gradeLevel === g ? 'selected' : ''}>${g}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Language <span class="req">*</span></label>
+          <select class="form-control" id="pir-cg-lang">
+            ${['English','Filipino'].map(l =>
+              `<option ${editing && editing.language === l ? 'selected' : ''}>${l}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Time Limit (minutes)</label>
+          <input type="number" class="form-control" id="pir-cg-time" min="5" max="120"
+                 value="${editing ? editing.timeLimitMin : 30}">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Title <span class="req">*</span></label>
+        <input class="form-control" id="pir-cg-title"
+               placeholder="e.g. Grade 4 GST — The Fisherman and His Wife"
+               value="${editing ? Utils.attr(editing.title) : ''}">
+      </div>
+
+      <div class="form-group">
+        <label>Reading Passage <span class="req">*</span></label>
+        <textarea class="form-control" id="pir-cg-passage" rows="8"
+                  placeholder="Paste the passage text here. Use blank lines between paragraphs.">${editing ? Utils.esc(editing.passage) : ''}</textarea>
+        <small class="text-muted" id="pir-cg-wordcount">Word count: —</small>
+      </div>
+
+      <div class="divider"></div>
+      <h4 style="font-size:13px;margin-bottom:4px;">Comprehension Items</h4>
+      <p class="text-xs text-muted mb-12">Add at least 5 items. Each item needs a question, its choices (one per line), and the correct answer.</p>
+      <div id="pir-cg-items"></div>
+      <button class="btn btn-sm btn-outline btn-block mt-8" id="pir-cg-add-item">
+        ${icon('edit')} + Add Item
+      </button>
+
+      <div class="form-group mt-16">
+        <label>Source / Attribution <span class="text-muted" style="font-weight:400;">(optional)</span></label>
+        <input class="form-control" id="pir-cg-source"
+               value="${editing ? Utils.attr(editing.source || '') : ''}"
+               placeholder="e.g. DepEd Division of Camarines Sur GST, 2024">
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-primary" id="pir-cg-save">
+        ${icon('save')} ${editing ? 'Save Changes' : 'Save GST Set'}
+      </button>
+    `
+  });
+
+  const overlay = m.overlay;
+
+  /* ════════════════════════════════════════════════════════════════════
+     SINGLE SOURCE OF TRUTH — a `draft` array.
+     ─────────────────────────────────────────────────────────────────
+     Every item lives here. The DOM is a projection of the array.
+     Before any mutation, we snapshot the DOM back into `draft`, mutate,
+     then re-render. Nothing is ever lost on re-render.
+     ═══════════════════════════════════════════════════════════════════ */
+
+  let draft = editing && Array.isArray(editing.items) && editing.items.length
+    ? editing.items.map(it => ({
+        stem:    it.stem || '',
+        choices: Array.isArray(it.choices) ? it.choices.slice() : ['', '', '', ''],
+        answer:  it.answer || ''
+      }))
+    : [
+        { stem: '', choices: ['', '', '', ''], answer: '' },
+        { stem: '', choices: ['', '', '', ''], answer: '' },
+        { stem: '', choices: ['', '', '', ''], answer: '' },
+        { stem: '', choices: ['', '', '', ''], answer: '' },
+        { stem: '', choices: ['', '', '', ''], answer: '' }
+      ];
+
+  /* Read every rendered input back into `draft`. Safe no-op when the
+     items aren't currently rendered (e.g. before the first render). */
+  const syncDraftFromDOM = () => {
+    const rows = overlay.querySelectorAll('.pir-cg-item');
+    if (!rows.length) return;
+    rows.forEach(row => {
+      const i = Number(row.dataset.idx);
+      if (!draft[i]) draft[i] = { stem: '', choices: ['', '', '', ''], answer: '' };
+      const stemEl   = row.querySelector('.pir-cg-item-stem');
+      const ansEl    = row.querySelector('.pir-cg-item-answer');
+      const choiceEls = row.querySelectorAll('.pir-cg-item-choice');
+      if (stemEl) draft[i].stem = stemEl.value;
+      if (ansEl)  draft[i].answer = ansEl.value;
+      draft[i].choices = Array.from(choiceEls).map(el => el.value);
+    });
+  };
+
+  const renderItems = () => {
+    const container = overlay.querySelector('#pir-cg-items');
+    container.innerHTML = draft.map((it, i) => `
+      <div class="pir-cg-item card" style="padding:12px;margin-bottom:10px;background:var(--bg);" data-idx="${i}">
+        <div class="flex-between" style="margin-bottom:8px;">
+          <strong style="font-size:12px;">Item ${i + 1}</strong>
+          <button class="icon-btn" data-pir-cg-remove-item="${i}" title="Remove"
+                  style="color:var(--danger);width:24px;height:24px;">${icon('trash')}</button>
+        </div>
+
+        <div class="form-group" style="margin-bottom:8px;">
+          <label style="font-size:11px;">Question stem</label>
+          <textarea class="form-control pir-cg-item-stem" data-idx="${i}" rows="2"
+                    placeholder="e.g. What did the fisherman find in his net?">${Utils.esc(it.stem)}</textarea>
+        </div>
+
+        <div class="form-group" style="margin-bottom:8px;">
+          <label style="font-size:11px;">Choices (one per line — A, B, C, D…)</label>
+          <textarea class="form-control pir-cg-item-choices-raw" data-idx="${i}" rows="4"
+                    placeholder="Choice A&#10;Choice B&#10;Choice C&#10;Choice D">${Utils.esc(it.choices.join('\n'))}</textarea>
+        </div>
+
+        <div class="form-group" style="margin-bottom:0;">
+          <label style="font-size:11px;">Correct answer (exact text of the correct choice)</label>
+          <input class="form-control pir-cg-item-answer" data-idx="${i}"
+                 value="${Utils.attr(it.answer)}" placeholder="e.g. a golden fish">
+        </div>
+      </div>
+    `).join('');
+
+    // Remove-item binding
+    container.querySelectorAll('[data-pir-cg-remove-item]').forEach(btn => {
+      btn.onclick = () => {
+        syncDraftFromDOM();
+        const i = Number(btn.dataset.pirCgRemoveItem);
+        draft.splice(i, 1);
+        if (!draft.length) draft.push({ stem: '', choices: ['', '', '', ''], answer: '' });
+        renderItems();
+      };
+    });
+
+    // Live-sync on every keystroke — keeps draft always current even if
+    // the modal gets re-rendered by an unrelated action.
+    container.querySelectorAll('.pir-cg-item-stem, .pir-cg-item-choices-raw, .pir-cg-item-answer')
+      .forEach(el => {
+        el.addEventListener('input', () => {
+          syncDraftFromDOM();
+          // Also re-render the answer-pill preview at the bottom of each item.
+          // (This is intentionally lightweight — just updates the input's hint.)
+          const i = Number(el.dataset.idx);
+          const row = container.querySelector(`.pir-cg-item[data-idx="${i}"]`);
+          if (!row) return;
+          const rawChoices = row.querySelector('.pir-cg-item-choices-raw').value
+            .split('\n').map(s => s.trim()).filter(Boolean);
+          const ansEl = row.querySelector('.pir-cg-item-answer');
+          // Make it obvious when the typed answer doesn't match any choice.
+          const matches = rawChoices.some(c => c.toLowerCase() === ansEl.value.trim().toLowerCase());
+          ansEl.style.borderColor = (ansEl.value.trim() && !matches)
+            ? 'var(--warning)' : '';
+        });
+      });
+  };
+
+  /* First render */
+  renderItems();
+
+  /* ── Live word count on the passage textarea ── */
+  const passageEl = overlay.querySelector('#pir-cg-passage');
+  const wcEl      = overlay.querySelector('#pir-cg-wordcount');
+  const updateWordCount = () => {
+    const wc = passageEl.value.split(/\s+/).filter(Boolean).length;
+    wcEl.textContent = `Word count: ${wc}${wc < 20 ? ' (very short — check the text)' : ''}`;
+  };
+  passageEl.addEventListener('input', updateWordCount);
+  updateWordCount();
+
+  /* ── Add Item ── */
+  overlay.querySelector('#pir-cg-add-item').onclick = () => {
+    syncDraftFromDOM();
+    draft.push({ stem: '', choices: ['', '', '', ''], answer: '' });
+    renderItems();
+    setTimeout(() => {
+      const last = overlay.querySelectorAll('.pir-cg-item');
+      if (last.length) {
+        last[last.length - 1].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        const stemInput = last[last.length - 1].querySelector('.pir-cg-item-stem');
+        if (stemInput) stemInput.focus();
+      }
+    }, 30);
+  };
+
+  /* ── Cancel ── */
+  overlay.querySelector('[data-close]').onclick = m.close;
+
+  /* ── Save ── */
+  overlay.querySelector('#pir-cg-save').onclick = async () => {
+    syncDraftFromDOM();
+
+    const grade      = overlay.querySelector('#pir-cg-grade').value;
+    const language   = overlay.querySelector('#pir-cg-lang').value;
+    const timeLimit  = Number(overlay.querySelector('#pir-cg-time').value) || 30;
+    const title      = overlay.querySelector('#pir-cg-title').value.trim();
+    const passage    = overlay.querySelector('#pir-cg-passage').value.trim();
+    const source     = overlay.querySelector('#pir-cg-source').value.trim();
+
+    if (!title)   { UI.toast('Title is required.', 'warning'); return; }
+    if (!passage) { UI.toast('Passage text is required.', 'warning'); return; }
+
+    // Rebuild the items array from `draft`, parsing the raw choices text.
+    // We re-read the raw textarea here rather than trusting draft[i].choices
+    // because a teacher may have just typed a newline but not blurred yet.
+    const items = Array.from(overlay.querySelectorAll('.pir-cg-item')).map((row, i) => {
+      const stem = row.querySelector('.pir-cg-item-stem').value.trim();
+      const raw  = row.querySelector('.pir-cg-item-choices-raw').value;
+      const choices = raw.split('\n').map(s => s.trim()).filter(Boolean);
+      const answer  = row.querySelector('.pir-cg-item-answer').value.trim();
+      return { number: i + 1, stem, choices, answer };
+    }).filter(it => it.stem);   // drop fully-empty rows
+
+    if (items.length < 5) {
+      UI.toast(`Add at least 5 items. You have ${items.length}.`, 'warning', 4000);
+      return;
+    }
+
+    const badItems = items.filter(it => it.choices.length < 2 || !it.answer);
+    if (badItems.length) {
+      UI.toast(
+        `Item${badItems.length === 1 ? '' : 's'} ${badItems.map(b => b.number).join(', ')} ` +
+        `need at least 2 choices and a correct answer.`,
+        'warning', 5000
+      );
+      return;
+    }
+
+    // Warn when the answer text doesn't match any of the item's choices —
+    // it will still save (some GSTs use fill-in-the-blank), but we flag it.
+    const mismatched = items.filter(it =>
+      it.choices.length && !it.choices.some(c => c.toLowerCase() === it.answer.toLowerCase())
+    );
+    if (mismatched.length) {
+      UI.toast(
+        `Item${mismatched.length === 1 ? '' : 's'} ${mismatched.map(b => b.number).join(', ')}: ` +
+        `the answer doesn't exactly match any choice. Saved as-is.`,
+        'info', 5000
+      );
+    }
+
+    const wordCount = passage.split(/\s+/).filter(Boolean).length;
+
+    const record = {
+      id: editing ? editing.id : 'custom-' + Utils.uid('pir-gst-'),
+      gradeLevel: grade,
+      language,
+      title,
+      passage,
+      wordCount,
+      timeLimitMin: timeLimit,
+      items,
+      source: source || (editing ? editing.source : 'Added by teacher'),
+      isSample: false
+    };
+
+    try {
+      const existing = (await DB.getSetting('philIriCustomGstSets', [])) || [];
+      if (editing) {
+        const idx = existing.findIndex(g => g.id === editing.id);
+        if (idx >= 0) existing[idx] = record;
+        else existing.push(record);
+      } else {
+        existing.push(record);
+      }
+      await DB.setSetting('philIriCustomGstSets', existing);
+
+      App.logActivity(
+        editing ? `Phil-IRI GST set updated: ${title}` : `Phil-IRI GST set added: ${title}`,
+        'Reports'
+      );
+      UI.toast(editing ? 'Changes saved' : 'GST set saved', 'success');
+      m.close();
+      App.navigate('phil-iri');
+    } catch (e) {
+      console.error(e);
+      UI.toast('Could not save: ' + (e.message || ''), 'error', 5000);
+    }
+  };
+},
+
 /* ---------- Remove all teacher-added custom materials ---------- */
 _removeCustomPhilIriMaterials() {
   UI.confirm({
@@ -35340,8 +35856,18 @@ _removeCustomPhilIriMaterials() {
 /* ---------- Tab 5: Materials Library ---------- */
 async _renderPhilIriMaterials(content, cls, learners, records) {
   const mats = await Pages._philIriGetAllMaterials();
+
+  // ── Filter by selected language BEFORE building the cards ──
+  const filterLang = State._philIriUI.materialLang || '';
+  const filteredPassages = filterLang
+    ? mats.passages.filter(p => p.language === filterLang)
+    : mats.passages;
+  const filteredGstSets = filterLang
+    ? mats.gstSets.filter(g => g.language === filterLang)
+    : mats.gstSets;
+
   const byGrade = {};
-  mats.passages.forEach(p => {
+  filteredPassages.forEach(p => {
     (byGrade[p.gradeLevel] = byGrade[p.gradeLevel] || []).push(p);
   });
   const gradeOrder = ['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9','Grade 10'];
@@ -35402,7 +35928,7 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
       <div class="card-head" style="padding:14px 16px 10px;margin-bottom:0;">
         <div>
           <h3 style="font-size:15px;margin:0;">${Utils.esc(g.title)}</h3>
-          <div class="text-xs text-muted">${Utils.esc(g.gradeLevel)} · ${g.timeLimitMin} min · ${g.items.length} items</div>
+          <div class="text-xs text-muted">${Utils.esc(g.gradeLevel)} · ${g.timeLimitMin} min · ${g.items.length} items · ${Utils.esc(g.language)}</div>
         </div>
         ${g.isSample ? '<span class="badge badge-warning" style="font-size:9px;">SAMPLE</span>' : ''}
       </div>
@@ -35417,9 +35943,13 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
           <button class="btn btn-sm btn-outline" data-pir-gst-print="${Utils.attr(g.id)}">
             ${icon('printer')} Print
           </button>
-          <button class="btn btn-sm btn-primary" data-pir-gst-run="${Utils.attr(g.id)}">
+          <button class="btn btn-sm btn-primary" data-pir-gst-run="${Utils.attr(g.id)}" style="flex:1;min-width:130px;">
             ${icon('play')} Start GST Session
           </button>
+          ${!g.isSample ? `
+            <button class="icon-btn" data-pir-gst-edit="${Utils.attr(g.id)}" title="Edit this set">${icon('edit')}</button>
+            <button class="icon-btn" data-pir-gst-del="${Utils.attr(g.id)}" title="Delete this set" style="color:var(--danger);">${icon('trash')}</button>
+          ` : ''}
         </div>
       </div>
     </div>
@@ -35441,14 +35971,38 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
           <div style="font-weight:700;font-size:14px;">Materials Library</div>
           <div class="text-xs text-muted">${mats.passages.length} passage${mats.passages.length === 1 ? '' : 's'} · ${mats.gstSets.length} GST set${mats.gstSets.length === 1 ? '' : 's'}</div>
         </div>
-        <div class="flex gap-8">
+        <div class="flex gap-8" style="flex-wrap:wrap;">
+          <button class="btn btn-primary" id="pir-import-pdf">
+            ${icon('star')} Import from PDF (AI)
+          </button>
           <button class="btn btn-outline" id="pir-add-passage">${icon('edit')} Add Custom Passage</button>
+          <button class="btn btn-outline" id="pir-add-gst">${icon('edit')} Add Custom GST Set</button>
           <button class="btn btn-outline" id="pir-remove-customs" ${(mats.customPassages.length + mats.customGstSets.length) ? '' : 'disabled'}>
             ${icon('trash')} Remove My Custom (${mats.customPassages.length + mats.customGstSets.length})
           </button>
         </div>
       </div>
     </div>
+
+        <div class="card mb-16" style="padding:10px 14px;">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);">
+              Language
+            </span>
+            <div class="rz-segment" role="tablist" aria-label="Material language filter">
+              <button type="button" data-pir-mat-lang=""
+                      class="${!State._philIriUI.materialLang ? 'active' : ''}">All</button>
+              <button type="button" data-pir-mat-lang="English"
+                      class="${State._philIriUI.materialLang === 'English' ? 'active' : ''}">English</button>
+              <button type="button" data-pir-mat-lang="Filipino"
+                      class="${State._philIriUI.materialLang === 'Filipino' ? 'active' : ''}">Filipino</button>
+            </div>
+            <span class="text-xs text-muted" style="margin-left:auto;">
+              ${mats.passages.filter(p => !State._philIriUI.materialLang || p.language === State._philIriUI.materialLang).length} passage(s) ·
+              ${mats.gstSets.filter(g => !State._philIriUI.materialLang || g.language === State._philIriUI.materialLang).length} GST set(s)
+            </span>
+          </div>
+        </div>
 
     <h4 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin:4px 0 10px;">
       Group Screening Test
@@ -35464,7 +36018,34 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
   /* ---------- Bindings ---------- */
   const findPassageById = (id) => mats.passages.find(p => p.id === id);
   const findGstById = (id) => mats.gstSets.find(g => g.id === id);
+  
+  content.querySelectorAll('[data-pir-gst-edit]').forEach(btn => {
+    btn.onclick = () => Pages._openAddCustomGstModal(btn.dataset.pirGstEdit);
+  });
 
+  content.querySelectorAll('[data-pir-gst-del]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.pirGstDel;
+      UI.confirm({
+        title: 'Delete GST Set',
+        message: 'This removes the set from your local library. Any recorded GST sessions that used it are not affected.',
+        confirmText: 'Delete',
+        confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          try {
+            const existing = (await DB.getSetting('philIriCustomGstSets', [])) || [];
+            const next = existing.filter(g => g.id !== id);
+            await DB.setSetting('philIriCustomGstSets', next);
+            App.logActivity('Phil-IRI custom GST set deleted', 'Reports');
+            UI.toast('GST set deleted', 'success');
+            App.navigate('phil-iri');
+          } catch (e) {
+            UI.toast('Could not delete: ' + (e.message || ''), 'error', 4000);
+          }
+        }
+      });
+    };
+  });
   content.querySelectorAll('[data-pir-mat-read]').forEach(el => {
     el.onclick = (e) => {
       e.stopPropagation();
@@ -35512,11 +36093,24 @@ async _renderPhilIriMaterials(content, cls, learners, records) {
     };
   });
 
+  const addGstBtn = content.querySelector('#pir-add-gst');
+  if (addGstBtn) addGstBtn.onclick = () => Pages._openAddCustomGstModal();
   const addBtn = content.querySelector('#pir-add-passage');
   if (addBtn) addBtn.onclick = () => Pages._openAddCustomPassageModal();
 
+    const importBtn = content.querySelector('#pir-import-pdf');
+  if (importBtn) importBtn.onclick = () => PhilIriPdfImporter.open();
+
   const remBtn = content.querySelector('#pir-remove-customs');
   if (remBtn) remBtn.onclick = () => Pages._removeCustomPhilIriMaterials();
+
+    // Language filter buttons
+  content.querySelectorAll('[data-pir-mat-lang]').forEach(btn => {
+    btn.onclick = () => {
+      State._philIriUI.materialLang = btn.dataset.pirMatLang || '';
+      App.navigate('phil-iri');
+    };
+  });
 },
 
 /* ---------- Choose a learner, then launch the assessment runner ---------- */
@@ -37151,20 +37745,80 @@ async _philIriPrintClassProfile(cls, learners, records) {
   });
 },
 // ── Print: Form 3 (Class Reading Profile) ──
+// ── Print: Form 3 (Class Reading Profile) — bilingual
 _philIriPrintForm3(cls, learners, records) {
   const school = State.schools[0] || {};
-  const levels = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
-  learners.forEach(l => {
-    const rec = records.find(r => r.learnerId === l.id);
-    if (!rec || !rec.readingLevel) { levels['Not Assessed']++; return; }
-    levels[rec.readingLevel] = (levels[rec.readingLevel] || 0) + 1;
+  const viewLangs = Pages._philIriViewLanguages();
+
+  // Per-language distributions
+  const distByLang = {};
+  viewLangs.forEach(lang => {
+    const d = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
+    learners.forEach(l => {
+      const r = Pages._philIriRecordFor(records, l.id, lang);
+      if (!r || !r.readingLevel) d['Not Assessed']++;
+      else d[r.readingLevel] = (d[r.readingLevel] || 0) + 1;
+    });
+    distByLang[lang] = d;
   });
+
+  const headerCols = viewLangs.length === 2
+    ? `<tr>
+         <th rowspan="2">#</th>
+         <th rowspan="2">Learner</th>
+         ${viewLangs.map(l => `<th colspan="5" style="text-align:center;">${Utils.esc(l)}</th>`).join('')}
+       </tr>
+       <tr>
+         ${viewLangs.map(() => `
+           <th>GST</th>
+           <th>Word Read %</th>
+           <th>Compr. %</th>
+           <th>Reading Level</th>
+           <th>Rate (WPM)</th>
+         `).join('')}
+       </tr>`
+    : `<tr>
+         <th>#</th>
+         <th>Learner</th>
+         <th>GST</th>
+         <th>Word Reading %</th>
+         <th>Comprehension %</th>
+         <th>Reading Level</th>
+         <th>Rate (WPM)</th>
+       </tr>`;
+
+  const bodyRows = learners.map((l, i) => {
+    const cellsFor = (lang) => {
+      const rec = Pages._philIriRecordFor(records, l.id, lang) || {};
+      return `
+        <td style="text-align:center;">${rec.gstScore != null ? rec.gstScore : ''}</td>
+        <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : ''}</td>
+        <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : ''}</td>
+        <td style="text-align:center;"><strong>${Pages._philIriLevelLabel(rec.readingLevel)}</strong></td>
+        <td style="text-align:center;">${rec.readingRate || ''}</td>`;
+    };
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${Utils.esc(Utils.fullName(l))}</td>
+      ${viewLangs.map(lang => cellsFor(lang)).join('')}
+    </tr>`;
+  }).join('');
+
+  const totalsRow = `<tr style="background:#eef3fa;font-weight:700;">
+      <td colspan="2" style="text-align:right;">TOTAL</td>
+      ${viewLangs.map(lang => {
+        const d = distByLang[lang];
+        return `<td colspan="5" style="text-align:center;">
+          IND: ${d['IND']} · INS: ${d['INS']} · FR: ${d['FR']} · NR: ${d['Non-Reader']} · Not Assessed: ${d['Not Assessed']}
+        </td>`;
+      }).join('')}
+    </tr>`;
 
   document.getElementById('print-area').innerHTML = `
     <div class="print-phil-iri">
       ${Pages._buildDepEdHeader({
         title: 'Phil-IRI Form 3',
-        subtitle: 'Class Reading Profile'
+        subtitle: 'Class Reading Profile · Bilingual'
       })}
       <div class="print-meta" style="display:flex;justify-content:space-between;margin:10px 0 8px;font-size:9pt;">
         <span>Grade &amp; Section: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
@@ -37172,39 +37826,14 @@ _philIriPrintForm3(cls, learners, records) {
         <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
       </div>
       <table>
-        <thead><tr>
-          <th>#</th><th>Learner</th><th>GST Score</th><th>Word Reading %</th><th>Comprehension %</th><th>Reading Level</th><th>Rate (WPM)</th>
-        </tr></thead>
-        <tbody>
-          ${learners.map((l, i) => {
-            const rec = records.find(r => r.learnerId === l.id) || {};
-            const label = rec.readingLevel === 'IND' ? 'Independent'
-              : rec.readingLevel === 'INS' ? 'Instructional'
-              : rec.readingLevel === 'FR' ? 'Frustration'
-              : rec.readingLevel === 'Non-Reader' ? 'Non-Reader' : '—';
-            return `<tr>
-              <td>${i + 1}</td><td>${Utils.esc(Utils.fullName(l))}</td>
-              <td style="text-align:center;">${rec.gstScore != null ? rec.gstScore : ''}</td>
-              <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : ''}</td>
-              <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : ''}</td>
-              <td style="text-align:center;"><strong>${label}</strong></td>
-              <td style="text-align:center;">${rec.readingRate || ''}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-        <tfoot>
-          <tr style="background:#eef3fa;font-weight:700;">
-            <td colspan="5" style="text-align:right;">TOTAL</td>
-            <td colspan="2" style="text-align:center;">
-              IND: ${levels['IND']} · INS: ${levels['INS']} · FR: ${levels['FR']} · NR: ${levels['Non-Reader']} · Not Assessed: ${levels['Not Assessed']}
-            </td>
-          </tr>
-        </tfoot>
+        <thead>${headerCols}</thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot>${totalsRow}</tfoot>
       </table>
       ${Pages._buildDepEdFooter()}
     </div>`;
 
-  App.logActivity('Phil-IRI Form 3 printed', 'Reports');
+  App.logActivity('Phil-IRI Form 3 printed (bilingual)', 'Reports');
   window.print();
   setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 800);
 },
@@ -47588,6 +48217,576 @@ Do not add commentary, markdown fences, or extra fields.`;
 
 Pages.rubricBuilder = function(root) { return RubricBuilder.render(root); };
 Pages.pptxGenerator = function(root) { return PptxGenerator.render(root); };
+/* ============================================================================
+   PHIL-IRI · PDF IMPORTER (AI-ASSISTED)
+   ----------------------------------------------------------------------------
+   Accepts a DepEd Phil-IRI PDF — either a Graded Passage or a Group Screening
+   Test — extracts its text (or, for scanned PDFs, sends the rendered pages to
+   Gemini Vision), and structures it into the PhilIriPassage / PhilIriGstSet
+   shape the Materials Library already reads.
+
+   The teacher reviews every record before anything is saved.
+   ============================================================================ */
+const PhilIriPdfImporter = (() => {
+
+  const S = {
+    file: null,
+    fileName: '',
+    extractMethod: '',
+    candidates: [],      // normalised records
+    selected: new Set(), // indices ticked for import
+    isWorking: false,
+    stage: '',
+    error: '',
+    _container: null
+  };
+
+  /* ----------------------------------------------------------------
+     Ensure pdfjsLib has its worker. Different entry points in the app
+     set this lazily; we defensively set it here too so the importer
+     works even if the user never visited the PowerPoint generator.
+     ---------------------------------------------------------------- */
+  function ensurePdfWorker() {
+    if (window.pdfjsLib && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      try {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.js';
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  /* ----------------------------------------------------------------
+     PDF → text (native text layer)
+     ---------------------------------------------------------------- */
+  async function extractPdfText(file) {
+    if (!window.pdfjsLib) throw new Error('PDF engine not loaded. Please retry in a moment.');
+    ensurePdfWorker();
+
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+
+    let text = '';
+    let totalChars = 0;
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const tokens = await page.getTextContent();
+      const pageText = tokens.items.map(t => t.str).join(' ')
+        .replace(/\s+/g, ' ').trim();
+      totalChars += pageText.length;
+      text += `\n--- Page ${i} ---\n${pageText}\n`;
+    }
+
+    const perPage = pdf.numPages ? totalChars / pdf.numPages : 0;
+    return { text, perPage, numPages: pdf.numPages };
+  }
+
+  /* ----------------------------------------------------------------
+     PDF → page images (fallback for scanned PDFs)
+     ---------------------------------------------------------------- */
+  async function extractPdfPageImages(file, maxPages = 8) {
+    if (!window.pdfjsLib) throw new Error('PDF engine not loaded.');
+    ensurePdfWorker();
+
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    const images = [];
+    const limit = Math.min(pdf.numPages, maxPages);
+
+    for (let i = 1; i <= limit; i++) {
+      const page = await pdf.getPage(i);
+      // 1.5× scale gives ~1500px width on A4 — well above Gemini's OCR floor.
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      images.push(canvas.toDataURL('image/jpeg', 0.85));
+    }
+    return images;
+  }
+
+  /* ----------------------------------------------------------------
+     Gemini call
+     ---------------------------------------------------------------- */
+  async function callGemini(sourceText, pageImages) {
+    const key   = await DB.getSetting('geminiApiKey', '');
+    const model = await DB.getSetting('geminiModel', '');
+    if (!key)   throw new Error('Please configure your Gemini API key first.');
+    if (!model) throw new Error('Please select a Gemini model in the API configuration.');
+
+    const systemPrompt =
+`You are a data-extraction assistant for the Philippine Department of Education.
+You receive a page from the official Phil-IRI manual and return its structured
+contents as strict JSON. You never invent content. If a field cannot be
+determined from the source, you leave it empty rather than guess.`;
+
+    const userPrompt =
+`Below is a passage from a Phil-IRI document (either a Graded Passage or a
+Group Screening Test). Extract its full contents into the JSON shape below.
+
+RULES
+1. Return ONLY a JSON object with a single field "records", an array.
+   Most PDFs contain exactly one record. If you can clearly see that the source
+   contains multiple passages (e.g. Pre-test and Post-test, or English and
+   Filipino versions in the same booklet), return one object per passage.
+2. Never summarise, paraphrase, or shorten the passage text. Copy it verbatim.
+3. Classify every comprehension question as one of:
+     "Literal" | "Inferential" | "Critical"
+   A Literal question's answer appears verbatim in the passage.
+   An Inferential question requires reading between the lines.
+   A Critical question requires evaluation, synthesis, or judgment.
+4. If the document includes an Answer Key, use it to populate the "answer"
+   field of each question. If no answer key is present, leave "answer" empty.
+5. Detect the language of the passage: "English" or "Filipino".
+6. Detect the grade level (e.g. "Grade 3", "Grades 4-6" for GST sets).
+7. Set "kind" to either "passage" or "gst".
+
+JSON SHAPE
+{
+  "records": [
+    {
+      "kind": "passage" | "gst",
+      "title": "string",
+      "gradeLevel": "Grade 3",
+      "language": "English" | "Filipino",
+      "form": "Pre-test" | "Post-test" | "",
+      "passage": "full verbatim passage text",
+      "timeLimitMin": 30,
+      "expectedWpm": 90,
+      "questions": [
+        { "number": 1, "type": "Literal", "question": "...", "answer": "..." }
+      ],
+      "gstItems": [
+        { "number": 1, "stem": "...", "choices": ["...","...","...","..."], "answer": "..." }
+      ],
+      "source": "e.g. DepEd Phil-IRI Grade 4 English, Form 1"
+    }
+  ]
+}
+Use ONLY the field that applies: "questions" for kind=passage, "gstItems" for
+kind=gst. Include the other field as an empty array.`;
+
+    const parts = [{ text: userPrompt }];
+
+    if (sourceText && sourceText.trim()) {
+      parts.push({ text: '\n=== DOCUMENT TEXT ===\n' + sourceText + '\n=== END ===' });
+    }
+    if (pageImages && pageImages.length) {
+      parts.push({ text: '\n=== DOCUMENT IMAGES ===' });
+      pageImages.forEach(dataUrl => {
+        const comma = dataUrl.indexOf(',');
+        const meta  = dataUrl.slice(5, comma);   // strips "data:"
+        const b64   = dataUrl.slice(comma + 1);
+        parts.push({ inlineData: { mimeType: meta.split(';')[0], data: b64 } });
+      });
+    }
+
+    const schema = {
+      type: 'OBJECT',
+      properties: {
+        records: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              kind:         { type: 'STRING' },
+              title:        { type: 'STRING' },
+              gradeLevel:   { type: 'STRING' },
+              language:     { type: 'STRING' },
+              form:         { type: 'STRING' },
+              passage:      { type: 'STRING' },
+              timeLimitMin: { type: 'NUMBER' },
+              expectedWpm:  { type: 'NUMBER' },
+              questions: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    number:   { type: 'INTEGER' },
+                    type:     { type: 'STRING' },
+                    question: { type: 'STRING' },
+                    answer:   { type: 'STRING' }
+                  },
+                  required: ['number', 'type', 'question', 'answer']
+                }
+              },
+              gstItems: {
+                type: 'ARRAY',
+                items: {
+                  type: 'OBJECT',
+                  properties: {
+                    number:  { type: 'INTEGER' },
+                    stem:    { type: 'STRING' },
+                    choices: { type: 'ARRAY', items: { type: 'STRING' } },
+                    answer:  { type: 'STRING' }
+                  },
+                  required: ['number', 'stem', 'choices', 'answer']
+                }
+              },
+              source: { type: 'STRING' }
+            },
+            required: ['kind', 'title', 'gradeLevel', 'language', 'passage',
+                       'questions', 'gstItems']
+          }
+        }
+      },
+      required: ['records']
+    };
+
+    const payload = {
+      contents: [{ parts }],
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: schema,
+        temperature: 0.15,              // extraction, not creation
+        maxOutputTokens: 16384
+      }
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+    let delay = 1200, lastErr = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 3) throw e;
+        await new Promise(r => setTimeout(r, delay)); delay *= 2; continue;
+      }
+      if (res.status === 429 && attempt < 3) {
+        await new Promise(r => setTimeout(r, delay)); delay *= 2; continue;
+      }
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error?.message || `Gemini error: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Gemini returned an empty response.');
+      const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      try { return JSON.parse(cleaned); }
+      catch (e) {
+        lastErr = new Error('Gemini returned malformed JSON. Try again.');
+        if (attempt === 3) throw lastErr;
+        await new Promise(r => setTimeout(r, delay)); delay *= 2;
+      }
+    }
+    throw lastErr || new Error('Gemini request failed.');
+  }
+
+  /* ----------------------------------------------------------------
+     Normalise Gemini's output into the library shape
+     ---------------------------------------------------------------- */
+  function normaliseRecord(raw) {
+    const lang = (raw.language || 'English').trim();
+    const kind = (raw.kind === 'gst') ? 'gst' : 'passage';
+    const passageText = String(raw.passage || '');
+    const wordCount = passageText.split(/\s+/).filter(Boolean).length;
+
+    if (kind === 'gst') {
+      return {
+        kind: 'gst',
+        id: 'custom-' + Utils.uid('pir-gst-'),
+        gradeLevel: raw.gradeLevel || 'Grades 4-6',
+        language: lang,
+        title: raw.title || 'Untitled GST',
+        passage: passageText,
+        wordCount,
+        timeLimitMin: Number(raw.timeLimitMin) || 30,
+        items: (raw.gstItems || []).map((it, i) => ({
+          number:  Number(it.number) || (i + 1),
+          stem:    String(it.stem || '').trim(),
+          choices: Array.isArray(it.choices)
+            ? it.choices.map(c => String(c || '').trim()).filter(Boolean)
+            : [],
+          answer:  String(it.answer || '').trim()
+        })),
+        source:   raw.source || 'Imported from PDF',
+        isSample: false
+      };
+    }
+
+    return {
+      kind: 'passage',
+      id: 'custom-' + Utils.uid('pir-'),
+      gradeLevel: raw.gradeLevel || 'Grade 3',
+      language: lang,
+      form: raw.form || '',
+      title: raw.title || 'Untitled Passage',
+      text: passageText,
+      wordCount,
+      expectedWpm: Number(raw.expectedWpm) || 90,
+      questions: (raw.questions || []).map((q, i) => ({
+        number:   Number(q.number) || (i + 1),
+        type:     ['Literal', 'Inferential', 'Critical'].includes(q.type) ? q.type : 'Literal',
+        question: String(q.question || '').trim(),
+        answer:   String(q.answer || '').trim()
+      })),
+      source:   raw.source || 'Imported from PDF',
+      isSample: false
+    };
+  }
+
+  /* ----------------------------------------------------------------
+     Save into the same keys the Materials Library reads
+     ---------------------------------------------------------------- */
+  async function saveSelected(records) {
+    const existingPassages = (await DB.getSetting('philIriCustomPassages', [])) || [];
+    const existingGst      = (await DB.getSetting('philIriCustomGstSets',    [])) || [];
+
+    let addedP = 0, addedG = 0;
+    records.forEach(r => {
+      const { kind, ...rec } = r;
+      if (kind === 'gst') { existingGst.push(rec);      addedG++; }
+      else                { existingPassages.push(rec); addedP++; }
+    });
+
+    await DB.setSetting('philIriCustomPassages', existingPassages);
+    await DB.setSetting('philIriCustomGstSets',  existingGst);
+
+    return { addedP, addedG };
+  }
+
+  /* ================================================================
+     UI
+     ================================================================ */
+
+  function render() {
+    const c = S._container;
+    if (!c) return;
+
+    c.innerHTML = `
+      <div class="alert alert-info mb-16">
+        ${icon('star')}
+        <div>
+          Upload a Phil-IRI PDF — either a <strong>Graded Passage</strong> or a
+          <strong>Group Screening Test</strong>. Gemini reads the text
+          (or the scanned pages) and structures it for the Materials Library.
+          You will review and edit everything before saving.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Phil-IRI PDF${S.fileName ? ' &middot; <span class="text-muted">' + Utils.esc(S.fileName) + '</span>' : ''}</label>
+        <input type="file" class="form-control" id="pir-pdf-file"
+               accept=".pdf,application/pdf">
+        <small class="text-muted">
+          One document at a time. A multi-passage booklet will be split into
+          separate records you can pick from.
+        </small>
+      </div>
+
+      <div id="pir-pdf-stage"></div>
+      <div id="pir-pdf-preview"></div>
+      ${S.error ? `<div class="alert alert-danger mt-12">${icon('alert')}<div>${Utils.esc(S.error)}</div></div>` : ''}
+    `;
+
+    const fileInput = c.querySelector('#pir-pdf-file');
+    if (fileInput) {
+      fileInput.onchange = async (e) => {
+        const f = e.target.files[0];
+        if (f) await runPipeline(f);
+      };
+    }
+
+    renderStage();
+    renderPreview();
+  }
+
+  function renderStage() {
+    const el = S._container && S._container.querySelector('#pir-pdf-stage');
+    if (!el) return;
+    if (!S.isWorking && !S.stage) { el.innerHTML = ''; return; }
+
+    el.innerHTML = `
+      <div class="alert alert-info mt-12" style="align-items:center;">
+        <span class="pir-ai-spinner" style="width:18px;height:18px;border-width:2px;flex-shrink:0;"></span>
+        <div>${Utils.esc(S.stage || 'Working…')}</div>
+      </div>`;
+  }
+
+  function renderPreview() {
+    const el = S._container && S._container.querySelector('#pir-pdf-preview');
+    if (!el) return;
+
+    if (!S.candidates.length) { el.innerHTML = ''; return; }
+
+    el.innerHTML = `
+      <div class="divider"></div>
+      <div class="flex-between mb-12" style="flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-weight:700;font-size:14px;">
+            Review Before Import &middot; ${S.candidates.length} candidate${S.candidates.length === 1 ? '' : 's'} found
+          </div>
+          <div class="text-xs text-muted">
+            Extract method: <strong>${Utils.esc(S.extractMethod)}</strong>
+          </div>
+        </div>
+        <div class="flex gap-8">
+          <button class="btn btn-sm btn-outline" id="pir-pdf-select-all">Select all</button>
+          <button class="btn btn-sm btn-outline" id="pir-pdf-select-none">Clear</button>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow-y:auto;padding-right:4px;">
+        ${S.candidates.map((r, i) =>
+          Pages._philIriImportCandidateCard(r, i, S.selected.has(i))
+        ).join('')}
+      </div>
+
+      <div class="flex-between mt-16" style="flex-wrap:wrap;gap:8px;">
+        <div class="text-xs text-muted">
+          <strong>${S.selected.size}</strong> of ${S.candidates.length} selected for import
+        </div>
+        <button class="btn btn-primary" id="pir-pdf-save" ${S.selected.size ? '' : 'disabled'}>
+          ${icon('save')} Import Selected
+        </button>
+      </div>
+    `;
+
+    el.querySelector('#pir-pdf-select-all').onclick = () => {
+      S.selected = new Set(S.candidates.map((_, i) => i));
+      renderPreview();
+    };
+    el.querySelector('#pir-pdf-select-none').onclick = () => {
+      S.selected = new Set();
+      renderPreview();
+    };
+    el.querySelectorAll('[data-pir-import-tick]').forEach(cb => {
+      cb.onchange = () => {
+        const i = Number(cb.dataset.pirImportTick);
+        if (cb.checked) S.selected.add(i); else S.selected.delete(i);
+        renderPreview();
+      };
+    });
+    el.querySelector('#pir-pdf-save').onclick = onSave;
+  }
+
+  /* ----------------------------------------------------------------
+     Pipeline
+     ---------------------------------------------------------------- */
+  async function runPipeline(file) {
+    S.file = file;
+    S.fileName = file.name;
+    S.error = '';
+    S.candidates = [];
+    S.selected = new Set();
+    S.isWorking = true;
+
+    try {
+      S.stage = 'Reading PDF…';
+      render();
+
+      const { text, perPage, numPages } = await extractPdfText(file);
+
+      let sourceText = '';
+      let pageImages = [];
+
+      if (perPage < 200) {
+        // Almost certainly a scan — no useful text layer.
+        S.stage = `Scanned PDF detected — rendering ${numPages} page${numPages === 1 ? '' : 's'} for Gemini Vision…`;
+        render();
+        pageImages = await extractPdfPageImages(file);
+        S.extractMethod = `Vision (${pageImages.length} page${pageImages.length === 1 ? '' : 's'})`;
+      } else {
+        sourceText = text.slice(0, 120000);   // safety cap — well under token limit
+        S.extractMethod = `Text (${numPages} page${numPages === 1 ? '' : 's'})`;
+      }
+
+      S.stage = 'Asking Gemini to structure the content…';
+      render();
+
+      const out = await callGemini(sourceText, pageImages);
+      if (!Array.isArray(out.records) || !out.records.length) {
+        throw new Error('Gemini did not find any passages in this PDF.');
+      }
+
+      S.candidates = out.records.map(normaliseRecord);
+      S.selected   = new Set(S.candidates.map((_, i) => i));   // pre-tick all
+
+      S.isWorking = false;
+      S.stage = '';
+      render();
+
+      App.logActivity(
+        `Phil-IRI PDF parsed: ${S.candidates.length} record${S.candidates.length === 1 ? '' : 's'} from ${file.name}`,
+        'Reports'
+      );
+    } catch (e) {
+      console.error('[Phil-IRI PDF] Pipeline failed:', e);
+      S.error = e.message || 'Import failed.';
+      S.isWorking = false;
+      S.stage = '';
+      render();
+    }
+  }
+
+  async function onSave() {
+    const chosen = Array.from(S.selected)
+      .map(i => S.candidates[i])
+      .filter(Boolean);
+    if (!chosen.length) return;
+
+    const btn = S._container && S._container.querySelector('#pir-pdf-save');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Importing…'; }
+
+    try {
+      const r = await saveSelected(chosen);
+      App.logActivity(
+        `Phil-IRI PDF imported: ${r.addedP} passage(s), ${r.addedG} GST set(s)`,
+        'Reports'
+      );
+      UI.toast(
+        `Imported ${r.addedP + r.addedG} record${(r.addedP + r.addedG) === 1 ? '' : 's'} into the Materials Library`,
+        'success', 4500
+      );
+      // Close the modal and refresh the Materials tab.
+      document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+      App.navigate('phil-iri');
+    } catch (e) {
+      console.error(e);
+      S.error = 'Could not save: ' + (e.message || '');
+      S.isWorking = false;
+      render();
+    }
+  }
+
+  /* ----------------------------------------------------------------
+     Public entry point
+     ---------------------------------------------------------------- */
+  function open() {
+    // Reset every per-session field.
+    S.file = null;
+    S.fileName = '';
+    S.extractMethod = '';
+    S.candidates = [];
+    S.selected = new Set();
+    S.isWorking = false;
+    S.stage = '';
+    S.error = '';
+
+    const m = UI.modal({
+      title: 'Import Phil-IRI Material from PDF',
+      size: 'modal-xl',
+      body: '<div id="pir-pdf-root"></div>',
+      footer: `<button class="btn btn-outline" data-close>Close</button>`
+    });
+    m.overlay.querySelector('[data-close]').onclick = m.close;
+
+    S._container = m.overlay.querySelector('#pir-pdf-root');
+    render();
+  }
+
+  return { open, state: S };
+})();
 /* ── QR Attendance Scanner entry point ─────────────────────────────── */
 Pages.openAttendanceScanner = function () {
   const content = document.getElementById('content');
@@ -47898,6 +49097,7 @@ window.Session = Session;
 window.Security = Security;
 window.AuthUI = AuthUI;
 window.SetupWizard = SetupWizard;
+window.PhilIriPdfImporter = PhilIriPdfImporter;
 
 document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => { console.error('Uncaught error:', e.error || e.message); });
