@@ -183,6 +183,251 @@ const SF9_LEARNING_AREAS = {
 const MAPEH_PARENT   = 'MAPEH';
 const MAPEH_CHILDREN = ['Music and Arts', 'Physical Education and Health'];
 /* ============================================================================
+   PHIL-IRI · INTERVENTION LIBRARY
+   Maps the dominant miscue / weakness to a concrete remediation strategy.
+   Language is drawn from the DepEd Phil-IRI Manual (DO 14, s. 2018).
+   ============================================================================ */
+const PHIL_IRI_INTERVENTIONS = {
+  mispronunciation: {
+    label: 'Mispronunciation',
+    strategy: 'Intensive phonics & word recognition. Re-teach letter\u2013sound correspondence. For English use word families (short vowels \u2192 blends \u2192 digraphs \u2192 long vowels); for Filipino use the Modified Marungko sequence.'
+  },
+  omission: {
+    label: 'Omission',
+    strategy: 'Advise the learner to slow down and track lines with a marker. If omission persists it signals a decoding gap \u2014 remediate word recognition before comprehension.'
+  },
+  substitution: {
+    label: 'Substitution',
+    strategy: 'Two patterns: (a) graphic-based guessing \u2192 build attention to all letters in a word; (b) context-based guessing \u2192 expand vocabulary and self-monitoring. Use cloze exercises with target words.'
+  },
+  insertion: {
+    label: 'Insertion',
+    strategy: 'Call attention to print. Use echo reading and paired reading so the learner hears accurate phrasing.'
+  },
+  repetition: {
+    label: 'Repetition',
+    strategy: 'If repeated for decoding \u2192 word recognition drill. If repeated for meaning \u2192 comprehension work (literal \u2192 inferential). Use repeated reading of short, level-appropriate passages.'
+  },
+  transposition: {
+    label: 'Transposition',
+    strategy: 'Reread the sentence together. If persistent, check vision / tracking. Practice reading word families and sight words to automaticity.'
+  },
+  reversal: {
+    label: 'Reversal',
+    strategy: 'Use multi-sensory techniques (sky-writing, sand tray). Practice reading left-to-right with a finger or ruler.'
+  },
+  lowFluency: {
+    label: 'Low Reading Rate',
+    strategy: 'Model fluent reading. Do repeated readings (3\u20134\u00d7) of short passages at the independent level. Practice phrasing and punctuation cues.'
+  },
+  lowComprehension: {
+    label: 'Low Comprehension',
+    strategy: 'Activate prior knowledge, set a purpose for reading, teach prediction & summarization. Ask multi-level questions (Literal \u2192 Inferential \u2192 Critical).'
+  },
+  nonReader: {
+    label: 'Non-Reader Pathway',
+    strategy: 'Administer the Listening Comprehension Test. Begin with alphabet knowledge, phonological awareness, and the Marungko Approach (Filipino) / word families (English).'
+  }
+};
+
+/* ============================================================================
+   PHIL-IRI · AI INTERVENTION PROMPT BUILDER
+   Produces a plain-text prompt that gives Gemini every data point the
+   auto-flagging logic uses, plus the DepEd-suggested baseline strategy.
+   The model is asked for a structured, week-by-week plan — no markdown,
+   no JSON, just sectioned plain text that renders cleanly inside a <pre>.
+   ============================================================================ */
+function buildPhilIriInterventionPrompt(ctx) {
+  const {
+    gradeLevel = '',
+    language = 'English',
+    gstScore, gstTotal, gstPass,
+    wordReadingPct, readingRate, comprehensionPct,
+    readingLevel, levelLabel,
+    literalCorrect, literalTotal,
+    inferentialCorrect, inferentialTotal,
+    criticalCorrect, criticalTotal,
+    totalWords, miscues, miscueBreakdown,
+    reasons, autoStrategies
+  } = ctx;
+
+  const lines = [];
+
+  lines.push('You are a Master Teacher and Reading Coordinator for the Philippine Department of Education, specializing in Phil-IRI-guided reading intervention. You design intervention plans that a classroom teacher can actually run in 15-minute sessions with 40+ other learners.');
+  lines.push('');
+  lines.push('LEARNER PROFILE');
+  lines.push(`- Grade Level: ${gradeLevel}`);
+  lines.push(`- Reading Language: ${language}`);
+  if (gstScore != null) {
+    lines.push(`- Group Screening Test (GST): ${gstScore} / ${gstTotal} (passing is ${gstPass})`);
+  }
+  if (wordReadingPct != null) lines.push(`- Word Reading Score: ${wordReadingPct}%`);
+  if (readingRate)            lines.push(`- Reading Rate: ${readingRate} WPM`);
+  if (comprehensionPct != null) lines.push(`- Comprehension Score: ${comprehensionPct}%`);
+  if (readingLevel)           lines.push(`- Overall Reading Level: ${levelLabel} (${readingLevel})`);
+  if (literalTotal)      lines.push(`- Literal questions:     ${literalCorrect || 0} / ${literalTotal}`);
+  if (inferentialTotal)  lines.push(`- Inferential questions: ${inferentialCorrect || 0} / ${inferentialTotal}`);
+  if (criticalTotal)     lines.push(`- Critical questions:    ${criticalCorrect || 0} / ${criticalTotal}`);
+  if (totalWords)        lines.push(`- Passage length: ${totalWords} words, ${miscues || 0} miscues recorded`);
+
+  if (miscueBreakdown && typeof miscueBreakdown === 'object') {
+    const entries = Object.entries(miscueBreakdown).filter(([, v]) => Number(v) > 0);
+    if (entries.length) {
+      lines.push('- Miscue breakdown: ' + entries.map(([k, v]) => `${k}: ${v}`).join(', '));
+    }
+  }
+
+  lines.push('');
+  lines.push('WHY THIS LEARNER WAS AUTO-FLAGGED');
+  if (reasons && reasons.length) {
+    reasons.forEach(r => lines.push(`- ${r.text}`));
+  } else {
+    lines.push('- (no specific reasons provided)');
+  }
+
+  lines.push('');
+  lines.push('BASELINE STRATEGY FROM THE DEPED PHIL-IRI MANUAL (use as a starting point, then improve and personalize it):');
+  if (autoStrategies && autoStrategies.length) {
+    autoStrategies.forEach(s => {
+      lines.push(`- ${s.title}: ${s.body}`);
+    });
+  } else {
+    lines.push('- General differentiated reading instruction.');
+  }
+
+  lines.push('');
+  lines.push('YOUR TASK');
+  lines.push('Write a personalized, 4–8 week reading intervention plan for this specific learner.');
+  lines.push('');
+  lines.push('STRICT REQUIREMENTS');
+  lines.push('1. Align with DepEd Order No. 14, s. 2018 (Phil-IRI Manual).');
+  lines.push('2. Be age-appropriate and culturally appropriate for a Filipino learner.');
+  lines.push('3. Be practical for a classroom teacher handling 40+ other learners — the plan must fit into 15–20 minute focused sessions.');
+  lines.push('4. Sequence the strategies week by week so they build on each other.');
+  lines.push('5. Give SPECIFIC activities, not generic advice. Name the technique (e.g. "echo reading", "word-family sort", "cloze with target words").');
+  lines.push('6. Include concrete progress-monitoring checkpoints.');
+  lines.push('7. Include a family/parent engagement component.');
+  lines.push('8. State the specific week to re-administer the Phil-IRI passage.');
+  if (language === 'Filipino') {
+    lines.push('9. For Filipino reading, prefer the Marungko Approach for early decoding and use Philippine-made reading materials where possible.');
+  } else {
+    lines.push('9. For English reading, prefer word-family sequencing (short vowels → blends → digraphs → long vowels) and sight-word automaticity.');
+  }
+  lines.push('10. Keep every section tight. Total output must not exceed 450 words. Be specific, not verbose.');
+  lines.push('');
+  lines.push('OUTPUT FORMAT — PLAIN TEXT ONLY, WITH REAL LINE BREAKS');
+  lines.push('');
+  lines.push('CRITICAL FORMATTING RULES:');
+  lines.push('- Do NOT use markdown. No asterisks, no hashes, no backticks, no underline markup.');
+  lines.push('- Use REAL newline characters between every line. Do NOT write the literal characters "\\n".');
+  lines.push('- Leave ONE BLANK LINE between every section. A blank line means an empty line — nothing on it.');
+  lines.push('- Each section heading must occupy its own line, alone, in ALL CAPS, followed immediately by a newline.');
+  lines.push('- Do NOT put a colon after a section heading.');
+  lines.push('- Do NOT put a section heading and its content on the same line.');
+  lines.push('');
+  lines.push('Use EXACTLY these seven section headings, in this order. Write them exactly as shown, in all caps, on their own line, with a blank line before each and content on the lines after.');
+  lines.push('');
+  lines.push('DIAGNOSIS');
+  lines.push('(One paragraph. State the reading level, the main bottleneck — decoding vs fluency vs comprehension — and the evidence from the data above. 3–5 sentences.)');
+  lines.push('');
+  lines.push('WEEKLY PLAN');
+  lines.push('(One line per week. Format each line exactly as: "Week X — Focus: <what>. Activities: <two or three specific activities>." Put each week on its own line.)');
+  lines.push('');
+  lines.push('DAILY ROUTINE');
+  lines.push('(Three to four numbered items, each on its own line. These are short, repeatable activities the teacher runs every session.)');
+  lines.push('');
+  lines.push('MATERIALS NEEDED');
+  lines.push('(One item per line. Prefer low-cost, locally-available materials — manila paper, bottle caps, used calendars, chalkboard, etc.)');
+  lines.push('');
+  lines.push('PROGRESS MONITORING');
+  lines.push('(Two to three items, each on its own line. Include the specific week to re-administer the Phil-IRI passage.)');
+  lines.push('');
+  lines.push('FAMILY ENGAGEMENT');
+  lines.push('(Two items, each on its own line — specific, simple things the parent or guardian can do at home.)');
+  lines.push('');
+  lines.push('REVIEW DATE');
+  lines.push('(One line: the specific week to reconvene or re-assess this learner.)');
+  lines.push('');
+  lines.push('Keep the entire output between 250 and 450 words. Write in plain, professional English suitable for a teacher\u2019s intervention log. Do not add any preamble or closing remark beyond the sections listed above.');
+
+  return lines.join('\n');
+}
+
+/* ============================================================================
+   PHIL-IRI · AI RESPONSE NORMALIZER
+   ----------------------------------------------------------------------------
+   Gemini frequently returns the intervention plan as a single run-on blob,
+   with literal "\\n" sequences, markdown emphasis, or headings embedded
+   mid-paragraph. This normalizer guarantees:
+
+     1. Code fences are stripped
+     2. Literal "\\n" strings become real newlines (when no real newlines exist)
+     3. Markdown emphasis / heading / bullet artifacts are removed
+     4. Each of the seven expected section headings sits alone on its own line,
+        preceded by a blank line
+     5. Runs of 3+ blank lines are collapsed to a single blank line
+
+   Safe to call multiple times — idempotent.
+   ============================================================================ */
+function normalizePhilIriInterventionText(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim();
+
+  // 1. Strip code fences (```text … ``` etc.)
+  s = s.replace(/^```(?:text|markdown|plaintext|md)?\s*/i, '')
+       .replace(/\s*```$/i, '');
+
+  // 2. If the whole string contains NO real newlines but does contain
+  //    literal \n sequences, unescape them. This is the #1 cause of
+  //    "everything on one line" reports.
+  if (!s.includes('\n') && /\\n/.test(s)) {
+    s = s.replace(/\\r/g, '').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+  }
+  // Also handle the mixed case where \n appears alongside a few real
+  // newlines — still worth unescaping.
+  if (/\\n/.test(s)) {
+    s = s.replace(/\\r/g, '').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+  }
+
+  // 3. Strip common markdown artifacts so the plain-text contract holds.
+  s = s.replace(/\*\*(.+?)\*\*/g, '$1');       // **bold**  → bold
+  s = s.replace(/__(.+?)__/g, '$1');           // __bold__  → bold
+  s = s.replace(/\*(.+?)\*/g, '$1');           // *italic*  → italic
+  s = s.replace(/^\s*#{1,6}\s*/gm, '');        // ## Heading → Heading
+  s = s.replace(/^\s*[-*•·]\s+/gm, '');        // - bullet  → no bullet
+  s = s.replace(/^\s*>\s?/gm, '');             // > quote   → no quote
+  s = s.replace(/^\s*---+\s*$/gm, '');         // hr lines  → nothing
+
+  // 4. Force every known section heading onto its own line with a blank
+  //    line before it. The regex is deliberately tolerant: it matches the
+  //    heading anywhere (start of line, mid-sentence, with or without a
+  //    trailing colon, with or without parentheses after it).
+  const HEADINGS = [
+    'DIAGNOSIS',
+    'WEEKLY PLAN',
+    'DAILY ROUTINE',
+    'MATERIALS NEEDED',
+    'PROGRESS MONITORING',
+    'FAMILY ENGAGEMENT',
+    'REVIEW DATE'
+  ];
+  const headingAlt = HEADINGS.map(h => h.replace(/\s+/g, '\\s+')).join('|');
+  const headingRe = new RegExp(
+    `[\\s\\u00A0]*(${headingAlt})(?:\\s*\\([^)]*\\))?\\s*:?\\s*`,
+    'gi'
+  );
+  s = s.replace(headingRe, (_, h) => `\n\n${h.toUpperCase()}\n`);
+
+  // 5. Collapse 3+ consecutive newlines to exactly 2 (a single blank line).
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  // 6. Trim leading / trailing whitespace.
+  s = s.trim();
+
+  return s;
+}
+
+/* ============================================================================
    NOISE METER — BALL THEME TABLE (shared between teacher page and presenter)
    ============================================================================ */
 const NOISE_BALL_THEMES = {
@@ -33685,11 +33930,12 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
       <div class="card mb-16" style="padding:12px;">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;">
       ${[
-        { id: 'overview',   label: 'Class Overview',        icon: 'chart',  desc: 'Reading profile and distribution' },
-        { id: 'materials',  label: 'Materials Library',     icon: 'folder', desc: 'Passages, GST sets, and reader' },
-        { id: 'gst',        label: 'GST Administration',    icon: 'edit',   desc: 'Enter Group Screening Test scores' },
-        { id: 'individual', label: 'Individual Assessment', icon: 'user',   desc: 'Record miscues, rate, comprehension' },
-        { id: 'reports',    label: 'Reports & Forms',       icon: 'file',   desc: 'Form 2, Form 3, and summaries' }
+        { id: 'overview',     label: 'Class Overview',        icon: 'chart',  desc: 'Reading profile and distribution' },
+        { id: 'materials',    label: 'Materials Library',     icon: 'folder', desc: 'Passages, GST sets, and reader' },
+        { id: 'gst',          label: 'GST Administration',    icon: 'edit',   desc: 'Enter Group Screening Test scores' },
+        { id: 'individual',   label: 'Individual Assessment', icon: 'user',   desc: 'Record miscues, rate, comprehension' },
+        { id: 'reports',      label: 'Reports & Forms',       icon: 'file',   desc: 'Form 2, Form 3, and summaries' },
+        { id: 'intervention', label: 'Intervention',          icon: 'alert',  desc: 'Auto-flagged learners + strategies' }
       ].map(t => {
             const isActive = U.tab === t.id;
             return `
@@ -33729,11 +33975,12 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
 
     // ── Render current tab ──
     switch (U.tab) {
-      case 'materials':  Pages._renderPhilIriMaterials(content, cls, learners, classRecords); break;
-      case 'gst':        Pages._renderPhilIriGst(content, cls, learners, classRecords); break;
-      case 'individual': Pages._renderPhilIriIndividual(content, cls, learners, classRecords); break;
-      case 'reports':    Pages._renderPhilIriReports(content, cls, learners, classRecords); break;
-      default:           Pages._renderPhilIriOverview(content, cls, learners, classRecords, levels, totalAssessed);
+      case 'materials':    Pages._renderPhilIriMaterials(content, cls, learners, classRecords); break;
+      case 'gst':          Pages._renderPhilIriGst(content, cls, learners, classRecords); break;
+      case 'individual':   Pages._renderPhilIriIndividual(content, cls, learners, classRecords); break;
+      case 'reports':      Pages._renderPhilIriReports(content, cls, learners, classRecords); break;
+      case 'intervention': Pages._renderPhilIriIntervention(content, cls, learners, classRecords); break;
+      default:             Pages._renderPhilIriOverview(content, cls, learners, classRecords, levels, totalAssessed);
     }
 
     // ── Action bindings ──
@@ -33779,27 +34026,51 @@ _renderPhilIriOverview(content, cls, learners, records, levels, totalAssessed) {
   ].filter(d => d.value > 0);
 
   content.innerHTML = `
+    <!-- ══════════ WORKFLOW PROGRESS ══════════ -->
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>Phil-IRI Workflow</h3>
+        <span class="text-xs text-muted">Four stages per the DO 14, s. 2018 manual</span>
+      </div>
+      ${(() => {
+        const gstDone            = records.some(r => r.gstScore !== undefined && r.gstScore !== null);
+        const pretestDone        = records.some(r => r.readingLevel);
+        const instructionStarted = records.some(r => r.readingLevel);
+        const posttestDone       = records.some(r => (r.passageForm || '').toLowerCase().includes('post'));
+        const stages = [
+          { n: 1, t: 'Group Screening Test (GST)',      done: gstDone,            icon: 'edit' },
+          { n: 2, t: 'Graded Passages — Pretest',       done: pretestDone,        icon: 'book' },
+          { n: 3, t: 'Specialized Reading Instruction', done: instructionStarted, icon: 'star' },
+          { n: 4, t: 'Graded Passages — Posttest',      done: posttestDone,       icon: 'check' }
+        ];
+        return `
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;">
+            ${stages.map(s => `
+              <div style="display:flex;gap:10px;align-items:center;padding:12px;border-radius:10px;
+                          background:${s.done ? 'rgba(25,135,84,0.08)' : 'var(--bg)'};
+                          border:1px solid ${s.done ? 'rgba(25,135,84,0.28)' : 'var(--border)'};">
+                <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+                            background:${s.done ? 'var(--gradient-success)' : 'var(--border)'};
+                            color:${s.done ? '#fff' : 'var(--text-muted)'};
+                            font-weight:800;font-size:13px;">
+                  ${s.done ? '✓' : s.n}
+                </div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:11px;font-weight:800;letter-spacing:0.6px;text-transform:uppercase;color:var(--text-muted);">
+                    Stage ${s.n}
+                  </div>
+                  <div style="font-size:12.5px;font-weight:600;color:var(--text);line-height:1.3;margin-top:1px;">
+                    ${Utils.esc(s.t)}
+                  </div>
+                </div>
+              </div>`).join('')}
+          </div>`;
+      })()}
+    </div>
+
     <div class="grid grid-2 mb-16" style="align-items:start;">
       <div class="card">
         <div class="card-head"><h3>Reading Level Distribution</h3></div>
-        ${donutData.length
-          ? `<div style="display:flex;justify-content:center;margin-bottom:16px;">
-              ${UI.donutChart(donutData, { size: 200, thickness: 28 })}
-            </div>
-            <div style="font-size:12px;">
-              ${donutData.map(d => `
-                <div class="flex-between" style="padding:5px 0;border-bottom:1px solid var(--border);">
-                  <span style="display:flex;align-items:center;gap:8px;">
-                    <span style="width:10px;height:10px;border-radius:50%;background:${d.color};"></span>
-                    ${d.label}
-                  </span>
-                  <strong>${d.value} <span class="text-muted" style="font-weight:400;">(${Math.round((d.value/total)*100)}%)</span></strong>
-                </div>`).join('')}
-            </div>`
-          : `<p class="text-sm text-muted" style="text-align:center;padding:30px;">
-              No assessments recorded yet. Start with the <strong>GST Administration</strong> tab.
-            </p>`}
-      </div>
 
       <div class="card">
         <div class="card-head"><h3>Assessment Progress</h3></div>
@@ -34234,8 +34505,8 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
         <h3>Individual Assessment</h3>
         <span class="text-xs text-muted">${candidates.length} learner${candidates.length === 1 ? '' : 's'} need assessment</span>
       </div>
-      <div class="form-row">
-        <div class="form-group" style="flex:2;">
+      <div class="form-row" style="align-items:flex-start;">
+        <div class="form-group" style="margin-bottom:0;">
           <label>Select Learner</label>
           <select class="form-control" id="pir-learner-select">
             ${candidates.map(l => {
@@ -34247,19 +34518,8 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
             }).join('')}
           </select>
         </div>
-        <div class="form-group" style="flex:1;">
-          <label>Passage Grade Level</label>
-          <select class="form-control" id="pir-passage-level">
-            ${['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9','Grade 10'].map(g =>
-              `<option value="${g}" ${rec.passageLevel === g ? 'selected' : ''}>${g}</option>`
-            ).join('')}
-          </select>
-        </div>
-      </div>
 
-      <!-- ── NEW: launch a passage-driven assessment session ── -->
-      <div class="form-row" style="margin-top:12px;">
-        <div class="form-group" style="flex:2;">
+        <div class="form-group" style="margin-bottom:0;">
           <label>Read from a Passage</label>
           <select class="form-control" id="pir-passage-select">
             <option value="">— Or enter scores manually below —</option>
@@ -34269,17 +34529,26 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
               </option>
             `).join('')}
           </select>
-          <small class="text-muted">
-            Launch a session to record miscues, reading time, and comprehension live.
-          </small>
         </div>
-        <div class="form-group" style="flex:0 0 auto;align-self:flex-end;">
-          <button class="btn btn-primary" id="pir-launch-assessment"
-                  style="min-width:180px;min-height:42px;"
-                  ${eligiblePassages.length === 0 ? 'disabled' : ''}>
-            ${icon('play')} Launch Assessment
-          </button>
-        </div>
+      </div>
+
+      <!-- Caption + resolved level chip (left) · Launch button (right), on one row -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:10px;">
+        <small class="text-muted" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:200px;">
+          <span>Launch a session to record miscues, reading time, and comprehension live.</span>
+          <span id="pir-resolved-level"
+                style="display:inline-flex;align-items:center;gap:4px;
+                       padding:2px 9px;border-radius:10px;
+                       background:var(--light-blue);color:var(--deped-blue);
+                       font-weight:700;font-size:11px;white-space:nowrap;">
+            <!-- Filled by JS on render + on dropdown change -->
+          </span>
+        </small>
+        <button class="btn btn-primary" id="pir-launch-assessment"
+                style="min-width:180px;min-height:42px;flex-shrink:0;"
+                ${eligiblePassages.length === 0 ? 'disabled' : ''}>
+          ${icon('play')} Launch Assessment
+        </button>
       </div>
     </div>
 
@@ -34382,9 +34651,24 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
       </div>
     </div>
   `;
+  /* ── Resolved grade level: derived from the selected passage, or the
+        active class grade when entering scores manually. ── */
+  const passageSel    = content.querySelector('#pir-passage-select');
+  const resolvedChip  = content.querySelector('#pir-resolved-level');
+  const updateResolvedLevel = () => {
+    if (!resolvedChip || !passageSel) return;
+    const pid = passageSel.value;
+    const picked = pid ? eligiblePassages.find(p => p.id === pid) : null;
+    const fallback = (cls && cls.gradeLevel) ? cls.gradeLevel : '—';
+    const level = picked ? picked.gradeLevel : fallback;
+    const source = picked ? 'from passage' : 'manual entry';
+    resolvedChip.innerHTML = `${icon('book')} <span>Grade Level: <strong>${Utils.esc(level)}</strong> <span style="opacity:.7;font-weight:500;">(${source})</span></span>`;
+  };
+  if (passageSel) passageSel.addEventListener('change', updateResolvedLevel);
+  updateResolvedLevel();
+
   /* ── Launch a session using the selected passage ── */
   const launchBtn = content.querySelector('#pir-launch-assessment');
-  const passageSel = content.querySelector('#pir-passage-select');
   if (launchBtn && passageSel) {
     launchBtn.onclick = async () => {
       const pid = passageSel.value;
@@ -34510,8 +34794,15 @@ async _renderPhilIriIndividual(content, cls, learners, records) {
       schoolYear: cls.schoolYear || State.schoolYear,
       createdAt: new Date().toISOString()
     };
-    r.passageLevel = content.querySelector('#pir-passage-level').value;
-    r.totalWords = Number(content.querySelector('#pir-total-words').value) || 0;
+    // Derive the passage grade level from the selected passage, falling
+    // back to the active class grade level for manual entry. This keeps
+    // the record consistent with whichever passage was actually used.
+    {
+      const pid = content.querySelector('#pir-passage-select')?.value;
+      const picked = pid ? eligiblePassages.find(p => p.id === pid) : null;
+      r.passageLevel = picked ? picked.gradeLevel : (cls.gradeLevel || '');
+    }
+    r.totalWords = Number(content.querySelector('#pir-total-words').value) || 0;  
     r.miscues = Number(content.querySelector('#pir-miscues').value) || 0;
     r.readingTime = Number(content.querySelector('#pir-time').value) || 0;
     r.wordReadingPct = computed.wrPct;
@@ -34688,19 +34979,17 @@ _openPhilIriGstPassagePreview(gst) {
 _philIriPrintPassage(passage) {
   const school = State.schools[0] || {};
   document.getElementById('print-area').innerHTML = `
-    <div class="print-phil-iri-passage">
-      <div class="print-header">
-        <h1>${Utils.esc(school.name || '')}</h1>
-        <p>${Utils.esc(school.address || '')}</p>
-      </div>
+    <div class="print-phil-iri">
+      ${Pages._buildDepEdHeader({
+        title: 'Phil-IRI Reading Passage',
+        subtitle: `${Utils.esc(passage.gradeLevel)} \u00b7 ${Utils.esc(passage.form)} \u00b7 ${Utils.esc(passage.language)} \u00b7 ${passage.wordCount} words`
+      })}
       <h2 style="font-size:14pt;text-align:center;margin:14px 0 6px;">${Utils.esc(passage.title)}</h2>
-      <div style="font-size:9pt;text-align:center;color:#666;margin-bottom:20px;">
-        ${Utils.esc(passage.gradeLevel)} · ${Utils.esc(passage.form)} · ${Utils.esc(passage.language)} · ${passage.wordCount} words
-      </div>
       <div style="font-family:'Bookman Old Style','Georgia',serif;font-size:16pt;line-height:2;text-align:left;">
         ${Utils.esc(passage.text).split(/\n\n+/).map(p => `<p style="margin:0 0 16px;">${p.replace(/\n/g, '<br>')}</p>`).join('')}
       </div>
       ${passage.source ? `<div style="font-size:8pt;color:#888;text-align:center;margin-top:24px;">Source: ${Utils.esc(passage.source)}</div>` : ''}
+      ${Pages._buildDepEdFooter()}
     </div>`;
   App.logActivity(`Printed Phil-IRI passage: ${passage.title}`, 'Reports');
   window.print();
@@ -34711,13 +35000,11 @@ _philIriPrintPassage(passage) {
 _philIriPrintGst(gst) {
   const school = State.schools[0] || {};
   document.getElementById('print-area').innerHTML = `
-    <div class="print-phil-iri-gst">
-      <div class="print-header">
-        <h1>${Utils.esc(school.name || '')}</h1>
-        <p>${Utils.esc(school.address || '')}</p>
-        <h2 style="font-size:13pt;margin-top:8px;">PHIL-IRI GROUP SCREENING TEST</h2>
-        <p style="font-size:10pt;">${Utils.esc(gst.gradeLevel)} · Time limit: ${gst.timeLimitMin} minutes</p>
-      </div>
+    <div class="print-phil-iri">
+      ${Pages._buildDepEdHeader({
+        title: 'Phil-IRI Group Screening Test',
+        subtitle: `${Utils.esc(gst.gradeLevel)} \u00b7 Time limit: ${gst.timeLimitMin} minutes`
+      })}
 
       <div style="margin:14px 0;">
         <div style="border:1px solid #000;padding:8px 12px;font-size:10pt;">
@@ -34758,6 +35045,7 @@ _philIriPrintGst(gst) {
           </tbody>
         </table>
       </div>
+      ${Pages._buildDepEdFooter()}
     </div>`;
   App.logActivity(`Printed Phil-IRI GST: ${gst.title}`, 'Reports');
   window.print();
@@ -35930,64 +36218,6 @@ _philIriPrintPassage(passage) {
   setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 900);
 },
 
-/* ---------- Print a GST set (learner copy) ---------- */
-_philIriPrintGst(gst) {
-  const school = State.schools[0] || {};
-  document.getElementById('print-area').innerHTML = `
-    <div class="print-phil-iri-gst">
-      <div class="print-header">
-        <h1>${Utils.esc(school.name || '')}</h1>
-        <p>${Utils.esc(school.address || '')}</p>
-        <h2 style="font-size:13pt;margin-top:8px;">PHIL-IRI GROUP SCREENING TEST</h2>
-        <p style="font-size:10pt;">${Utils.esc(gst.gradeLevel)} · Time limit: ${gst.timeLimitMin} minutes</p>
-      </div>
-
-      <div style="margin:14px 0;">
-        <div style="border:1px solid #000;padding:8px 12px;font-size:10pt;">
-          <div>Name: ____________________________________  &nbsp; Grade &amp; Section: _____________________</div>
-          <div style="margin-top:6px;">Score: ______ / ${gst.items.length}</div>
-        </div>
-      </div>
-
-      <div style="border:1px solid #000;padding:12px;margin-bottom:16px;font-family:'Bookman Old Style','Georgia',serif;font-size:12pt;line-height:1.7;">
-        <div style="text-align:center;font-weight:bold;margin-bottom:8px;">${Utils.esc(gst.title)}</div>
-        ${Utils.esc(gst.passage).split(/\n\n+/).map(p => `<p style="margin:0 0 10px;">${p.replace(/\n/g, '<br>')}</p>`).join('')}
-      </div>
-
-      <h4 style="font-size:11pt;margin-bottom:8px;">DIRECTIONS:</h4>
-      <p style="font-size:10pt;margin-bottom:12px;">
-        Read each question carefully. Choose the letter of the best answer and write it on the blank before each number.
-      </p>
-
-      <div style="page-break-inside:auto;">
-        ${gst.items.map(it => `
-          <div style="margin-bottom:10px;page-break-inside:avoid;">
-            <div style="font-size:10.5pt;font-weight:600;">____ ${it.number}. ${Utils.esc(it.stem)}</div>
-            <div style="margin-left:22px;font-size:10pt;">
-              ${it.choices.map((c, i) => `<div>${String.fromCharCode(65 + i)}. ${Utils.esc(c)}</div>`).join('')}
-            </div>
-          </div>
-        `).join('')}
-      </div>
-
-      <div style="page-break-before:always;">
-        <h4 style="font-size:11pt;">ANSWER KEY — For Teacher Use Only</h4>
-        <table style="width:100%;border-collapse:collapse;font-size:9.5pt;margin-top:10px;">
-          <tbody>
-            ${gst.items.map(it => `<tr>
-              <td style="border:1px solid #000;padding:3px;width:40px;text-align:center;">${it.number}</td>
-              <td style="border:1px solid #000;padding:3px;">${Utils.esc(it.answer)}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-  App.logActivity(`Printed Phil-IRI GST: ${gst.title}`, 'Reports');
-  window.print();
-  setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 900);
-},
-
-
 
 /* ---------- Remove all teacher-added custom materials ---------- */
 _removeCustomPhilIriMaterials() {
@@ -36031,6 +36261,752 @@ _renderPhilIriReports(content, cls, learners, records) {
   content.querySelector('#pir-print-school').onclick = () => Pages._philIriPrintSchoolProfile(cls, learners, records);
 },
 
+// ── Tab 5: Intervention ──
+_renderPhilIriIntervention(content, cls, learners, records) {
+  // ── 1. Flag every learner who needs intervention ─────────────────
+  const flagged = [];
+
+  learners.forEach(l => {
+    const rec = records.find(r => r.learnerId === l.id) || {};
+    const reasons = [];
+    let severity = 3;   // 1 = highest priority
+
+    // (a) GST below cut-off
+    if (rec.gstScore !== undefined && rec.gstScore !== null) {
+      const items = rec.gstTotalItems || 20;
+      const pass  = Math.max(1, Math.ceil(items * 0.7));
+      if (rec.gstScore < pass) {
+        reasons.push({
+          type: 'gst',
+          text: `GST score ${rec.gstScore}/${items} (below ${pass})`,
+          weight: rec.gstScore <= Math.floor(items * 0.4) ? 1 : 2
+        });
+      }
+    }
+
+    // (b) Reading profile is not Independent
+    if (rec.readingLevel && rec.readingLevel !== 'IND') {
+      const label = rec.readingLevel === 'FR' ? 'Frustration'
+                  : rec.readingLevel === 'INS' ? 'Instructional'
+                  : rec.readingLevel === 'Non-Reader' ? 'Non-Reader'
+                  : rec.readingLevel;
+      reasons.push({
+        type: 'profile',
+        text: `Reading profile: ${label}`,
+        weight: rec.readingLevel === 'FR' || rec.readingLevel === 'Non-Reader' ? 1 : 2
+      });
+    }
+
+    // (c) Word reading very low → non-reader pathway
+    if (rec.wordReadingPct != null && rec.wordReadingPct < 50) {
+      reasons.push({
+        type: 'nonReader',
+        text: `Word reading at ${rec.wordReadingPct}% — below 50%`,
+        weight: 1
+      });
+    }
+
+    // (d) Reading rate very low
+    if (rec.readingRate && rec.readingRate < 60 && rec.readingRate > 0) {
+      reasons.push({
+        type: 'fluency',
+        text: `Reading rate ${rec.readingRate} WPM — below fluent threshold`,
+        weight: 3
+      });
+    }
+
+    // (e) Comprehension at Frustration
+    if (rec.comprehensionPct != null && rec.comprehensionPct < 59) {
+      reasons.push({
+        type: 'comprehension',
+        text: `Comprehension at ${rec.comprehensionPct}%`,
+        weight: 2
+      });
+    }
+
+    if (reasons.length === 0) return;
+
+    // ── 2. Determine the dominant miscue (if any) ────────────────
+    let dominantMiscue = null;
+    if (rec.miscueBreakdown) {
+      const sorted = Object.entries(rec.miscueBreakdown)
+        .filter(([, v]) => Number(v) > 0)
+        .sort((a, b) => Number(b[1]) - Number(a[1]));
+      if (sorted.length) dominantMiscue = sorted[0][0];
+    }
+
+    // ── 3. Compose the strategy list ─────────────────────────────
+    const strategies = [];
+    if (dominantMiscue && PHIL_IRI_INTERVENTIONS[dominantMiscue]) {
+      strategies.push({
+        title: `Address ${PHIL_IRI_INTERVENTIONS[dominantMiscue].label}`,
+        body: PHIL_IRI_INTERVENTIONS[dominantMiscue].strategy
+      });
+    }
+    if (rec.wordReadingPct != null && rec.wordReadingPct < 50) {
+      strategies.push({
+        title: PHIL_IRI_INTERVENTIONS.nonReader.label,
+        body: PHIL_IRI_INTERVENTIONS.nonReader.strategy
+      });
+    }
+    if (rec.readingRate && rec.readingRate < 60) {
+      strategies.push({
+        title: PHIL_IRI_INTERVENTIONS.lowFluency.label,
+        body: PHIL_IRI_INTERVENTIONS.lowFluency.strategy
+      });
+    }
+    if (rec.comprehensionPct != null && rec.comprehensionPct < 59) {
+      strategies.push({
+        title: PHIL_IRI_INTERVENTIONS.lowComprehension.label,
+        body: PHIL_IRI_INTERVENTIONS.lowComprehension.strategy
+      });
+    }
+    if (!strategies.length) {
+      strategies.push({
+        title: 'General remediation',
+        body: 'Provide differentiated instruction at the learner\u2019s independent level. Move gradually toward the instructional level.'
+      });
+    }
+
+    // ── 4. Priority + sort key ───────────────────────────────────
+    const priority = Math.min(...reasons.map(r => r.weight));
+
+    flagged.push({
+      learner: l,
+      record: rec,
+      reasons,
+      strategies,
+      priority
+    });
+  });
+
+  flagged.sort((a, b) => a.priority - b.priority);
+
+  // ── 5. Summary stats ────────────────────────────────────────────
+  const total    = flagged.length;
+  const critical = flagged.filter(f => f.priority === 1).length;
+  const moderate = flagged.filter(f => f.priority === 2).length;
+  const watchful = flagged.filter(f => f.priority === 3).length;
+
+  // ── 6. Render ────────────────────────────────────────────────────
+  content.innerHTML = `
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card accent-danger">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Priority</div>
+        <div class="stat-value">${critical}</div>
+        <div class="text-xs text-muted">Frustration / GST far below cut-off</div>
+      </div>
+      <div class="stat-card accent-warning">
+        <div class="stat-icon">${icon('timer')}</div>
+        <div class="stat-label">Moderate</div>
+        <div class="stat-value">${moderate}</div>
+        <div class="text-xs text-muted">Instructional level or comprehension gap</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">${icon('eye')}</div>
+        <div class="stat-label">Watchful</div>
+        <div class="stat-value">${watchful}</div>
+        <div class="text-xs text-muted">Fluency or marginal scores</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Needing Support</div>
+        <div class="stat-value">${total} / ${learners.length}</div>
+        <div class="text-xs text-muted">${learners.length ? Math.round((total / learners.length) * 100) : 0}% of class</div>
+      </div>
+    </div>
+
+    <div class="alert alert-info mb-16">${icon('info')}<div>
+      Learners are auto-flagged from their GST score, reading profile, word-reading percentage,
+      reading rate, and comprehension. Strategies follow the <strong>DepEd Phil-IRI Manual
+      (DO 14, s. 2018)</strong> — edit or replace them per your professional judgment.
+    </div></div>
+
+    ${flagged.length === 0
+      ? UI.emptyState({
+          icon: 'check',
+          title: 'No learners need intervention',
+          message: 'Every assessed learner is at Independent or Instructional level with no fluency or comprehension flags.'
+        })
+      : flagged.map((f, i) => Pages._renderInterventionCard(f, i)).join('')}
+  `;
+
+  // Quick-jump to the learner's profile from any card header
+  content.querySelectorAll('[data-pir-int-learner]').forEach(el => {
+    el.onclick = () => App.openLearnerProfile(el.dataset.pirIntLearner);
+  });
+
+  // ── AI plan buttons ─────────────────────────────────────────────
+  const byLearnerId = {};
+  flagged.forEach(f => { byLearnerId[f.learner.id] = f; });
+
+  // Generate (first time)
+  content.querySelectorAll('[data-pir-ai-gen]').forEach(btn => {
+    btn.onclick = () => {
+      const f = byLearnerId[btn.dataset.pirAiGen];
+      if (f) Pages._philIriGenerateAiIntervention(f.learner, f.record, f);
+    };
+  });
+
+  // Edit (open saved plan in a textarea — no Gemini call)
+  content.querySelectorAll('[data-pir-ai-edit]').forEach(btn => {
+    btn.onclick = () => {
+      const f = byLearnerId[btn.dataset.pirAiEdit];
+      if (f) Pages._philIriEditAiIntervention(f.learner, f.record);
+    };
+  });
+
+  // Regenerate
+  content.querySelectorAll('[data-pir-ai-regen]').forEach(btn => {
+    btn.onclick = () => {
+      const f = byLearnerId[btn.dataset.pirAiRegen];
+      if (!f) return;
+      UI.confirm({
+        title: 'Regenerate with AI?',
+        message: 'This asks Gemini to draft a fresh plan based on the learner\'s data. Your current plan will be replaced when you save the new one.',
+        confirmText: 'Regenerate',
+        confirmClass: 'btn-primary',
+        onConfirm: () => {
+          // Clear the record's existing plan first, so the modal starts empty.
+          // (The teacher can still cancel — the record keeps the old plan until
+          //  Save is clicked.)
+          Pages._philIriGenerateAiIntervention(f.learner, f.record, f);
+        }
+      });
+    };
+  });
+
+  // Clear
+  content.querySelectorAll('[data-pir-ai-clear]').forEach(btn => {
+    btn.onclick = () => {
+      const f = byLearnerId[btn.dataset.pirAiClear];
+      if (f) Pages._philIriConfirmClearAiIntervention(f.learner, f.record);
+    };
+  });
+},
+
+_renderInterventionCard(f, idx) {
+  const { learner, record, reasons, strategies, priority } = f;
+
+  const priorityLabel = priority === 1 ? 'Priority'
+                      : priority === 2 ? 'Moderate'
+                      :                  'Watchful';
+  const priorityClass = priority === 1 ? 'danger'
+                      : priority === 2 ? 'warning'
+                      :                  'neutral';
+
+  const level = record.readingLevel;
+  const levelLabel = level === 'IND' ? 'Independent'
+                   : level === 'INS' ? 'Instructional'
+                   : level === 'FR'  ? 'Frustration'
+                   : level === 'Non-Reader' ? 'Non-Reader'
+                   : '—';
+  const levelColor = level === 'IND' ? 'var(--success)'
+                   : level === 'INS' ? 'var(--warning)'
+                   : level === 'FR'  ? 'var(--danger)'
+                   : level === 'Non-Reader' ? 'var(--accent-purple)'
+                   : 'var(--text-muted)';
+
+  // ── AI plan section (only rendered if a plan exists) ─────────────
+  const ai = record.aiIntervention;
+  const aiBlock = ai && ai.text
+    ? `
+      <div class="pir-ai-block mb-12">
+        <div class="pir-ai-block-head">
+          <div class="pir-ai-block-title">
+            ${icon('star')}
+            <span>AI Intervention Plan</span>
+            <span class="pir-ai-block-badge">
+              ${ai.editedByTeacher ? 'Edited by teacher' : 'AI-generated'}
+            </span>
+          </div>
+          <div class="pir-ai-block-actions">
+            <button class="pir-ai-icon-btn" data-pir-ai-edit="${Utils.attr(learner.id)}" title="Edit this plan">
+              ${icon('edit')}
+            </button>
+            <button class="pir-ai-icon-btn" data-pir-ai-regen="${Utils.attr(learner.id)}" title="Regenerate with AI">
+              ${icon('shuffle')}
+            </button>
+            <button class="pir-ai-icon-btn pir-ai-icon-btn-danger" data-pir-ai-clear="${Utils.attr(learner.id)}" title="Remove this plan">
+              ${icon('trash')}
+            </button>
+          </div>
+        </div>
+        <pre class="pir-ai-block-text">${Utils.esc(normalizePhilIriInterventionText(ai.text))}</pre>
+        ${ai.generatedAt ? `<div class="pir-ai-block-meta">
+          Generated ${Utils.timeAgo(ai.generatedAt)}${ai.model ? ' · ' + Utils.esc(ai.model) : ''}
+        </div>` : ''}
+      </div>`
+    : `
+      <div class="pir-ai-empty mb-12">
+        <div class="pir-ai-empty-text">
+          ${icon('star')}
+          <div>
+            <div style="font-weight:700;font-size:12.5px;color:var(--text);">No AI plan yet</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
+              Generate a personalized, week-by-week intervention plan from this learner's Phil-IRI data.
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-primary" data-pir-ai-gen="${Utils.attr(learner.id)}">
+          ${icon('star')} Generate Plan
+        </button>
+      </div>`;
+
+  return `
+    <div class="card mb-16" style="border-left:4px solid var(--${priorityClass === 'neutral' ? 'border' : priorityClass === 'danger' ? 'danger' : 'warning'});">
+      <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+        <div style="display:flex;gap:10px;align-items:center;min-width:200px;cursor:pointer;"
+             data-pir-int-learner="${Utils.attr(learner.id)}">
+          ${Utils.avatarHTML(learner, 44, 15)}
+          <div style="min-width:0;">
+            <div style="font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${Utils.esc(Utils.lastNameFirst(learner))}
+            </div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(learner.lrn || '—')}</div>
+          </div>
+        </div>
+
+        <div style="flex:1;min-width:0;">
+          <div class="flex gap-6 mb-8" style="flex-wrap:wrap;align-items:center;">
+            <span class="badge badge-${priorityClass}" style="font-size:10px;text-transform:uppercase;letter-spacing:0.8px;">
+              ${priorityLabel}
+            </span>
+            <span class="badge" style="font-size:10px;background:${levelColor}1a;color:${levelColor};">
+              ${levelLabel}
+            </span>
+            ${record.gstScore != null
+              ? `<span class="badge badge-neutral" style="font-size:10px;">GST ${record.gstScore}</span>`
+              : ''}
+            ${record.wordReadingPct != null
+              ? `<span class="badge badge-neutral" style="font-size:10px;">WR ${record.wordReadingPct}%</span>`
+              : ''}
+            ${record.readingRate
+              ? `<span class="badge badge-neutral" style="font-size:10px;">${record.readingRate} WPM</span>`
+              : ''}
+            ${record.comprehensionPct != null
+              ? `<span class="badge badge-neutral" style="font-size:10px;">Comp ${record.comprehensionPct}%</span>`
+              : ''}
+          </div>
+
+          <div style="font-size:12.5px;line-height:1.6;color:var(--text-muted);margin-bottom:12px;">
+            <strong style="color:var(--text);">Why flagged:</strong>
+            ${reasons.map(r => Utils.esc(r.text)).join(' · ')}
+          </div>
+
+          ${aiBlock}
+
+          <details class="pir-auto-strategies">
+            <summary>
+              ${icon('book')} Auto-generated strategies from the DepEd Phil-IRI Manual
+            </summary>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:10px;">
+              ${strategies.map(s => `
+                <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;">
+                  <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;color:var(--deped-blue);">
+                    ${Utils.esc(s.title)}
+                  </div>
+                  <div style="font-size:11.5px;line-height:1.6;color:var(--text);">
+                    ${Utils.esc(s.body)}
+                  </div>
+                </div>`).join('')}
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>`;
+},
+
+/* ── AI-powered intervention: call Gemini, cache result on the record ── */
+async _philIriGenerateAiIntervention(learner, record, flagged) {
+  // ── 1. Guard: API must be configured ────────────────────────────
+  const key   = await DB.getSetting('geminiApiKey', '');
+  const model = await DB.getSetting('geminiModel', '');
+  if (!key || !model) {
+    UI.modal({
+      title: 'AI Not Configured',
+      body: `
+        <div class="alert alert-warning">${icon('alert')}<div>
+          Generating an AI intervention plan requires a Gemini API key and a selected model.
+          Configure them in <strong>Lesson Planner → Set API Key</strong>, then return here.
+        </div></div>`,
+      footer: `
+        <button class="btn btn-outline" data-close>Cancel</button>
+        <button class="btn btn-primary" id="pir-ai-goto-config">${icon('key')} Open API Config</button>`
+    });
+    const btn = document.querySelector('#pir-ai-goto-config');
+    if (btn) btn.onclick = () => {
+      document.querySelectorAll('.modal-overlay').forEach(m => m.remove());
+      Pages.openGeminiKeyModal();
+    };
+    return;
+  }
+
+  // ── 2. Build the context object from the flagged row ────────────
+  const levelLabel = record.readingLevel === 'IND' ? 'Independent'
+                   : record.readingLevel === 'INS' ? 'Instructional'
+                   : record.readingLevel === 'FR'  ? 'Frustration'
+                   : record.readingLevel === 'Non-Reader' ? 'Non-Reader'
+                   : '—';
+  const items = record.gstTotalItems || 20;
+  const gstPass = Math.max(1, Math.ceil(items * 0.7));
+
+  const prompt = buildPhilIriInterventionPrompt({
+    gradeLevel: learner.gradeLevel || (State.activeClass && State.activeClass.gradeLevel) || '',
+    language:   record.language || record.passageLanguage || 'English',
+    gstScore:   record.gstScore,
+    gstTotal:   items,
+    gstPass,
+    wordReadingPct:   record.wordReadingPct,
+    readingRate:      record.readingRate,
+    comprehensionPct: record.comprehensionPct,
+    readingLevel:     record.readingLevel,
+    levelLabel,
+    literalCorrect:   record.literalCorrect,
+    literalTotal:     record.literalTotal,
+    inferentialCorrect: record.inferentialCorrect,
+    inferentialTotal:   record.inferentialTotal,
+    criticalCorrect:    record.criticalCorrect,
+    criticalTotal:      record.criticalTotal,
+    totalWords:  record.totalWords,
+    miscues:     record.miscues,
+    miscueBreakdown: record.miscueBreakdown,
+    reasons:     flagged.reasons,
+    autoStrategies: flagged.strategies
+  });
+
+  // ── 3. Modal shell — rendered first, then streams content in ────
+  const safeName = Utils.esc(Utils.fullName(learner));
+  const m = UI.modal({
+    title: `AI Intervention Plan · ${safeName}`,
+    size: 'modal-xl',
+    body: `
+      <div class="pir-ai-header mb-16">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          ${Utils.avatarHTML(learner, 44, 15)}
+          <div style="flex:1;min-width:180px;">
+            <div style="font-weight:800;font-size:15px;">${safeName}</div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(learner.lrn || '—')} · ${Utils.esc(learner.gradeLevel || '')} · ${Utils.esc(record.language || record.passageLanguage || 'English')}</div>
+          </div>
+          <div class="flex gap-6" style="flex-wrap:wrap;">
+            <span class="badge badge-neutral" style="font-size:10px;">${levelLabel}</span>
+            ${record.gstScore != null ? `<span class="badge badge-neutral" style="font-size:10px;">GST ${record.gstScore}/${items}</span>` : ''}
+            ${record.wordReadingPct != null ? `<span class="badge badge-neutral" style="font-size:10px;">WR ${record.wordReadingPct}%</span>` : ''}
+            ${record.readingRate ? `<span class="badge badge-neutral" style="font-size:10px;">${record.readingRate} WPM</span>` : ''}
+            ${record.comprehensionPct != null ? `<span class="badge badge-neutral" style="font-size:10px;">Comp ${record.comprehensionPct}%</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-12" style="font-size:12px;">
+        ${icon('info')}<div>
+          Gemini drafts a personalized, week-by-week intervention plan from this learner's
+          Phil-IRI data. <strong>You are free to edit the plan directly</strong> before saving,
+          and you can regenerate it at any time.
+        </div>
+      </div>
+
+      <div id="pir-ai-body">
+        <div class="pir-ai-loading">
+          <span class="pir-ai-spinner"></span>
+          <div style="font-weight:600;color:var(--text);margin-bottom:4px;">Drafting intervention plan…</div>
+          <div class="text-xs text-muted">This usually takes 10–25 seconds.</div>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" id="pir-ai-cancel">Cancel</button>
+      <button class="btn btn-outline" id="pir-ai-regen" disabled>${icon('shuffle')} Regenerate</button>
+      <button class="btn btn-primary" id="pir-ai-save" disabled>${icon('save')} Save Plan</button>
+    `,
+    onClose: () => { /* nothing to clean up */ }
+  });
+
+  const bodyEl    = m.overlay.querySelector('#pir-ai-body');
+  const regenBtn  = m.overlay.querySelector('#pir-ai-regen');
+  const saveBtn   = m.overlay.querySelector('#pir-ai-save');
+  const cancelBtn = m.overlay.querySelector('#pir-ai-cancel');
+
+  cancelBtn.onclick = m.close;
+
+  // ── 4. The generate function — reusable for regen ────────────────
+  const runGenerate = async (isRegen) => {
+    if (!isRegen) {
+      bodyEl.innerHTML = `
+        <div class="pir-ai-loading">
+          <span class="pir-ai-spinner"></span>
+          <div style="font-weight:600;color:var(--text);margin-bottom:4px;">Drafting intervention plan…</div>
+          <div class="text-xs text-muted">This usually takes 10–25 seconds.</div>
+        </div>`;
+    } else {
+      regenBtn.disabled = true;
+      regenBtn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Drafting…';
+    }
+    saveBtn.disabled = true;
+
+    // Read the last-edited text so regen doesn't discard the teacher's tweaks
+    // unless they explicitly want a fresh draft. We pass the previous text as
+    // an optional hint so Gemini can preserve what the teacher liked.
+    const previousText = (m.overlay.querySelector('#pir-ai-text') || {}).value || '';
+
+    const promptWithHint = isRegen && previousText.trim()
+      ? prompt + `\n\nPREVIOUS DRAFT (the teacher has been editing this; keep the sections and any teacher-specific additions you see, but rewrite and improve where useful):\n---\n${previousText.slice(0, 4000)}\n---\n`
+      : prompt;
+
+    const payload = {
+      contents: [{ parts: [{ text: promptWithHint }] }],
+      generationConfig: {
+        temperature: 0.75,
+        maxOutputTokens: 2048
+      }
+    };
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+    try {
+      // Simple retry on 429 / network blips
+      let delay = 1200;
+      let lastErr = null;
+      let res = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+        } catch (netErr) {
+          lastErr = netErr;
+          if (attempt === 3) throw netErr;
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 2;
+          continue;
+        }
+        if (res.status === 429 && attempt < 3) {
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 2;
+          continue;
+        }
+        break;
+      }
+      if (!res || !res.ok) {
+        const errBody = res ? await res.json().catch(() => ({})) : {};
+        throw new Error(errBody?.error?.message || `Gemini error (HTTP ${res ? res.status : 'network'})`);
+      }
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error('Gemini returned an empty response.');
+
+      // Normalize: strip fences, unescape literal \n, force section headings
+      // onto their own lines, collapse runaway blank lines.
+      const clean = normalizePhilIriInterventionText(text);
+
+      bodyEl.innerHTML = `
+        <div class="pir-ai-plan-wrap">
+          <textarea id="pir-ai-text" class="pir-ai-textarea" spellcheck="false">${Utils.esc(clean)}</textarea>
+          <div class="pir-ai-hint">
+            <span class="text-xs text-muted">
+              ${icon('edit')} Edit freely — this is your plan. Click <strong>Save Plan</strong> to keep it.
+            </span>
+          </div>
+        </div>`;
+
+      saveBtn.disabled = false;
+      regenBtn.disabled = false;
+      regenBtn.innerHTML = icon('shuffle') + ' Regenerate';
+    } catch (err) {
+      console.error('[Phil-IRI AI] Generation failed:', err);
+      const msg = (err && err.message) || 'Generation failed.';
+      bodyEl.innerHTML = `
+        <div class="alert alert-danger">${icon('alert')}<div>
+          <strong>Could not generate a plan.</strong><br>
+          ${Utils.esc(msg)}
+          ${/quota|429/i.test(msg) ? '<br><br>Wait a minute, then try again.' : ''}
+        </div></div>`;
+      regenBtn.disabled = false;
+      regenBtn.innerHTML = icon('shuffle') + ' Try Again';
+    }
+  };
+
+  regenBtn.onclick = () => runGenerate(true);
+
+  saveBtn.onclick = async () => {
+    const ta = m.overlay.querySelector('#pir-ai-text');
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) {
+      UI.toast('Plan text cannot be empty.', 'warning');
+      return;
+    }
+    try {
+      // Reload the record fresh — the snapshot we were handed may be stale.
+      const fresh = await DB.get('philIriRecords', record.id);
+      const target = fresh || record;
+      target.aiIntervention = {
+        text,
+        generatedAt: new Date().toISOString(),
+        model,
+        editedByTeacher: true
+      };
+      target.updatedAt = new Date().toISOString();
+      await DB.put('philIriRecords', target);
+
+      App.logActivity(
+        `Phil-IRI AI intervention saved for ${Utils.fullName(learner)}`,
+        'Reports'
+      );
+      UI.toast('Intervention plan saved', 'success');
+      m.close();
+
+      // Re-render the Intervention tab so the card shows the new plan.
+      const root = document.getElementById('content')?.firstElementChild;
+      if (root) {
+        const classRecords = await DB.getAllByIndex('philIriRecords', 'classId', State.activeClass.id).catch(() => []);
+        const content2 = root.querySelector('#pir-content');
+        if (content2) Pages._renderPhilIriIntervention(content2, State.activeClass, State.learners, classRecords);
+      }
+    } catch (err) {
+      console.error('[Phil-IRI AI] Save failed:', err);
+      UI.toast('Could not save: ' + (err.message || 'unknown error'), 'error', 5000);
+    }
+  };
+
+  // Kick off the first generation
+  runGenerate(false);
+},
+
+/* ── Edit an existing AI plan — no Gemini call, opens saved text ── */
+_philIriEditAiIntervention(learner, record) {
+  const ai = record.aiIntervention;
+  if (!ai || !ai.text) {
+    UI.toast('No saved plan to edit.', 'warning');
+    return;
+  }
+
+  const safeName = Utils.esc(Utils.fullName(learner));
+  const currentText = normalizePhilIriInterventionText(ai.text);
+
+  const m = UI.modal({
+    title: `Edit Intervention Plan · ${safeName}`,
+    size: 'modal-xl',
+    body: `
+      <div class="pir-ai-header mb-16">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+          ${Utils.avatarHTML(learner, 44, 15)}
+          <div style="flex:1;min-width:180px;">
+            <div style="font-weight:800;font-size:15px;">${safeName}</div>
+            <div class="text-xs text-muted">
+              LRN ${Utils.esc(learner.lrn || '—')}
+              · Originally generated ${ai.generatedAt ? Utils.timeAgo(ai.generatedAt) : '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-12" style="font-size:12px;">
+        ${icon('edit')}<div>
+          Edit the plan directly. Nothing is sent to the AI. Click <strong>Save Changes</strong> to keep your edits.
+        </div>
+      </div>
+
+      <div class="pir-ai-plan-wrap">
+        <textarea id="pir-ai-text" class="pir-ai-textarea" spellcheck="false">${Utils.esc(currentText)}</textarea>
+        <div class="pir-ai-hint">
+          <span class="text-xs text-muted">
+            ${icon('info')} Your edits are marked as "Edited by teacher".
+          </span>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" id="pir-ai-cancel">Cancel</button>
+      <button class="btn btn-primary" id="pir-ai-save">${icon('save')} Save Changes</button>
+    `
+  });
+
+  const cancelBtn = m.overlay.querySelector('#pir-ai-cancel');
+  const saveBtn   = m.overlay.querySelector('#pir-ai-save');
+
+  cancelBtn.onclick = m.close;
+
+  saveBtn.onclick = async () => {
+    const ta = m.overlay.querySelector('#pir-ai-text');
+    if (!ta) return;
+    const newText = ta.value.trim();
+    if (!newText) {
+      UI.toast('Plan text cannot be empty.', 'warning');
+      return;
+    }
+
+    try {
+      const fresh = await DB.get('philIriRecords', record.id);
+      const target = fresh || record;
+      target.aiIntervention = {
+        ...(target.aiIntervention || {}),
+        text: newText,
+        editedByTeacher: true,
+        editedAt: new Date().toISOString()
+      };
+      target.updatedAt = new Date().toISOString();
+      await DB.put('philIriRecords', target);
+
+      App.logActivity(
+        `Phil-IRI AI intervention edited for ${Utils.fullName(learner)}`,
+        'Reports'
+      );
+      UI.toast('Plan updated', 'success');
+      m.close();
+
+      // Re-render the Intervention tab
+      const root = document.getElementById('content')?.firstElementChild;
+      if (root && State.activeClass) {
+        const classRecords = await DB.getAllByIndex('philIriRecords', 'classId', State.activeClass.id).catch(() => []);
+        const content2 = root.querySelector('#pir-content');
+        if (content2) Pages._renderPhilIriIntervention(content2, State.activeClass, State.learners, classRecords);
+      }
+    } catch (err) {
+      console.error('[Phil-IRI AI] Edit save failed:', err);
+      UI.toast('Could not save: ' + (err.message || 'unknown error'), 'error', 5000);
+    }
+  };
+},
+
+/* ── Confirmation dialog for deleting a saved AI plan ── */
+_philIriConfirmClearAiIntervention(learner, record) {
+  UI.confirm({
+    title: 'Remove AI Intervention Plan?',
+    message: `This deletes the saved AI plan for <strong>${Utils.esc(Utils.fullName(learner))}</strong>. The auto-generated strategies from the DepEd manual will still be shown as a fallback.`,
+    confirmText: 'Remove plan',
+    confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      try {
+        const fresh = await DB.get('philIriRecords', record.id);
+        if (!fresh) return;
+        delete fresh.aiIntervention;
+        fresh.updatedAt = new Date().toISOString();
+        await DB.put('philIriRecords', fresh);
+
+        App.logActivity(
+          `Phil-IRI AI intervention cleared for ${Utils.fullName(learner)}`,
+          'Reports'
+        );
+        UI.toast('AI plan removed', 'success');
+
+        // Refresh the Intervention tab
+        const root = document.getElementById('content')?.firstElementChild;
+        if (root) {
+          const classRecords = await DB.getAllByIndex('philIriRecords', 'classId', State.activeClass.id).catch(() => []);
+          const content2 = root.querySelector('#pir-content');
+          if (content2) Pages._renderPhilIriIntervention(content2, State.activeClass, State.learners, classRecords);
+        }
+      } catch (err) {
+        console.error(err);
+        UI.toast('Could not remove plan.', 'error', 4000);
+      }
+    }
+  });
+},
 
 async _philIriPrintClassProfile(cls, learners, records) {
   // ── Reading level distribution ──
@@ -36077,13 +37053,10 @@ async _philIriPrintClassProfile(cls, learners, records) {
 
   document.getElementById('print-area').innerHTML = `
     <div class="print-phil-iri">
-      ${Pages._buildDepEdHeader()}
-      <h3 style="text-align:center;font-size:13pt;margin:10px 0 2px;text-transform:uppercase;">
-        Phil-IRI Class Reading Profile
-      </h3>
-      <p style="text-align:center;font-size:10pt;margin:0 0 12px;">
-        ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} &middot; SY ${Utils.esc(cls.schoolYear || State.schoolYear)}
-      </p>
+      ${Pages._buildDepEdHeader({
+        title: 'Phil-IRI Class Reading Profile',
+        subtitle: `${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} \u00b7 SY ${Utils.esc(cls.schoolYear || State.schoolYear)}`
+      })}
 
       <table style="width:100%;font-size:9pt;margin-bottom:14px;border-collapse:collapse;">
         <tr>
@@ -36188,49 +37161,47 @@ _philIriPrintForm3(cls, learners, records) {
   });
 
   document.getElementById('print-area').innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || '')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-      <h2 style="font-size:13pt;margin-top:8px;">PHIL-IRI FORM 3 — CLASS READING PROFILE</h2>
-    </div>
-    <div class="print-meta">
-      <span>Grade &amp; Section: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
-      <span>School Year: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
-      <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
-    </div>
-    <table>
-      <thead><tr>
-        <th>#</th><th>Learner</th><th>GST Score</th><th>Word Reading %</th><th>Comprehension %</th><th>Reading Level</th><th>Rate (WPM)</th>
-      </tr></thead>
-      <tbody>
-        ${learners.map((l, i) => {
-          const rec = records.find(r => r.learnerId === l.id) || {};
-          const label = rec.readingLevel === 'IND' ? 'Independent'
-            : rec.readingLevel === 'INS' ? 'Instructional'
-            : rec.readingLevel === 'FR' ? 'Frustration'
-            : rec.readingLevel === 'Non-Reader' ? 'Non-Reader' : '—';
-          return `<tr>
-            <td>${i + 1}</td><td>${Utils.esc(Utils.fullName(l))}</td>
-            <td style="text-align:center;">${rec.gstScore != null ? rec.gstScore : ''}</td>
-            <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : ''}</td>
-            <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : ''}</td>
-            <td style="text-align:center;"><strong>${label}</strong></td>
-            <td style="text-align:center;">${rec.readingRate || ''}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-      <tfoot>
-        <tr style="background:#eef3fa;font-weight:700;">
-          <td colspan="5" style="text-align:right;">TOTAL</td>
-          <td colspan="2" style="text-align:center;">
-            IND: ${levels['IND']} · INS: ${levels['INS']} · FR: ${levels['FR']} · NR: ${levels['Non-Reader']} · Not Assessed: ${levels['Not Assessed']}
-          </td>
-        </tr>
-      </tfoot>
-    </table>
-    <div class="print-footer">
-      <span>Prepared by: ${Utils.esc(Licensing.getReportSignatory(cls))}</span>
-      <span>${Utils.formatDate(Utils.todayISO())}</span>
+    <div class="print-phil-iri">
+      ${Pages._buildDepEdHeader({
+        title: 'Phil-IRI Form 3',
+        subtitle: 'Class Reading Profile'
+      })}
+      <div class="print-meta" style="display:flex;justify-content:space-between;margin:10px 0 8px;font-size:9pt;">
+        <span>Grade &amp; Section: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
+        <span>School Year: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+        <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Learner</th><th>GST Score</th><th>Word Reading %</th><th>Comprehension %</th><th>Reading Level</th><th>Rate (WPM)</th>
+        </tr></thead>
+        <tbody>
+          ${learners.map((l, i) => {
+            const rec = records.find(r => r.learnerId === l.id) || {};
+            const label = rec.readingLevel === 'IND' ? 'Independent'
+              : rec.readingLevel === 'INS' ? 'Instructional'
+              : rec.readingLevel === 'FR' ? 'Frustration'
+              : rec.readingLevel === 'Non-Reader' ? 'Non-Reader' : '—';
+            return `<tr>
+              <td>${i + 1}</td><td>${Utils.esc(Utils.fullName(l))}</td>
+              <td style="text-align:center;">${rec.gstScore != null ? rec.gstScore : ''}</td>
+              <td style="text-align:center;">${rec.wordReadingPct != null ? rec.wordReadingPct + '%' : ''}</td>
+              <td style="text-align:center;">${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : ''}</td>
+              <td style="text-align:center;"><strong>${label}</strong></td>
+              <td style="text-align:center;">${rec.readingRate || ''}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="background:#eef3fa;font-weight:700;">
+            <td colspan="5" style="text-align:right;">TOTAL</td>
+            <td colspan="2" style="text-align:center;">
+              IND: ${levels['IND']} · INS: ${levels['INS']} · FR: ${levels['FR']} · NR: ${levels['Non-Reader']} · Not Assessed: ${levels['Not Assessed']}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      ${Pages._buildDepEdFooter()}
     </div>`;
 
   App.logActivity('Phil-IRI Form 3 printed', 'Reports');
@@ -36280,26 +37251,24 @@ async _philIriPrintSchoolProfile(cls, learners, records) {
     </tr>`).join('');
 
   document.getElementById('print-area').innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || '')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-      <h2 style="font-size:13pt;margin-top:8px;">PHIL-IRI SCHOOL READING PROFILE</h2>
-    </div>
-    <div class="print-meta">
-      <span>School Year: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
-      <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
-    </div>
-    <table>
-      <thead><tr>
-        <th>Grade Level</th><th>Total Learners</th><th>Assessed</th>
-        <th>Independent</th><th>Instructional</th><th>Frustration</th>
-        <th>Non-Reader</th><th>Not Assessed</th>
-      </tr></thead>
-      <tbody>${gradeRows}</tbody>
-    </table>
-    <div class="print-footer">
-      <span>Prepared by: ${Utils.esc(Licensing.getReportSignatory(cls))}</span>
-      <span>${Utils.formatDate(Utils.todayISO())}</span>
+    <div class="print-phil-iri">
+      ${Pages._buildDepEdHeader({
+        title: 'Phil-IRI School Reading Profile',
+        subtitle: `School Year ${Utils.esc(cls.schoolYear || State.schoolYear)}`
+      })}
+      <div class="print-meta" style="display:flex;justify-content:space-between;margin:10px 0 8px;font-size:9pt;">
+        <span>School Year: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
+        <span>Date: ${Utils.formatDate(Utils.todayISO())}</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Grade Level</th><th>Total Learners</th><th>Assessed</th>
+          <th>Independent</th><th>Instructional</th><th>Frustration</th>
+          <th>Non-Reader</th><th>Not Assessed</th>
+        </tr></thead>
+        <tbody>${gradeRows}</tbody>
+      </table>
+      ${Pages._buildDepEdFooter()}
     </div>`;
 
   App.logActivity('Phil-IRI School Reading Profile printed', 'Reports');
@@ -36319,7 +37288,10 @@ _philIriPrintForm2(cls, learners, records) {
         : rec.readingLevel === 'Non-Reader' ? 'Non-Reader' : '—';
       return `
         <div class="sf9-page" style="page-break-after:always;">
-          <div class="sf9-title" style="text-align:center;font-weight:700;font-size:12pt;">PHIL-IRI FORM 2 — INDIVIDUAL SUMMARY RECORD</div>
+          ${Pages._buildDepEdHeader({
+            title: 'Phil-IRI Form 2',
+            subtitle: 'Individual Summary Record'
+          })}
           <table style="margin-top:12px;">
             <tr><th style="width:160px;">Learner</th><td>${Utils.esc(Utils.fullName(l))}</td>
                 <th style="width:80px;">LRN</th><td>${Utils.esc(l.lrn || '—')}</td></tr>
@@ -36344,19 +37316,14 @@ _philIriPrintForm2(cls, learners, records) {
                 <th>Critical</th><td>${rec.criticalCorrect || 0} / ${rec.criticalTotal || 0}</td></tr>
             <tr><th colspan="3">Comprehension Score</th><td colspan="3"><strong>${rec.comprehensionPct != null ? rec.comprehensionPct + '%' : '—'}</strong></td></tr>
           </table>
-          <div class="print-footer" style="margin-top:20px;">
-            <span>Adviser: ${Utils.esc(Licensing.getReportSignatory(cls))}</span>
-            <span>${Utils.formatDate(Utils.todayISO())}</span>
-          </div>
+          ${Pages._buildDepEdFooter()}
         </div>`;
     }).join('');
 
   document.getElementById('print-area').innerHTML = `
-    <div class="print-header">
-      <h1>${Utils.esc(school.name || '')}</h1>
-      <p>${Utils.esc(school.address || '')}</p>
-    </div>
-    ${pages}`;
+    <div class="print-phil-iri">
+      ${pages}
+    </div>`;
 
   App.logActivity('Phil-IRI Form 2 printed', 'Reports');
   window.print();

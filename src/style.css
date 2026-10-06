@@ -11171,3 +11171,251 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   .pir-gst-tick { transition: none; }
   .pir-gst-tick:hover:not(:disabled) { transform: none; }
 }
+/* ============================================================================
+   PHIL-IRI · AI INTERVENTION PANEL
+   ============================================================================ */
+
+/* ---- AI plan block inside an intervention card ---- */
+.pir-ai-block {
+  background: linear-gradient(135deg, rgba(0,56,168,0.05) 0%, rgba(247,201,72,0.04) 100%);
+  border: 1px solid rgba(0, 56, 168, 0.22);
+  border-left: 4px solid var(--deped-blue);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.pir-ai-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.pir-ai-block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--deped-blue);
+  flex-wrap: wrap;
+}
+.pir-ai-block-title svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--accent-gold);
+}
+
+.pir-ai-block-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(247, 201, 72, 0.25);
+  color: #B45309;
+  text-transform: none;
+}
+
+.pir-ai-block-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.pir-ai-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+.pir-ai-icon-btn svg { width: 13px; height: 13px; display: block; }
+.pir-ai-icon-btn:hover {
+  background: var(--light-blue);
+  border-color: var(--deped-blue);
+  color: var(--deped-blue);
+}
+.pir-ai-icon-btn-danger:hover {
+  background: rgba(220, 53, 69, 0.1);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ---- AI plan text (pre-wrapped plain text) ---- */
+.pir-ai-block-text {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.pir-ai-block-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  font-style: italic;
+}
+
+/* ---- Empty state ---- */
+.pir-ai-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+.pir-ai-empty-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 200px;
+}
+.pir-ai-empty-text > svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--accent-gold);
+  margin-top: 2px;
+}
+
+/* ---- Collapsible auto-strategies fallback ---- */
+.pir-auto-strategies {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  overflow: hidden;
+}
+.pir-auto-strategies > summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  list-style: none;
+}
+.pir-auto-strategies > summary::-webkit-details-marker { display: none; }
+.pir-auto-strategies > summary svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.pir-auto-strategies > summary:hover { background: var(--bg); color: var(--text); }
+.pir-auto-strategies[open] > summary { border-bottom: 1px solid var(--border); }
+.pir-auto-strategies > div { padding: 0 14px 12px; }
+
+/* ---- Modal: loading spinner ---- */
+.pir-ai-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  gap: 12px;
+}
+
+.pir-ai-spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--deped-blue);
+  animation: pirAiSpin 0.8s linear infinite;
+  display: block;
+}
+@keyframes pirAiSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Modal: editable plan textarea ---- */
+.pir-ai-plan-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pir-ai-textarea {
+  width: 100%;
+  min-height: 460px;
+  padding: 16px 18px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.pir-ai-textarea:focus {
+  border-color: var(--deped-blue);
+  box-shadow: 0 0 0 3px rgba(0, 56, 168, 0.12);
+}
+
+.pir-ai-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pir-ai-hint svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -2px;
+}
+
+/* Header inside the modal */
+.pir-ai-header {
+  padding: 12px 14px;
+  background: var(--bg);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  .pir-ai-spinner { animation: none; }
+}
+
+/* ---- Mobile ---- */
+@media (max-width: 640px) {
+  .pir-ai-textarea { min-height: 320px; font-size: 12px; padding: 12px; }
+  .pir-ai-block-text { font-size: 11px; }
+  .pir-ai-empty { flex-direction: column; align-items: stretch; }
+  .pir-ai-empty .btn { width: 100%; justify-content: center; }
+}
