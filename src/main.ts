@@ -2196,6 +2196,37 @@ const Utils = {
     if (raw === undefined || raw === null || String(raw).trim() === '') return true;
     return String(raw).trim().toLowerCase() === 'active';
   },
+    /** Strip a leading option letter from a choice string.
+   *  Handles the common forms the AI produces:
+   *    "A. Pedicure"      → "Pedicure"
+   *    "A) Pedicure"      → "Pedicure"
+   *    "(A) Pedicure"     → "Pedicure"
+   *    "A: Pedicure"      → "Pedicure"
+   *    "A - Pedicure"     → "Pedicure"
+   *    "[A] Pedicure"     → "Pedicure"
+   *
+   *  The prefix is only stripped when the letter matches the choice's
+   *  actual position (A for index 0, B for index 1, …) AND is followed
+   *  by a punctuation separator and whitespace. This avoids mangling a
+   *  legitimate choice like "A-1 Steak Sauce" or "Vitamin B12".
+   */
+  stripChoiceLetter(text, index) {
+    if (text == null) return '';
+    const s = String(text).trim();
+    if (!s) return '';
+    // index < 0 → letter-agnostic mode; try every letter A..Z.
+    const letters = index >= 0
+      ? [String.fromCharCode(65 + index)]
+      : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    for (const L of letters) {
+      const re = new RegExp(
+        `^[\\[\\(]?\\s*${L}\\s*[\\]\\)]?\\s*[\\.\\:\\)\\-–—]\\s+`,
+        'i'
+      );
+      if (re.test(s)) return s.replace(re, '').trim();
+    }
+    return s;
+  },  
  
 };
 
@@ -7511,6 +7542,31 @@ const Presenter = {
     });
   },
 
+    /** Strip a leading option letter from a choice string.
+   *  Handles the common forms the AI produces:
+   *    "A. Pedicure"      → "Pedicure"
+   *    "A) Pedicure"      → "Pedicure"
+   *    "(A) Pedicure"     → "Pedicure"
+   *    "A: Pedicure"      → "Pedicure"
+   *    "A - Pedicure"     → "Pedicure"
+   *  The prefix is only stripped when the letter matches the choice's
+   *  actual position (A for index 0, B for index 1, …) AND is followed
+   *  by a punctuation separator. This avoids mangling a legit choice
+   *  like "A-1 steak sauce" or "Vitamin B12".
+   */
+  _stripChoiceLetter(text, index) {
+    if (text == null) return '';
+    const s = String(text).trim();
+    const expected = String.fromCharCode(65 + index);   // A, B, C, D…
+    // Regex: optional leading "(" or "[", the expected letter (case-insensitive),
+    // optional closing ")" or "]", then one of . ) : - – —, then whitespace.
+    const re = new RegExp(
+      `^[\\[\\(]?\\s*${expected}\\s*[\\]\\)]?\\s*[\\.\\:\\)\\-–—]\\s+`,
+      'i'
+    );
+    return s.replace(re, '').trim() || s;
+  },
+
   /* ========================================================================
      LEARNER-WINDOW SIDE
      ======================================================================== */
@@ -8633,6 +8689,7 @@ _presRender(state) {
       </div>`;
   },
   /* ---------- Quiz · Learner-facing renderer ---------- */
+/* ---------- Quiz · Learner-facing renderer ---------- */
 _renderQuiz(body, p) {
   if (!p) return;
 
@@ -8652,42 +8709,85 @@ _renderQuiz(body, p) {
   // For True/False with no explicit choices, render dedicated TRUE / FALSE buttons
   const isTrueFalse = !hasChoices && /true\s*\/?\s*false/i.test(p.questionType);
 
+  // ---- Adaptive column layout -------------------------------------------
+  // 2 columns only when choices are SHORT. Longer options go single-column
+  // so every option stays full-width and easy to scan from the back.
+  const avgChoiceLen = hasChoices
+    ? p.choices.reduce((s, c) => s + String(c || '').length, 0) / p.choices.length
+    : 0;
+  const useTwoCols = hasChoices && p.choices.length >= 2 && p.choices.length <= 4 && avgChoiceLen <= 26;
+  const gridCols = useTwoCols ? 'repeat(2, minmax(0, 1fr))' : '1fr';
+
   const choicesHTML = hasChoices
-    ? `<div style="display:grid;grid-template-columns:${p.choices.length <= 4 ? 'repeat(2, 1fr)' : '1fr'};gap:14px;width:100%;max-width:1050px;margin:0 auto;">
+    ? `<div style="display:grid;grid-template-columns:${gridCols};
+                    gap:clamp(14px, 1.6vh, 26px);
+                    width:100%;max-width:min(96vw, 1600px);margin:0 auto;">
         ${p.choices.map((c, i) => `
-          <div style="display:flex;align-items:center;gap:16px;padding:18px 22px;
-                      background:rgba(255,255,255,0.07);
-                      border:2px solid rgba(255,255,255,0.14);
-                      border-radius:14px;transition:background .15s;">
-            <div style="width:42px;height:42px;border-radius:50%;
-                        background:rgba(255,255,255,0.14);color:#fff;
+          <div style="display:flex;align-items:center;
+                      gap:clamp(16px, 1.5vw, 28px);
+                      padding:clamp(22px, 2.4vh, 40px) clamp(24px, 2vw, 40px);
+                      background:rgba(255,255,255,0.10);
+                      border:clamp(2px, 0.2vw, 3.5px) solid rgba(255,255,255,0.22);
+                      border-radius:clamp(14px, 1.2vw, 22px);
+                      box-shadow:0 6px 26px rgba(0,0,0,0.22);">
+            <div style="width:clamp(58px, 5vw, 88px);
+                        height:clamp(58px, 5vw, 88px);
+                        border-radius:50%;
+                        background:linear-gradient(135deg,
+                                    rgba(255,255,255,0.24) 0%,
+                                    rgba(255,255,255,0.10) 100%);
+                        border:clamp(2px, 0.2vw, 3px) solid rgba(255,255,255,0.30);
+                        color:#fff;
                         display:flex;align-items:center;justify-content:center;
-                        font-weight:800;font-size:17px;flex-shrink:0;">
+                        font-weight:900;
+                        font-size:clamp(24px, 2.3vw, 40px);
+                        flex-shrink:0;
+                        box-shadow:inset 0 1px 0 rgba(255,255,255,0.25);">
               ${letters[i] || (i + 1)}
             </div>
-            <div style="flex:1;font-size:clamp(16px,1.5vw,22px);
-                        color:#fff;font-weight:500;line-height:1.35;">
-              ${Utils.esc(c)}
+            <div style="flex:1;
+                        font-size:clamp(22px, 2.3vw, 46px);
+                        color:#fff;font-weight:700;
+                        line-height:1.24;
+                        letter-spacing:-0.2px;
+                        word-break:break-word;
+                        text-shadow:0 2px 12px rgba(0,0,0,0.35);">
+              ${Utils.esc(this._stripChoiceLetter(c, i))}
             </div>
           </div>`).join('')}
       </div>`
     : isTrueFalse
-      ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;width:100%;max-width:760px;margin:0 auto;">
-          <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:28px;
-                      background:rgba(16,185,129,0.14);
-                      border:2px solid rgba(16,185,129,0.4);border-radius:16px;">
-            <span style="font-size:28px;">✓</span>
-            <span style="font-size:clamp(22px,2vw,32px);font-weight:800;color:#10B981;">TRUE</span>
+      ? `<div style="display:grid;grid-template-columns:1fr 1fr;
+                      gap:clamp(18px, 2vw, 34px);
+                      width:100%;max-width:min(80vw, 1200px);margin:0 auto;">
+          <div style="display:flex;align-items:center;justify-content:center;
+                      gap:clamp(14px, 1.4vw, 24px);
+                      padding:clamp(28px, 3.4vh, 54px);
+                      background:rgba(16,185,129,0.16);
+                      border:clamp(2px, 0.25vw, 4px) solid rgba(16,185,129,0.5);
+                      border-radius:clamp(16px, 1.4vw, 24px);
+                      box-shadow:0 6px 30px rgba(16,185,129,0.22);">
+            <span style="font-size:clamp(34px, 3.4vw, 62px);">✓</span>
+            <span style="font-size:clamp(34px, 3.4vw, 68px);
+                         font-weight:900;color:#10B981;letter-spacing:1.5px;">TRUE</span>
           </div>
-          <div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:28px;
-                      background:rgba(239,68,68,0.14);
-                      border:2px solid rgba(239,68,68,0.4);border-radius:16px;">
-            <span style="font-size:28px;">✗</span>
-            <span style="font-size:clamp(22px,2vw,32px);font-weight:800;color:#EF4444;">FALSE</span>
+          <div style="display:flex;align-items:center;justify-content:center;
+                      gap:clamp(14px, 1.4vw, 24px);
+                      padding:clamp(28px, 3.4vh, 54px);
+                      background:rgba(239,68,68,0.16);
+                      border:clamp(2px, 0.25vw, 4px) solid rgba(239,68,68,0.5);
+                      border-radius:clamp(16px, 1.4vw, 24px);
+                      box-shadow:0 6px 30px rgba(239,68,68,0.22);">
+            <span style="font-size:clamp(34px, 3.4vw, 62px);">✗</span>
+            <span style="font-size:clamp(34px, 3.4vw, 68px);
+                         font-weight:900;color:#EF4444;letter-spacing:1.5px;">FALSE</span>
           </div>
         </div>`
-      : `<div style="text-align:center;padding:36px 20px;color:rgba(255,255,255,0.55);
-                     font-size:clamp(16px,1.4vw,20px);font-style:italic;">
+      : `<div style="text-align:center;
+                     padding:clamp(30px, 4vh, 60px) 20px;
+                     color:rgba(255,255,255,0.68);
+                     font-size:clamp(22px, 2vw, 40px);
+                     font-style:italic;font-weight:600;">
           ${ type === 'essay'          ? 'Write your answer on your paper.'
            : type === 'identification' ? 'Write your answer.'
            : type === 'short answer'   ? 'Answer briefly.'
@@ -8695,25 +8795,40 @@ _renderQuiz(body, p) {
         </div>`;
 
   body.innerHTML = `
-    <div style="width:100%;max-width:1300px;display:flex;flex-direction:column;gap:32px;padding:20px;">
+    <div style="width:100%;max-width:min(96vw, 1700px);
+                display:flex;flex-direction:column;
+                gap:clamp(20px, 3vh, 44px);
+                padding:clamp(12px, 2vh, 28px);">
 
       <!-- Header: item number + timer -->
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;">
-        <div style="display:flex;align-items:center;gap:16px;min-width:0;">
-          <div style="width:68px;height:68px;border-radius:18px;
-                      background:rgba(255,255,255,0.09);
-                      border:2px solid rgba(255,255,255,0.2);
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  gap:20px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;
+                    gap:clamp(14px, 1.3vw, 24px);min-width:0;">
+          <div style="width:clamp(68px, 5.8vw, 104px);
+                      height:clamp(68px, 5.8vw, 104px);
+                      border-radius:clamp(16px, 1.4vw, 26px);
+                      background:linear-gradient(135deg,
+                                  rgba(247,201,72,0.26) 0%,
+                                  rgba(247,201,72,0.10) 100%);
+                      border:clamp(2px, 0.22vw, 3.5px) solid rgba(247,201,72,0.55);
                       display:flex;align-items:center;justify-content:center;
-                      font-size:26px;font-weight:800;color:#fff;flex-shrink:0;">
+                      font-size:clamp(30px, 2.8vw, 52px);
+                      font-weight:900;color:#F7C948;
+                      flex-shrink:0;
+                      box-shadow:0 4px 22px rgba(247,201,72,0.20);">
             ${p.questionNumber}
           </div>
           <div style="min-width:0;">
-            <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;
-                        color:rgba(255,255,255,0.55);font-weight:700;">
+            <div style="font-size:clamp(11px, 1vw, 16px);
+                        letter-spacing:2.5px;text-transform:uppercase;
+                        color:rgba(255,255,255,0.62);font-weight:800;">
               Item ${p.questionNumber} of ${p.totalQuestions}
             </div>
-            <div style="font-size:14px;color:rgba(255,255,255,0.75);margin-top:3px;
-                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            <div style="font-size:clamp(13px, 1.2vw, 22px);
+                        color:rgba(255,255,255,0.80);margin-top:4px;
+                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                        font-weight:600;">
               ${Utils.esc(p.quizTitle || '')}
             </div>
           </div>
@@ -8721,16 +8836,25 @@ _renderQuiz(body, p) {
 
         ${hasTimer ? `
           <div id="pq-timer-wrap"
-               style="display:flex;align-items:center;gap:14px;padding:10px 22px;
-                      background:rgba(255,255,255,0.06);
-                      border:2px solid ${timerColor}55;border-radius:16px;">
-            <svg id="pq-timer-icon" width="22" height="22" viewBox="0 0 24 24"
-                 fill="none" stroke="${timerColor}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+               style="display:flex;align-items:center;
+                      gap:clamp(10px, 1vw, 20px);
+                      padding:clamp(8px, 1vh, 18px) clamp(18px, 1.8vw, 34px);
+                      background:rgba(255,255,255,0.08);
+                      border:clamp(2px, 0.22vw, 3.5px) solid ${timerColor}77;
+                      border-radius:clamp(14px, 1.2vw, 22px);">
+            <svg id="pq-timer-icon"
+                 width="clamp(20px, 1.9vw, 34px)"
+                 height="clamp(20px, 1.9vw, 34px)"
+                 viewBox="0 0 24 24"
+                 fill="none" stroke="${timerColor}" stroke-width="2.4"
+                 stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
             </svg>
             <div id="pq-timer-value"
-                 style="font-size:clamp(28px,3vw,42px);font-weight:800;
-                        font-variant-numeric:tabular-nums;color:${timerColor};
+                 style="font-size:clamp(30px, 3.6vw, 60px);
+                        font-weight:900;
+                        font-variant-numeric:tabular-nums;
+                        color:${timerColor};
                         letter-spacing:-1px;line-height:1;">
               ${timeStr}
             </div>
@@ -8738,8 +8862,13 @@ _renderQuiz(body, p) {
       </div>
 
       <!-- Question -->
-      <div style="font-size:clamp(24px,3vw,42px);font-weight:700;color:#fff;
-                  line-height:1.3;letter-spacing:-0.5px;text-align:center;padding:0 20px;">
+      <div style="font-size:clamp(28px, 3.3vw, 68px);
+                  font-weight:800;color:#fff;
+                  line-height:1.26;letter-spacing:-0.6px;
+                  text-align:center;
+                  padding:0 clamp(10px, 2vw, 40px);
+                  text-wrap:balance;
+                  text-shadow:0 2px 26px rgba(0,0,0,0.38);">
         ${Utils.esc(p.questionText || '')}
       </div>
 
@@ -8747,12 +8876,21 @@ _renderQuiz(body, p) {
       ${choicesHTML}
 
       <!-- Progress dots -->
-      <div style="display:flex;justify-content:center;gap:6px;margin-top:8px;flex-wrap:wrap;">
+      <div style="display:flex;justify-content:center;
+                  gap:clamp(5px, 0.55vw, 11px);margin-top:4px;flex-wrap:wrap;">
         ${Array.from({ length: p.totalQuestions }, (_, i) => `
-          <span style="width:${i === (p.questionNumber - 1) ? '22px' : '8px'};
-                       height:8px;border-radius:4px;
-                       background:${i === (p.questionNumber - 1) ? '#F7C948' : 'rgba(255,255,255,0.2)'};
-                       transition:all .25s;"></span>`).join('')}
+          <span style="width:${i === (p.questionNumber - 1)
+                                ? 'clamp(22px, 2.4vw, 44px)'
+                                : 'clamp(8px, 0.75vw, 13px)'};
+                       height:clamp(8px, 0.75vw, 13px);
+                       border-radius:6px;
+                       background:${i === (p.questionNumber - 1)
+                                     ? '#F7C948'
+                                     : 'rgba(255,255,255,0.22)'};
+                       transition:all .25s;
+                       box-shadow:${i === (p.questionNumber - 1)
+                                     ? '0 0 14px rgba(247,201,72,0.60)'
+                                     : 'none'};"></span>`).join('')}
       </div>
 
     </div>`;
@@ -15386,11 +15524,13 @@ async exportGrades() {
 },
 
   /* ---------- ASSESSMENT ---------- */
-  async assessmentBuilder(root) {
+async assessmentBuilder(root) {
     const assessments = (await DB.getAll('assessments')).filter(a => a.classId === (State.activeClass ? State.activeClass.id : ''));
     root.innerHTML = `
-      <div class="page-head"><div><h2>Assessment Builder</h2><p>Create and manage assessments</p></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.openAssessmentModal()">${icon('edit')} New Assessment</button></div></div>
+      <div class="page-head">
+        <div><h2>Assessment Builder</h2><p>Create and manage assessments</p></div>
+        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.openAssessmentModal()">${icon('edit')} New Assessment</button></div>
+      </div>
       <div class="card">
         ${assessments.length === 0
           ? UI.emptyState({icon:'edit', title:'No assessments yet', message:'Create your first assessment.', actionLabel:'+ New Assessment', actionFn:'Pages.openAssessmentModal()'})
@@ -15407,6 +15547,8 @@ async exportGrades() {
                 <td>${a.maxScore||100}</td>
                 <td class="table-actions">
                   <button class="icon-btn" title="Edit" data-assess-edit="${Utils.attr(a.id)}">${icon('edit')}</button>
+                  <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
+                  <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
                   <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
                   <button class="icon-btn" title="Delete" data-assess-del="${Utils.attr(a.id)}">${icon('trash')}</button>
                 </td>
@@ -15414,9 +15556,12 @@ async exportGrades() {
             </table></div>`}
       </div>`;
     root.querySelectorAll('[data-assess-edit]').forEach(el => el.addEventListener('click', () => Pages.openAssessmentModal(el.dataset.assessEdit)));
+    root.querySelectorAll('[data-assess-print]').forEach(el => el.addEventListener('click', () => Pages.printAssessment(el.dataset.assessPrint)));
+    root.querySelectorAll('[data-assess-export]').forEach(el => el.addEventListener('click', () => Pages.exportAssessmentWord(el.dataset.assessExport)));
     root.querySelectorAll('[data-assess-quiz]').forEach(el => el.addEventListener('click', () => Pages.startQuiz(el.dataset.assessQuiz)));
     root.querySelectorAll('[data-assess-del]').forEach(el => el.addEventListener('click', () => Pages.deleteAssessment(el.dataset.assessDel)));
-  },
+},
+
   async openAssessmentModal(id) {
     if (!State.activeClass) { UI.toast('Select a class first', 'warning'); return; }
     const existing = id ? await DB.get('assessments', id) : null;
@@ -15425,6 +15570,16 @@ async exportGrades() {
     let expandedIdx = -1; // index of the question currently being edited inline (-1 = none)
 
     const renderQuestions = (container) => {
+      // ---- Keep the heading count in sync with the draft ----
+      // renderQuestions runs after every add / remove / edit, so placing
+      // the refresh here guarantees the count is never stale.
+      const cntEl = m.overlay.querySelector('#af-qcount');
+      if (cntEl) {
+        cntEl.textContent = qDraft.length
+          ? `(${qDraft.length} item${qDraft.length === 1 ? '' : 's'})`
+          : '';
+      }
+
       if (!qDraft.length) {
         container.innerHTML = '<p class="text-muted text-sm">No questions yet. Add one below.</p>';
         return;
@@ -15601,7 +15756,16 @@ async exportGrades() {
         <select class="form-control" id="af-term">${policy.terms.map(t => `<option value="${Utils.attr(t)}" ${(existing && existing.term===t) || (!existing && t===State.gbTerm) ? 'selected':''}>${Utils.esc(t)}</option>`).join('')}</select></div>`}
       <div class="form-group"><label>Instructions</label><textarea class="form-control" id="af-instr" rows="2">${existing ? Utils.esc(existing.instructions||'') : ''}</textarea></div>
       <div class="divider"></div>
-      <h4 style="font-size:14px;margin-bottom:8px;">Questions</h4>
+      <div class="flex-between" style="margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;">
+        <h4 style="font-size:14px;margin:0;">
+          Questions
+          <span id="af-qcount" class="text-muted" style="font-weight:400;font-size:12px;margin-left:4px;"></span>
+        </h4>
+        <button class="btn btn-sm btn-outline" id="af-shuffle" type="button"
+                title="Randomly reorder all questions">
+          ${icon('shuffle')} Shuffle Questions
+        </button>
+      </div>
       <div id="af-questions"></div>
       <div class="card" style="background:var(--bg);padding:12px;margin-top:10px;">
         <strong class="text-sm">Add Question</strong>
@@ -15624,6 +15788,25 @@ async exportGrades() {
     });
     const qList = m.overlay.querySelector('#af-questions');
     renderQuestions(qList);
+
+    // ---- Shuffle button ----
+    // Randomly reorders the draft in place using Fisher–Yates. Question IDs
+    // travel with their questions, so nothing is lost — only the order changes.
+    m.overlay.querySelector('#af-shuffle').onclick = () => {
+      if (qDraft.length < 2) {
+        UI.toast('Add at least 2 questions before shuffling.', 'warning');
+        return;
+      }
+      // Fisher–Yates shuffle — uniform, unbiased distribution.
+      for (let i = qDraft.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [qDraft[i], qDraft[j]] = [qDraft[j], qDraft[i]];
+      }
+      expandedIdx = -1;           // close any card that was being edited
+      renderQuestions(qList);
+      UI.toast(`Shuffled ${qDraft.length} questions.`, 'success', 2000);
+    };
+
     const typeSel = m.overlay.querySelector('#af-q-type');
     const choicesWrap = m.overlay.querySelector('#af-q-choices-wrap');
     const answerWrap = m.overlay.querySelector('#af-q-answer-wrap');
@@ -15668,6 +15851,381 @@ async exportGrades() {
       UI.toast('Assessment saved', 'success');
     };
   },
+
+  /* ============================================================================
+   ASSESSMENT PRINT / EXPORT
+   ----------------------------------------------------------------------------
+   Renders a saved assessment as a clean, printable exam document. The same
+   HTML builder feeds both Print (browser print dialog) and Export (Word .doc).
+   ============================================================================ */
+
+/** Build the exam HTML. Shared by printAssessment() and exportAssessmentWord().
+ *  opts.forWord — set to true when building for a Word export (uses pt units
+ *                 and relative image paths rather than base64 seals). */
+_renderAssessmentHTML(a, opts = {}) {
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const cls     = State.activeClass;
+  const esc     = Utils.esc;
+  const forWord = !!opts.forWord;
+  const includeKey = opts.includeAnswerKey !== false;
+
+  const questions = Array.isArray(a.questions) ? a.questions.slice() : [];
+  if (!questions.length) return '';
+
+  // ---- Total points ------------------------------------------------------
+  const totalPoints = questions.reduce((s, q) => s + (Number(q.points) || 1), 0);
+
+  // ---- Group by part (if questions carry a `part` field) -----------------
+  const byPart = {};
+  const partOrder = [];
+  questions.forEach((q, i) => {
+    const p = (q.part || '').trim();
+    if (!byPart[p]) { byPart[p] = []; partOrder.push(p); }
+    byPart[p].push({ q, originalIndex: i });
+  });
+
+  // If nothing has a real part label, just use one flat section.
+  const hasRealParts = partOrder.some(p => p);
+  const sections = hasRealParts
+    ? partOrder
+    : [''];
+
+  // ---- Numbering: sequential across the whole exam ----------------------
+  let runningNumber = 0;
+
+  // ---- Render each question ---------------------------------------------
+  const renderQuestion = (q, n) => {
+    const type    = (q.type || '').toLowerCase();
+    const choices = Array.isArray(q.choices) ? q.choices : [];
+    const points  = Number(q.points) || 1;
+
+    // Strip any leading "A. " / "B) " prefix that leaked through, since we
+    // add our own A/B/C/D labels below.
+    const cleanChoices = choices.map((c, i) => Utils.stripChoiceLetter(c, i));
+
+    const pointsLabel = points > 1
+      ? ` <span style="font-weight:400;font-size:9pt;color:#555;">(${points} pts)</span>`
+      : '';
+
+    let choiceBlock = '';
+    if (type === 'multiple choice' && cleanChoices.length) {
+      choiceBlock = `<div style="margin:3pt 0 0 22pt;font-size:10.5pt;line-height:1.5;">
+        ${cleanChoices.map((c, i) =>
+          `<div style="margin:2pt 0;">
+             <strong style="display:inline-block;width:16pt;">${String.fromCharCode(65 + i)}.</strong>
+             ${esc(c)}
+           </div>`
+        ).join('')}
+      </div>`;
+    } else if (type === 'true/false') {
+      choiceBlock = `<div style="margin:3pt 0 0 22pt;font-size:10.5pt;font-style:italic;color:#555;">
+        Write <strong>TRUE</strong> or <strong>FALSE</strong> on the blank.
+      </div>`;
+    } else if (type === 'essay') {
+      // Reserve a few lines of writing space
+      choiceBlock = `<div style="margin:4pt 0 0 22pt;height:64pt;border-bottom:1px dotted #999;"></div>`;
+    }
+
+    return `<div style="margin-bottom:12pt;page-break-inside:avoid;">
+      <div style="font-size:11pt;line-height:1.5;">
+        <strong>${n}.</strong> ${esc(q.text || '')}${pointsLabel}
+      </div>
+      ${choiceBlock}
+    </div>`;
+  };
+
+  // ---- Build exam body --------------------------------------------------
+  let examHTML = '';
+  sections.forEach((partLabel, si) => {
+    const items = byPart[partLabel] || [];
+    if (!items.length) return;
+
+    if (partLabel) {
+      examHTML += `<h2 style="font-size:12pt;font-weight:800;text-transform:uppercase;
+                             margin:${si === 0 ? '10pt' : '18pt'} 0 6pt 0;
+                             padding-bottom:2pt;border-bottom:1.5pt solid #000;
+                             letter-spacing:0.4px;">
+        ${esc(partLabel)}
+      </h2>`;
+    }
+
+    items.forEach(item => {
+      runningNumber++;
+      examHTML += renderQuestion(item.q, runningNumber);
+    });
+  });
+
+  // ---- Answer key -------------------------------------------------------
+  let answerKeyHTML = '';
+  if (includeKey) {
+    const keyRows = questions.map((q, i) => {
+      const type = (q.type || '').toLowerCase();
+      let display = String(q.answer || '').trim();
+
+      // For MC, resolve full text back to a letter (nicer for the key)
+      if (type === 'multiple choice' && Array.isArray(q.choices) && q.choices.length) {
+        const cleanChoices = q.choices.map((c, idx) => Utils.stripChoiceLetter(c, idx));
+        const idx = cleanChoices.findIndex(
+          c => c.toLowerCase() === display.toLowerCase()
+        );
+        if (idx >= 0) display = String.fromCharCode(65 + idx) + '. ' + cleanChoices[idx];
+      }
+
+      return `<tr>
+        <td style="border:0.5pt solid #000;padding:3pt 5pt;text-align:center;width:24pt;font-weight:700;">${i + 1}</td>
+        <td style="border:0.5pt solid #000;padding:3pt 5pt;">${esc(display || '—')}</td>
+      </tr>`;
+    }).join('');
+
+    answerKeyHTML = `
+      <div style="page-break-before:always;">
+        <h2 style="font-size:13pt;font-weight:800;text-align:center;
+                   text-transform:uppercase;margin:0 0 10pt 0;
+                   padding-bottom:4pt;border-bottom:1.5pt solid #000;
+                   letter-spacing:0.5px;">Answer Key</h2>
+        <p style="font-size:9pt;color:#555;text-align:center;margin:0 0 10pt 0;">
+          ${esc(a.title || '')} · ${totalPoints} total points
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+          <tbody>${keyRows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // ---- Header block ------------------------------------------------------
+  const headerHTML = Pages._buildDepEdHeader({
+    title: a.title || 'Assessment',
+    subtitle: [
+      cls ? `${cls.gradeLevel} – ${cls.section}` : '',
+      cls && cls.subject ? cls.subject : '',
+      `SY ${cls && cls.schoolYear ? cls.schoolYear : State.schoolYear}`
+    ].filter(Boolean).join('  ·  ')
+  });
+
+  // ---- Meta strip --------------------------------------------------------
+  const metaHTML = `
+    <table style="width:100%;font-size:9pt;margin:4pt 0 10pt 0;border-collapse:collapse;">
+      <tr>
+        <td style="padding:4pt 6pt;border:0.5pt solid #000;">
+          <strong>Teacher:</strong> ${esc(Licensing.getReportSignatory(cls) || teacher.fullName || '—')}
+        </td>
+        <td style="padding:4pt 6pt;border:0.5pt solid #000;">
+          <strong>Total Points:</strong> ${totalPoints}
+        </td>
+        <td style="padding:4pt 6pt;border:0.5pt solid #000;">
+          <strong>Time Limit:</strong> ${a.timeLimit ? a.timeLimit + ' min' : '—'}
+        </td>
+      </tr>
+    </table>`;
+
+  // ---- Directions --------------------------------------------------------
+  const directionsHTML = a.instructions
+    ? `<div style="margin:0 0 12pt 0;font-size:10pt;line-height:1.5;">
+         <strong>DIRECTIONS:</strong> ${esc(a.instructions)}
+       </div>`
+    : '';
+
+  return `
+    <div class="print-assessment" style="font-family:'Times New Roman',Times,serif;color:#000;">
+      ${headerHTML}
+      <div class="assessment-body">
+        ${metaHTML}
+        ${directionsHTML}
+        ${examHTML}
+        ${answerKeyHTML}
+      </div>
+    </div>`;
+},
+
+/** Print a saved assessment (browser print dialog → PDF or paper). */
+async printAssessment(id) {
+  const a = await DB.get('assessments', id);
+  if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+  if (!a.questions || !a.questions.length) {
+    UI.toast('This assessment has no questions to print.', 'warning');
+    return;
+  }
+
+  const html = Pages._renderAssessmentHTML(a, { forWord: false, includeAnswerKey: true });
+  if (!html) { UI.toast('Nothing to print.', 'warning'); return; }
+
+  document.getElementById('print-area').innerHTML = html;
+  App.logActivity('Assessment printed: ' + a.title, 'Assessments');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      const area = document.getElementById('print-area');
+      if (area) area.innerHTML = '';
+    }, 1500);
+  });
+},
+
+/** Export a saved assessment as a Word .doc file. */
+async exportAssessmentWord(id) {
+  const a = await DB.get('assessments', id);
+  if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+  if (!a.questions || !a.questions.length) {
+    UI.toast('This assessment has no questions to export.', 'warning');
+    return;
+  }
+
+  UI.toast('Preparing Word document…', 'info', 1500);
+
+  // Reuse the shared renderer, but build a Word-wrapped document so that
+  // Microsoft Word honours the page geometry and fonts.
+  const bodyHTML = Pages._renderAssessmentHTML(a, { forWord: true, includeAnswerKey: true });
+
+  const doc = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office"
+          xmlns:w="urn:schemas-microsoft-com:office:word"
+          xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="utf-8">
+      <title>${Utils.esc(a.title || 'Assessment')}</title>
+      <!--[if gte mso 9]>
+      <xml>
+        <w:WordDocument>
+          <w:View>Print</w:View>
+          <w:Zoom>100</w:Zoom>
+          <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+      </xml>
+      <![endif]-->
+      <style>
+        /* ---- Page geometry ---- */
+        @page WordSection1 {
+          size: 8.5in 11.0in;
+          mso-page-orientation: portrait;
+          margin: 0.75in;
+          mso-header-margin: 0.5in;
+          mso-footer-margin: 0.5in;
+          mso-paper-source: 0;
+        }
+        div.WordSection1 { page: WordSection1; }
+
+        /* ---- Base typography ---- */
+        body {
+          font-family: 'Times New Roman', Times, serif;
+          font-size: 11pt;
+          line-height: 1.4;
+          color: #000;
+          margin: 0;
+          padding: 0;
+        }
+
+        h1 { font-size: 15pt; font-weight: bold; margin: 0 0 12pt 0; text-align: center; }
+        h2 { font-size: 12pt; font-weight: bold; margin: 14pt 0 6pt 0;
+             border-bottom: 1.5pt solid #000; padding-bottom: 3pt;
+             page-break-after: avoid; }
+
+        table { border-collapse: collapse; }
+        td    { vertical-align: top; }
+
+        /* Answer key starts on a fresh page */
+        div[style*="page-break-before:always"] { page-break-before: always; }
+
+        /* ============================================================
+           DEPED LETTERHEAD — every element centered
+           Word does not reliably inherit text-align from a parent, so
+           each class sets text-align:center explicitly.
+           ============================================================ */
+        .print-deped-header {
+          text-align: center;
+          margin-bottom: 20px;
+          padding-bottom: 4px;
+          font-family: 'Times New Roman', Times, serif;
+        }
+        .print-deped-header .pdh-seal img {
+          display: block;
+          margin: 0 auto;
+          width: 76pt;
+          height: 76pt;
+        }
+        .print-deped-header .pdh-text {
+          text-align: center;
+          line-height: 1.25;
+          color: #000;
+          margin-top: 6px;
+        }
+        .print-deped-header .pdh-republic {
+          font-family: 'Old English Text MT', 'Times New Roman', serif;
+          font-size: 12pt;
+          letter-spacing: 0.3px;
+          text-align: center;
+        }
+        .print-deped-header .pdh-department {
+          font-family: 'Old English Text MT', 'Times New Roman', serif;
+          font-size: 18pt;
+          letter-spacing: 0.5px;
+          margin-top: -2px;
+          text-align: center;
+        }
+        .print-deped-header .pdh-region,
+        .print-deped-header .pdh-division,
+        .print-deped-header .pdh-school,
+        .print-deped-header .pdh-address {
+          font-family: 'Times New Roman', Times, serif;
+          font-size: 10pt;
+          font-weight: bold;
+          text-transform: uppercase;
+          text-align: center;
+        }
+        .print-deped-header .pdh-line {
+          border-bottom: 2pt solid #000;
+          margin: 8px auto 0;
+          width: 100%;
+        }
+        .print-deped-header .pdh-doc-title {
+          font-family: 'Times New Roman', Times, serif;
+          font-size: 14pt;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
+          margin-top: 14pt;
+          color: #000;
+          text-align: center;
+        }
+        .print-deped-header .pdh-doc-subtitle {
+          font-family: 'Times New Roman', Times, serif;
+          font-size: 11.5pt;
+          font-weight: 700;
+          margin-top: 4pt;
+          color: #000;
+          text-align: center;
+        }
+
+        /* ============================================================
+           EXAM BODY — always left-aligned
+           Scoped to .assessment-body so it never touches the letterhead.
+           ============================================================ */
+        .assessment-body,
+        .assessment-body h1,
+        .assessment-body h2,
+        .assessment-body h3,
+        .assessment-body h4,
+        .assessment-body p,
+        .assessment-body div,
+        .assessment-body td,
+        .assessment-body th { text-align: left; }
+      </style>
+    </head>
+    <body>
+      <div class="WordSection1">${bodyHTML}</div>
+    </body>
+    </html>`;
+
+  const safeTitle = String(a.title || 'Assessment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
+  Utils.download(
+    `${safeTitle}_${Utils.timestamp()}.doc`,
+    doc,
+    'application/msword'
+  );
+
+  App.logActivity('Assessment exported to Word: ' + a.title, 'Assessments');
+  UI.toast('Word document downloaded', 'success');
+},
   async deleteAssessment(id) {
     UI.confirm({
       title: 'Delete Assessment', message: 'Delete this assessment? Results will remain but will no longer link.',
@@ -15688,7 +16246,7 @@ async exportGrades() {
         <h3 style="font-size:16px;margin-bottom:14px;">${Utils.esc(q.text)}</h3>`;
       if (q.type === 'Multiple Choice' && q.choices && q.choices.length) {
         html += '<div style="display:flex;flex-direction:column;gap:6px;">' + q.choices.map((c, i) =>
-          `<button class="btn ${answers[q.id] === c ? 'btn-primary' : 'btn-outline'}" style="justify-content:flex-start;text-align:left;" data-quiz-pick="${Utils.attr(c)}">${String.fromCharCode(65+i)}. ${Utils.esc(c)}</button>`).join('') + '</div>';
+          `<button class="btn ${answers[q.id] === c ? 'btn-primary' : 'btn-outline'}" style="justify-content:flex-start;text-align:left;" data-quiz-pick="${Utils.attr(c)}">${String.fromCharCode(65+i)}. ${Utils.esc(Utils.stripChoiceLetter(c, i))}</button>`).join('') + '</div>';
       } else {
         html += `<input class="form-control" id="quiz-input" placeholder="Your answer" value="${Utils.attr(answers[q.id]||'')}">`;
       }
@@ -19443,10 +20001,8 @@ _tosRenderLivePreview(container) {
    TOS — STEP 3 · TEST STRUCTURE
    ============================================================================ */
 _tosRenderStep3(container) {
-  const s = State.tos;
-  const totalConfigured = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
-  const totalTos = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
-  const match = totalConfigured === totalTos;
+    const s = State.tos;
+    const totalTos = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
 
   container.innerHTML = `
     <div class="grid" style="grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start;">
@@ -19533,12 +20089,14 @@ _tosRenderStep3(container) {
   Pages._tosUpdateMatchBanner(container);
 
   container.querySelector('#tos-add-part').onclick = () => {
+    // The new part starts at 0 — the *previous* last part becomes editable
+    // and the new last part becomes the auto-remainder.
     State.tos.testConfigs.push({
       type: Pages._tosDefaultTestType(),
-      count: 5,
+      count: 0,
       other: ''
     });
-    Pages._tosRenderPartRows(container);
+    Pages._tosRenderPartRows(container);     // auto-derivation happens here
     Pages._tosUpdateMatchBanner(container);
     Pages._tosPersist();
   };
@@ -19570,8 +20128,14 @@ _tosRenderStep3(container) {
     Pages.tosGenerator(document.getElementById('content').firstElementChild);
   };
   container.querySelector('#tos-next-3').onclick = () => {
-    if (!match) {
-      UI.toast('Test part totals must match the TOS item count.', 'warning');
+    // Re-check over-allocation live, since the user may have edited a
+    // part's count since the banner last refreshed.
+    const totalItems = Number(State.tos.totalItems) || 0;
+    const sumOfEarlier = State.tos.testConfigs.length > 1
+      ? State.tos.testConfigs.slice(0, -1).reduce((sum, c) => sum + (Number(c.count) || 0), 0)
+      : 0;
+    if (sumOfEarlier > totalItems) {
+      UI.toast('Earlier parts exceed the total item count. Reduce one before continuing.', 'warning', 4500);
       return;
     }
     State.tos.step = 4;
@@ -19583,42 +20147,80 @@ _tosRenderPartRows(container) {
   const list = container.querySelector('#tos-parts-list');
   if (!list) return;
   const opts = Pages._tosTestOptions();
+  const totalItems = Number(State.tos.totalItems) || 0;
+  const parts = State.tos.testConfigs;
 
-  list.innerHTML = State.tos.testConfigs.map((cfg, i) => `
-    <div style="padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--card);">
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-        <div style="width:28px;height:28px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0;">
-          ${i + 1}
-        </div>
-        <strong style="font-size:13px;">Part ${i + 1}</strong>
-        <button class="icon-btn tos-remove-part" data-idx="${i}" title="Remove part"
-                style="margin-left:auto;color:var(--danger);width:28px;height:28px;">
-          ${icon('trash')}
-        </button>
-      </div>
-      <div class="form-row" style="margin-bottom:8px;">
-        <div class="form-group" style="margin-bottom:0;">
-          <label style="font-size:11px;">Type</label>
-          <select class="form-control tos-type-select" data-idx="${i}">
-            ${opts.map(o => `<option value="${Utils.attr(o)}" ${cfg.type === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group" style="margin-bottom:0;max-width:140px;">
-          <label style="font-size:11px;">Number of items</label>
-          <input type="number" class="form-control tos-count-input" data-idx="${i}" value="${cfg.count}" min="1">
-        </div>
-      </div>
-      ${cfg.type === 'Other' ? `
-        <div class="form-group" style="margin-bottom:0;">
-          <label style="font-size:11px;">Specify format</label>
-          <input class="form-control tos-other-input" data-idx="${i}"
-                 value="${Utils.attr(cfg.other || '')}"
-                 placeholder="e.g. Diagram labelling, matching type…">
-        </div>` : ''}
-    </div>
-  `).join('');
+  // ---- Auto-balance: the last part absorbs the remainder -----------------
+  // This removes the redundancy of manually making part-counts sum to the
+  // Step 2 total. The teacher controls every part except the last; the last
+  // one is derived so the total always matches Step 2 automatically.
+  const sumOfEarlier = parts.length > 1
+    ? parts.slice(0, -1).reduce((s, c) => s + (Number(c.count) || 0), 0)
+    : 0;
+  if (parts.length > 1) {
+    parts[parts.length - 1].count = Math.max(0, totalItems - sumOfEarlier);
+  } else if (parts.length === 1) {
+    // Only one part → its count IS the total from Step 2.
+    parts[0].count = totalItems;
+  }
 
-  // Bind
+  list.innerHTML = parts.map((cfg, i) => {
+    const isLast = i === parts.length - 1;
+    const isOnlyPart = parts.length === 1;
+    const isAuto = isLast;
+
+    return `
+      <div style="padding:12px;border:1px ${isAuto ? 'dashed' : 'solid'} var(--border);border-radius:10px;margin-bottom:8px;background:var(--card);">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+          <div style="width:28px;height:28px;border-radius:50%;background:var(--gradient-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;flex-shrink:0;">
+            ${i + 1}
+          </div>
+          <strong style="font-size:13px;">Part ${i + 1}</strong>
+          ${isAuto && !isOnlyPart ? `
+            <span class="badge badge-blue" style="font-size:9px;padding:1px 8px;"
+                  title="Auto-calculated: Total Items − sum of other parts">
+              auto
+            </span>` : ''}
+          <button class="icon-btn tos-remove-part" data-idx="${i}" title="Remove part"
+                  style="margin-left:auto;color:var(--danger);width:28px;height:28px;">
+            ${icon('trash')}
+          </button>
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:11px;">Type</label>
+            <select class="form-control tos-type-select" data-idx="${i}">
+              ${opts.map(o => `<option value="${Utils.attr(o)}" ${cfg.type === o ? 'selected' : ''}>${Utils.esc(o)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0;max-width:160px;">
+            <label style="font-size:11px;">
+              Number of items
+              ${isAuto ? '<span class="text-muted" style="font-weight:400;">(auto)</span>' : ''}
+            </label>
+            <input type="number" class="form-control tos-count-input" data-idx="${i}"
+                   value="${cfg.count}" min="0"
+                   ${isAuto ? 'readonly' : ''}
+                   style="${isAuto ? 'background:var(--bg);cursor:not-allowed;text-align:center;font-weight:700;color:var(--deped-blue);' : ''}"
+                   title="${isAuto
+                     ? (isOnlyPart
+                         ? 'Locked to the Total Items from Step 2.'
+                         : 'Auto-calculated: Total Items − sum of other parts.')
+                     : ''}">
+          </div>
+        </div>
+        ${cfg.type === 'Other' ? `
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:11px;">Specify format</label>
+            <input class="form-control tos-other-input" data-idx="${i}"
+                   value="${Utils.attr(cfg.other || '')}"
+                   placeholder="e.g. Diagram labelling, matching type…">
+          </div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // ---- Bind: type select (rebuild on change to show/hide the "Other" field)
   list.querySelectorAll('.tos-type-select').forEach(sel => {
     sel.onchange = () => {
       State.tos.testConfigs[Number(sel.dataset.idx)].type = sel.value;
@@ -19626,19 +20228,43 @@ _tosRenderPartRows(container) {
       Pages._tosPersist();
     };
   });
+
+  // ---- Bind: count inputs (only for non-last parts) ----------------------
   list.querySelectorAll('.tos-count-input').forEach(inp => {
+    const idx = Number(inp.dataset.idx);
+    const isLast = idx === parts.length - 1;
+    if (isLast) return;   // last part is auto-derived; skip
+
     inp.addEventListener('input', () => {
-      State.tos.testConfigs[Number(inp.dataset.idx)].count = Number(inp.value) || 0;
+      State.tos.testConfigs[idx].count = Number(inp.value) || 0;
+
+      // Re-derive the last part's count without re-rendering the whole list,
+      // so the input the teacher is typing in never loses focus.
+      const total = Number(State.tos.totalItems) || 0;
+      const sum = State.tos.testConfigs.slice(0, -1)
+        .reduce((s, c) => s + (Number(c.count) || 0), 0);
+      const lastCount = Math.max(0, total - sum);
+
+      if (parts.length > 1) {
+        parts[parts.length - 1].count = lastCount;
+        const lastInput = list.querySelector(`.tos-count-input[data-idx="${parts.length - 1}"]`);
+        if (lastInput) lastInput.value = lastCount;
+      }
+
       Pages._tosUpdatePartSummary(container);
       Pages._tosPersist();
     });
   });
+
+  // ---- Bind: "Other" format text ----------------------------------------
   list.querySelectorAll('.tos-other-input').forEach(inp => {
     inp.addEventListener('input', () => {
       State.tos.testConfigs[Number(inp.dataset.idx)].other = inp.value;
       Pages._tosPersist();
     });
   });
+
+  // ---- Bind: remove part -------------------------------------------------
   list.querySelectorAll('.tos-remove-part').forEach(btn => {
     btn.onclick = () => {
       if (State.tos.testConfigs.length <= 1) {
@@ -19675,38 +20301,62 @@ _tosUpdateMatchBanner(container) {
   if (!banner) return;
 
   const s = State.tos;
-  const totalConfigured = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
-  const totalTos        = s.tosData.reduce((sum, t) => sum + (t.items || 0), 0);
-  const match           = totalConfigured === totalTos;
+  const totalItems = Number(s.totalItems) || 0;
+  const sumOfEarlier = s.testConfigs.length > 1
+    ? s.testConfigs.slice(0, -1).reduce((sum, c) => sum + (Number(c.count) || 0), 0)
+    : 0;
+  const overAllocated = sumOfEarlier > totalItems;
+  const allocated = s.testConfigs.reduce((sum, c) => sum + (Number(c.count) || 0), 0);
+  const pct = totalItems ? Math.min(100, Math.round((allocated / totalItems) * 100)) : 0;
 
-  banner.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;
-                background:${match ? 'rgba(25,135,84,0.08)' : 'rgba(245,158,11,0.08)'};
-                border:1px solid ${match ? 'rgba(25,135,84,0.25)' : 'rgba(245,158,11,0.25)'};">
-      <div>
-        <div style="font-weight:700;font-size:13px;color:${match ? 'var(--success)' : '#92400e'};">
-          ${match ? '✓ Total matches the TOS' : "⚠ Totals don’t match"}
+  banner.innerHTML = overAllocated
+    ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;
+                  background:rgba(220,53,69,0.08);border:1px solid rgba(220,53,69,0.30);">
+        <div>
+          <div style="font-weight:700;font-size:13px;color:var(--danger);">
+            ⚠ Over-allocated
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+            Earlier parts sum to <strong>${sumOfEarlier}</strong>, exceeding the
+            <strong>${totalItems}</strong>-item total from Step 2 by
+            <strong>${sumOfEarlier - totalItems}</strong>. Reduce a part's count.
+          </div>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
-          Test parts: <strong>${totalConfigured}</strong> items · TOS: <strong>${totalTos}</strong> items
+        <span class="badge badge-danger">+${sumOfEarlier - totalItems}</span>
+      </div>`
+    : `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;
+                  background:rgba(25,135,84,0.08);border:1px solid rgba(25,135,84,0.25);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:13px;color:var(--success);">
+            ✓ Total matches Step 2
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+            <strong>${allocated}</strong> of <strong>${totalItems}</strong> items allocated across
+            <strong>${s.testConfigs.length}</strong> part${s.testConfigs.length === 1 ? '' : 's'}.
+            ${s.testConfigs.length > 1
+              ? 'The last part auto-absorbs the remaining items.'
+              : 'Only one part — its count is locked to the Total Items.'}
+          </div>
+          <div class="progress-bar success" style="height:5px;margin-top:8px;">
+            <div style="width:${pct}%"></div>
+          </div>
         </div>
-      </div>
-      ${!match
-        ? `<span class="badge badge-warning">Difference: ${Math.abs(totalConfigured - totalTos)}</span>`
-        : `<span class="badge badge-success">Ready</span>`}
-    </div>`;
+        <span class="badge badge-success" style="flex-shrink:0;margin-left:12px;">Ready</span>
+      </div>`;
 
-  // Also keep the Continue button's enabled state in sync
+  // ---- Enable / disable the Continue button ----------------------------
   const nextBtn = container.querySelector('#tos-next-3');
   if (nextBtn) {
-    if (match) {
-      nextBtn.removeAttribute('disabled');
-      nextBtn.style.opacity = '';
-      nextBtn.style.cursor = '';
-    } else {
+    if (overAllocated) {
       nextBtn.setAttribute('disabled', 'disabled');
       nextBtn.style.opacity = '0.5';
       nextBtn.style.cursor = 'not-allowed';
+    } else {
+      nextBtn.removeAttribute('disabled');
+      nextBtn.style.opacity = '';
+      nextBtn.style.cursor = '';
     }
   }
 },
@@ -22542,6 +23192,56 @@ _normalizeExamAnswer(rawAnswer, choices, type) {
   //    (Identification, Short Answer, Essay, etc.)
   return raw;
 },
+
+/* One-time cleanup: strip leading option letters ("A. ", "B) ", "(C) ")
+   from every choice in every saved assessment, and re-align each stored
+   answer to its stripped choice.
+
+   Safe to run multiple times. Logs a summary to the console. */
+async stripExamChoicePrefixes() {
+  const all = await DB.getAll('assessments');
+  let touched = 0, fixed = 0;
+
+  for (const a of all) {
+    if (!Array.isArray(a.questions) || !a.questions.length) continue;
+    let dirty = false;
+
+    for (const q of a.questions) {
+      if (!Array.isArray(q.choices) || !q.choices.length) continue;
+
+      const rawChoices   = q.choices.map(c => String(c || '').trim()).filter(Boolean);
+      const cleanChoices = rawChoices.map((c, i) => Utils.stripChoiceLetter(c, i));
+
+      // If stripping changed anything, this question needs fixing.
+      const choicesChanged = cleanChoices.some((c, i) => c !== rawChoices[i]);
+      if (!choicesChanged) continue;
+
+      // Re-align the stored answer to the stripped choice.
+      const idx = rawChoices.findIndex(
+        c => c.toLowerCase() === String(q.answer || '').toLowerCase()
+      );
+
+      q.choices = cleanChoices;
+      if (idx >= 0) q.answer = cleanChoices[idx];
+
+      dirty = true;
+      fixed++;
+    }
+
+    if (dirty) {
+      a.updatedAt = new Date().toISOString();
+      await DB.put('assessments', a);
+      touched++;
+    }
+  }
+
+  App.logActivity(
+    `Stripped choice prefixes: ${fixed} question(s) in ${touched} assessment(s)`,
+    'Assessments'
+  );
+  console.log(`[Migrate] ${fixed} question(s) cleaned across ${touched} assessment(s).`);
+  return { touched, fixed };
+},
 /* ============================================================
    SAVE TOS-GENERATED EXAM TO ASSESSMENT BUILDER
    ============================================================ */
@@ -22723,16 +23423,44 @@ async openSaveToAssessmentModal() {
         timeLimit,
         instructions,
         questions: questions.map(q => {
-          const cleanChoices = Array.isArray(q.choices)
+          // ---- 1. Preserve the AI's raw choice strings --------------------
+          //   Keeping these intact matters because the answer normalizer
+          //   matches the AI's answer against the SAME strings the AI
+          //   produced. e.g. if the AI wrote the answer as "B. Manicure"
+          //   and the choice as "B. Manicure", the match only works against
+          //   the raw strings, not the stripped ones.
+          const rawChoices = Array.isArray(q.choices)
             ? q.choices.map(c => String(c || '').trim()).filter(Boolean)
             : [];
+
+          // ---- 2. Strip the leading letter prefix from each choice ---------
+          //   "A. Pedicure"  →  "Pedicure"
+          //   "B) Manicure"  →  "Manicure"
+          //   "(C) Facial"   →  "Facial"
+          const cleanChoices = rawChoices.map((c, i) => Utils.stripChoiceLetter(c, i));
+
+          // ---- 3. Normalize the answer against the RAW choices ------------
+          //   This resolves "B", "Choice B", "B. Manicure", and full-text
+          //   answers alike, producing the exact text of the correct choice.
+          const rawAnswerNorm = Pages._normalizeExamAnswer(q.answer, rawChoices, q.type);
+
+          // ---- 4. If the normalized answer matched a raw choice, re-map it
+          //          to the corresponding STRIPPED choice. Otherwise keep it
+          //          verbatim (essay, identification, unrecognized answer).
+          const matchedIdx = rawChoices.findIndex(
+            c => c.toLowerCase() === String(rawAnswerNorm || '').toLowerCase()
+          );
+          const finalAnswer = matchedIdx >= 0
+            ? cleanChoices[matchedIdx]
+            : rawAnswerNorm;
+
           return {
             id: Utils.uid('q-'),
             text: q.text || '',
             type: q.type || 'Short Answer',
             points: Number(q.points) || 1,
             choices: cleanChoices,
-            answer: Pages._normalizeExamAnswer(q.answer, cleanChoices, q.type),
+            answer: finalAnswer,
             part: q.part || ''
           };
         }),
@@ -24847,10 +25575,15 @@ _pdExportCSV(learnerData, period) {
       t.memberIds = t.memberIds.filter(id => learnerById[id]);
     });
 
+
     const assignedToChair = new Set(Object.values(plan.seats).filter(Boolean));
     const assignedToTable = new Set();
     plan.tables.forEach(t => t.memberIds.forEach(id => assignedToTable.add(id)));
+    // Only Active learners appear in the unplaced pool. Inactive, Transferred,
+    // Dropped, and Graduated learners are hidden — matching the behaviour of
+    // the Random Picker, Wheel of Names, and Groupings tools.
     const unplaced = State.learners.filter(l =>
+      Utils.isActiveLearner(l) &&
       !assignedToChair.has(l.id) && !assignedToTable.has(l.id)
     );
 
