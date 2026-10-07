@@ -5361,7 +5361,59 @@ toggleTheme() {
         read: false, type: 'warning'
       }, true);
     }
+    // Behavior follow-up reminder — one per day, per class
+    try { await this.checkBehaviorFollowUps(); } catch (e) { /* non-critical */ }
+
     this.updateNotifDot();
+  },
+    /* ------------------------------------------------------------------------
+     BEHAVIOR FOLLOW-UPS — one digest notification per day, per class
+     ------------------------------------------------------------------------
+     Fires from runNotificationChecks() at most once every 24 hours.
+     Uses a per-class + per-date key stored on State to guarantee we never
+     nag the teacher more than once a day, even across page navigations.
+     ------------------------------------------------------------------------ */
+  async checkBehaviorFollowUps() {
+    if (!Session.state.authenticated || !State.activeClass) return;
+
+    // Skip on weekends — no follow-up work is expected on Sat/Sun
+    const dow = new Date().getDay();
+    if (dow === 0 || dow === 6) return;
+
+    try {
+      const all = (await DB.getAll('behaviorLogs'))
+        .filter(b =>
+          b.classId === State.activeClass.id &&
+          b.status !== 'Resolved' &&
+          b.followUpDate
+        );
+
+      const today = Utils.todayISO();
+      const overdue = all.filter(b => b.followUpDate < today);
+      if (!overdue.length) return;
+
+      // One reminder per class per day
+      const dedupeKey = `behavior-followups:${State.activeClass.id}:${today}`;
+      if (State._bhRemindedOn === dedupeKey) return;
+      State._bhRemindedOn = dedupeKey;
+
+      // Plural helper
+      const n = overdue.length;
+      const noun = n === 1 ? 'follow-up' : 'follow-ups';
+
+      await this.addNotification({
+        id: Utils.uid('n-'),
+        message: `${n} behavior ${noun} overdue. Open the Behavior Log to review.`,
+        module: 'behavior',
+        timestamp: new Date().toISOString(),
+        read: false,
+        type: 'warning'
+      });
+
+      App.logActivity(`${n} behavior ${noun} flagged as overdue`, 'Behavior');
+    } catch (e) {
+      console.warn('[Behavior] Follow-up check failed:', e);
+    }
   },
   async addNotification(notif, dedupe = false) {
     if (dedupe && State.notifications.some(n => n.message === notif.message && !n.read)) return;
@@ -9955,7 +10007,33 @@ const XlsxWriter = {
 
 
 
-
+/* ============================================================================
+   BEHAVIOR LOG — shared constants
+   ============================================================================ */
+const BEHAVIOR_CATEGORIES = [
+  { id: 'Positive Behavior',   tone: 'positive', icon: 'star',     label: 'Positive Behavior' },
+  { id: 'Recognition',         tone: 'positive', icon: 'star',     label: 'Recognition / Award' },
+  { id: 'Minor Infraction',    tone: 'concern',  icon: 'alert',    label: 'Minor Infraction' },
+  { id: 'Disruptive Behavior', tone: 'concern',  icon: 'volume',   label: 'Disruptive Behavior' },
+  { id: 'Academic Concern',    tone: 'concern',  icon: 'book',     label: 'Academic Concern' },
+  { id: 'Attendance Concern',  tone: 'concern',  icon: 'calendar', label: 'Attendance Concern' },
+  { id: 'Disrespect',          tone: 'serious',  icon: 'alert',    label: 'Disrespect / Defiance' },
+  { id: 'Bullying',            tone: 'serious',  icon: 'shield',   label: 'Bullying / Conflict' },
+  { id: 'Property Damage',     tone: 'serious',  icon: 'alert',    label: 'Property Damage' },
+  { id: 'Other',               tone: 'neutral',  icon: 'info',     label: 'Other' }
+];
+const BEHAVIOR_CAT_BY_ID = Object.fromEntries(BEHAVIOR_CATEGORIES.map(c => [c.id, c]));
+const BEHAVIOR_SEVERITIES = {
+  minor:    { label: 'Minor',    color: '#627D98', hint: 'Handled in class' },
+  moderate: { label: 'Moderate', color: '#F59E0B', hint: 'Needs follow-up' },
+  serious:  { label: 'Serious',  color: '#DC3545', hint: 'Escalate / document' }
+};
+const BEHAVIOR_STATUSES = {
+  'Open':        { label: 'Open',        badge: 'badge-blue'    },
+  'In Progress': { label: 'In Progress', badge: 'badge-warning' },
+  'Resolved':    { label: 'Resolved',    badge: 'badge-success' },
+  'Escalated':   { label: 'Escalated',   badge: 'badge-danger'  }
+};
 
   /* ============================================================================
    PAGES
@@ -23757,74 +23835,7 @@ async printLesson(id) {
       onConfirm: async () => { await DB.delete('notes', id); App.navigate('notes'); } });
   },
 
-  async behavior(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'shield', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
-    const all = (await DB.getAll('behaviorLogs')).filter(b => b.classId === State.activeClass.id);
-    root.innerHTML = `
-      <div class="page-head">
-        <div><h2>Behavior / Discipline Log</h2><p>Confidential classroom observations</p></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.openBehaviorModal()">${icon('shield')} New Entry</button></div>
-      </div>
-      <div class="alert alert-warning">${icon('shield')}<div><strong>Privacy Notice:</strong> This is a confidential log. Do not record medical, psychological, or disciplinary diagnoses. Use observation-based descriptions only.</div></div>
-      <div class="card">
-        ${all.length === 0 ? UI.emptyState({icon:'shield', title:'No behavior records', message:'Behavior entries will appear here.'}) :
-          `<div class="table-wrap"><table class="data-table">
-            <thead><tr><th>Date</th><th>Learner</th><th>Category</th><th>Description</th><th>Action</th><th>Actions</th></tr></thead>
-            <tbody>${[...all].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(b => {
-              const l = State.learners.find(x => x.id === b.learnerId);
-              return `<tr>
-                <td>${Utils.formatDate(b.date)}</td>
-                <td>${l ? `<div style="display:flex;align-items:center;gap:8px;">${Utils.avatarHTML(l, 28, 11)}<span>${Utils.esc(Utils.displayName(l))}</span></div>` : '—'}</td>
-                <td><span class="badge badge-blue">${Utils.esc(b.category)}</span></td>
-                <td>${Utils.esc((b.description||'').slice(0,60))}</td>
-                <td>${Utils.esc((b.actionTaken||'').slice(0,40))}</td>
-                <td class="table-actions"><button class="icon-btn" data-bh-del="${Utils.attr(b.id)}">${icon('trash')}</button></td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table></div>`}
-      </div>`;
-    root.querySelectorAll('[data-bh-del]').forEach(el => el.addEventListener('click', () => Pages.deleteBehavior(el.dataset.bhDel)));
-  },
-  openBehaviorModal() {
-    if (!State.learners.length) { UI.toast('No learners in class', 'warning'); return; }
-    const m = UI.modal({
-      title: 'New Behavior Entry',
-      body: `
-        <div class="form-group"><label>Learner</label>
-          <select class="form-control" id="bh-learner">${State.learners.map(l => `<option value="${Utils.attr(l.id)}">${Utils.esc(Utils.displayName(l))}</option>`).join('')}</select></div>
-        <div class="form-row">
-          <div class="form-group"><label>Date</label><input type="date" class="form-control" id="bh-date" value="${Utils.attr(Utils.todayISO())}"></div>
-          <div class="form-group"><label>Category</label>
-            <select class="form-control" id="bh-cat"><option>Positive Behavior</option><option>Needs Improvement</option><option>Classroom Concern</option><option>Recognition</option><option>Other</option></select></div>
-        </div>
-        <div class="form-group"><label>Description</label><textarea class="form-control" id="bh-desc" rows="3"></textarea></div>
-        <div class="form-group"><label>Action Taken</label><input class="form-control" id="bh-action"></div>
-        <div class="form-group"><label>Follow-up</label><input class="form-control" id="bh-follow"></div>`,
-      footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" data-save>Save</button>`
-    });
-    m.overlay.querySelector('[data-cancel]').onclick = m.close;
-    m.overlay.querySelector('[data-save]').onclick = async () => {
-      const rec = {
-        id: Utils.uid('b-'), classId: State.activeClass.id,
-        learnerId: m.overlay.querySelector('#bh-learner').value,
-        date: m.overlay.querySelector('#bh-date').value,
-        category: m.overlay.querySelector('#bh-cat').value,
-        description: m.overlay.querySelector('#bh-desc').value.trim(),
-        actionTaken: m.overlay.querySelector('#bh-action').value.trim(),
-        followUp: m.overlay.querySelector('#bh-follow').value.trim(),
-        status: 'Open', createdAt: new Date().toISOString()
-      };
-      await DB.put('behaviorLogs', rec);
-      m.close(); App.navigate('behavior');
-      UI.toast('Behavior entry saved', 'success');
-    };
-  },
-  async deleteBehavior(id) {
-    UI.confirm({ title: 'Delete Entry', message: 'Delete this behavior entry?', confirmText: 'Delete',
-      onConfirm: async () => { await DB.delete('behaviorLogs', id); App.navigate('behavior'); } });
-  },
-
-  async parentNotes(root) {
+async parentNotes(root) {
     if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'message', title:'No class selected', message:'Create or select a class.'})}</div>`; return; }
     const all = (await DB.getAll('parentLogs')).filter(p => p.classId === State.activeClass.id);
     root.innerHTML = `
@@ -51242,6 +51253,1033 @@ const aliases = {
   'parent-digest': 'parentDigest',
   'phil-iri': 'philIri',             
 };
+/* ------------------------------------------------------------------------
+   Normalise a stored entry: infer severity from category when missing,
+   default status to 'Open'. Legacy records survive unchanged.
+   ------------------------------------------------------------------------ */
+Pages._bhNormalize = function (e) {
+  const cat = BEHAVIOR_CAT_BY_ID[e.category] || { tone: 'neutral' };
+  let severity = e.severity;
+  if (!severity) {
+    if (cat.tone === 'serious')     severity = 'serious';
+    else if (cat.tone === 'concern') severity = 'moderate';
+    else                            severity = 'minor';
+  }
+  return Object.assign({}, e, { severity, status: e.status || 'Open' });
+};
+
+/* ------------------------------------------------------------------------
+   MAIN PAGE
+   ------------------------------------------------------------------------ */
+Pages.behavior = async function (root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'shield', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+
+  /* ---- Persist UI state across navigations ---- */
+  if (!State._bhUI) {
+    State._bhUI = {
+      query: '', category: '', severity: '', status: '', learnerId: '',
+      dateRange: 'all', view: 'list', sort: 'recent'
+    };
+  }
+  const U = State._bhUI;
+
+  /* ---- Load + normalise ---- */
+  const allEntries = (await DB.getAll('behaviorLogs')).filter(b => b.classId === cls.id);
+  const entries = allEntries.map(Pages._bhNormalize);
+  const todayISO   = Utils.todayISO();
+  const weekAgoISO = (() => { const d = new Date(); d.setDate(d.getDate() - 7);  return d.toISOString().slice(0, 10); })();
+  const monthAgoISO= (() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); })();
+
+  const inRange = (iso) => {
+    if (U.dateRange === 'all' || !iso) return true;
+    if (U.dateRange === 'week')  return iso >= weekAgoISO;
+    if (U.dateRange === 'month') return iso >= monthAgoISO;
+    return true;
+  };
+
+  /* ---- Aggregates ---- */
+  const catOf = (e) => BEHAVIOR_CAT_BY_ID[e.category] || { label: e.category || 'Other', tone: 'neutral', icon: 'info' };
+  const total            = entries.length;
+  const positiveCount    = entries.filter(e => catOf(e).tone === 'positive').length;
+  const seriousCount     = entries.filter(e => catOf(e).tone === 'serious').length;
+  const unresolvedCount  = entries.filter(e => e.status !== 'Resolved').length;
+  const overdueFollowUps = entries.filter(e => e.status !== 'Resolved' && e.followUpDate && e.followUpDate < todayISO).length;
+
+  const learnerById = {};
+  State.learners.forEach(l => { learnerById[l.id] = l; });
+
+  const concernCounts = {};
+  entries.filter(e => catOf(e).tone !== 'positive').forEach(e => {
+    if (!e.learnerId) return;
+    concernCounts[e.learnerId] = (concernCounts[e.learnerId] || 0) + 1;
+  });
+  const flaggedCount = Object.values(concernCounts).filter(n => n >= 3).length;
+
+  /* ---- Filter pipeline ---- */
+  const q = U.query.trim().toLowerCase();
+  const filtered = entries.filter(e => {
+    if (U.category && e.category !== U.category) return false;
+    if (U.severity && e.severity !== U.severity) return false;
+    if (U.status   && e.status   !== U.status)   return false;
+    if (U.learnerId && e.learnerId !== U.learnerId) return false;
+    if (!inRange(e.date)) return false;
+    if (q) {
+      const l = learnerById[e.learnerId];
+      const hay = [
+        l ? Utils.fullName(l) : '',
+        e.category, e.description, e.actionTaken, e.followUp, e.followUpNotes
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    if (U.sort === 'oldest') return (a.date || '').localeCompare(b.date || '');
+    if (U.sort === 'severity') {
+      const order = { serious: 0, moderate: 1, minor: 2 };
+      return (order[a.severity] ?? 3) - (order[b.severity] ?? 3);
+    }
+    return (b.date || '').localeCompare(a.date || '');
+  });
+
+  const activeFilters = [U.query, U.category, U.severity, U.status, U.learnerId,
+                        U.dateRange !== 'all' ? U.dateRange : ''].filter(Boolean).length;
+
+  /* ---- Render shell ---- */
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Behavior / Discipline Log</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${total} record${total === 1 ? '' : 's'}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="bh-export">${icon('download')} Export CSV</button>
+        <button class="btn btn-outline" id="bh-print">${icon('printer')} Print</button>
+        <button class="btn btn-primary" id="bh-new">${icon('shield')} New Entry</button>
+      </div>
+    </div>
+
+    <div class="alert alert-warning mb-16" style="align-items:flex-start;">
+      ${icon('shield')}
+      <div>
+        <strong>Confidential log.</strong> Record <em>observable behaviour</em> and <em>actions taken</em> only.
+        Do not record medical, psychological, or diagnostic labels.
+        Entries marked <strong>private</strong> are hidden from printouts and CSV exports unless you explicitly include them.
+      </div>
+    </div>
+
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('list')}</div>
+        <div class="stat-label">Total Entries</div>
+        <div class="stat-value">${total}</div>
+        <div class="text-xs text-muted">${positiveCount} positive · ${total - positiveCount} concern${(total - positiveCount) === 1 ? '' : 's'}</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('star')}</div>
+        <div class="stat-label">Positive Notes</div>
+        <div class="stat-value">${positiveCount}</div>
+        <div class="text-xs text-muted">${total ? Math.round((positiveCount / total) * 100) : 0}% of log</div>
+      </div>
+      <div class="stat-card ${seriousCount ? 'accent-danger' : ''}">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Serious Concerns</div>
+        <div class="stat-value">${seriousCount}</div>
+        <div class="text-xs text-muted">${flaggedCount} learner${flaggedCount === 1 ? '' : 's'} flagged (3+ concerns)</div>
+      </div>
+      <div class="stat-card ${overdueFollowUps ? 'accent-danger' : unresolvedCount ? 'accent-warning' : 'accent-success'}">
+        <div class="stat-icon">${icon('timer')}</div>
+        <div class="stat-label">Open Follow-ups</div>
+        <div class="stat-value">${unresolvedCount}</div>
+        <div class="text-xs text-muted">${overdueFollowUps ? overdueFollowUps + ' overdue' : unresolvedCount ? 'On schedule' : 'All resolved'}</div>
+      </div>
+    </div>
+
+    <div class="card mb-16">
+      <div class="bh-view-tabs">
+        <button class="bh-view-tab ${U.view === 'list' ? 'active' : ''}" data-bh-view="list">
+          ${icon('list')} All Entries
+        </button>
+        <button class="bh-view-tab ${U.view === 'by-learner' ? 'active' : ''}" data-bh-view="by-learner">
+          ${icon('users')} By Learner
+        </button>
+        <button class="bh-view-tab ${U.view === 'followups' ? 'active' : ''}" data-bh-view="followups">
+          ${icon('timer')} Follow-ups
+          ${unresolvedCount ? `<span class="bh-tab-badge">${unresolvedCount}</span>` : ''}
+        </button>
+        <div style="flex:1;"></div>
+        ${activeFilters ? `
+          <button class="btn btn-sm btn-ghost" id="bh-clear-filters">
+            ${icon('xCircle')} Clear filters (${activeFilters})
+          </button>` : ''}
+      </div>
+
+      <div class="bh-filter-row">
+        <div class="bh-search">
+          ${icon('search')}
+          <input type="text" id="bh-search"
+                 placeholder="Search learner, description, or action…"
+                 value="${Utils.attr(U.query)}">
+        </div>
+        <select class="form-control bh-select" id="bh-f-cat">
+          <option value="">All categories</option>
+          ${BEHAVIOR_CATEGORIES.map(c => `<option value="${Utils.attr(c.id)}" ${U.category === c.id ? 'selected' : ''}>${Utils.esc(c.label)}</option>`).join('')}
+        </select>
+        <select class="form-control bh-select" id="bh-f-sev">
+          <option value="">All severities</option>
+          ${Object.entries(BEHAVIOR_SEVERITIES).map(([k, v]) => `<option value="${Utils.attr(k)}" ${U.severity === k ? 'selected' : ''}>${Utils.esc(v.label)}</option>`).join('')}
+        </select>
+        <select class="form-control bh-select" id="bh-f-status">
+          <option value="">All statuses</option>
+          ${Object.entries(BEHAVIOR_STATUSES).map(([k, v]) => `<option value="${Utils.attr(k)}" ${U.status === k ? 'selected' : ''}>${Utils.esc(v.label)}</option>`).join('')}
+        </select>
+        <select class="form-control bh-select" id="bh-f-range">
+          <option value="all"   ${U.dateRange === 'all'   ? 'selected' : ''}>All time</option>
+          <option value="week"  ${U.dateRange === 'week'  ? 'selected' : ''}>Last 7 days</option>
+          <option value="month" ${U.dateRange === 'month' ? 'selected' : ''}>Last 30 days</option>
+        </select>
+        <select class="form-control bh-select" id="bh-f-learner">
+          <option value="">All learners</option>
+          ${State.learners.map(l => `<option value="${Utils.attr(l.id)}" ${U.learnerId === l.id ? 'selected' : ''}>${Utils.esc(Utils.displayName(l))}</option>`).join('')}
+        </select>
+        <select class="form-control bh-select" id="bh-f-sort">
+          <option value="recent"   ${U.sort === 'recent'   ? 'selected' : ''}>Newest first</option>
+          <option value="oldest"   ${U.sort === 'oldest'   ? 'selected' : ''}>Oldest first</option>
+          <option value="severity" ${U.sort === 'severity' ? 'selected' : ''}>Most serious first</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="bh-content"></div>
+  `;
+
+  /* ---------- Shell-level bindings ---------- */
+  root.querySelector('#bh-new').onclick    = () => Pages.openBehaviorModal();
+  root.querySelector('#bh-export').onclick = () => Pages.exportBehaviorCSV(filtered);
+  root.querySelector('#bh-print').onclick  = () => Pages.printBehaviorLog(filtered);
+
+  root.querySelectorAll('[data-bh-view]').forEach(b => {
+    b.onclick = () => { U.view = b.dataset.bhView; App.navigate('behavior'); };
+  });
+
+  const search = root.querySelector('#bh-search');
+  search.addEventListener('input', Utils.debounce(() => {
+    U.query = search.value;
+    App.navigate('behavior');
+    setTimeout(() => {
+      const s = document.getElementById('bh-search');
+      if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 20);
+  }, 220));
+
+  root.querySelector('#bh-f-cat').onchange    = (e) => { U.category  = e.target.value; App.navigate('behavior'); };
+  root.querySelector('#bh-f-sev').onchange    = (e) => { U.severity  = e.target.value; App.navigate('behavior'); };
+  root.querySelector('#bh-f-status').onchange = (e) => { U.status    = e.target.value; App.navigate('behavior'); };
+  root.querySelector('#bh-f-range').onchange  = (e) => { U.dateRange = e.target.value; App.navigate('behavior'); };
+  root.querySelector('#bh-f-learner').onchange= (e) => { U.learnerId = e.target.value; App.navigate('behavior'); };
+  root.querySelector('#bh-f-sort').onchange   = (e) => { U.sort      = e.target.value; App.navigate('behavior'); };
+
+  const clearBtn = root.querySelector('#bh-clear-filters');
+  if (clearBtn) clearBtn.onclick = () => {
+    State._bhUI = { query:'', category:'', severity:'', status:'', learnerId:'',
+                    dateRange:'all', view: U.view, sort:'recent' };
+    App.navigate('behavior');
+  };
+
+  /* ---------- Render view ---------- */
+  const content = root.querySelector('#bh-content');
+
+  if (U.view === 'by-learner') {
+    Pages._bhRenderByLearner(content, entries, learnerById, concernCounts);
+  } else if (U.view === 'followups') {
+    Pages._bhRenderFollowUps(content, entries, learnerById, todayISO);
+  } else {
+    Pages._bhRenderList(content, filtered, learnerById, todayISO);
+  }
+};
+
+/* ------------------------------------------------------------------------
+   VIEW · List of entries
+   ------------------------------------------------------------------------ */
+Pages._bhRenderList = function (content, rows, learnerById, todayISO) {
+  if (!rows.length) {
+    content.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'search',
+      title: 'No entries match',
+      message: 'Try clearing the filters or add a new entry.',
+      actionLabel: '+ New Entry',
+      actionFn: 'Pages.openBehaviorModal()'
+    })}</div>`;
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="bh-list-header">
+        <span>${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}</span>
+      </div>
+      <div class="bh-list">
+        ${rows.map(e => Pages._bhRenderRowHTML(e, learnerById, todayISO)).join('')}
+      </div>
+    </div>`;
+
+  content.querySelectorAll('[data-bh-open]').forEach(el => {
+    el.onclick = (ev) => {
+      if (ev.target.closest('button')) return;
+      Pages.openBehaviorDetail(el.dataset.bhOpen);
+    };
+  });
+  content.querySelectorAll('[data-bh-quick-resolve]').forEach(btn => {
+    btn.onclick = (ev) => { ev.stopPropagation(); Pages._bhQuickResolve(btn.dataset.bhQuickResolve); };
+  });
+  content.querySelectorAll('[data-bh-edit]').forEach(btn => {
+    btn.onclick = (ev) => { ev.stopPropagation(); Pages.openBehaviorModal(btn.dataset.bhEdit); };
+  });
+  content.querySelectorAll('[data-bh-del]').forEach(btn => {
+    btn.onclick = (ev) => { ev.stopPropagation(); Pages.deleteBehavior(btn.dataset.bhDel); };
+  });
+};
+
+Pages._bhRenderRowHTML = function (e, learnerById, todayISO) {
+  const cat      = BEHAVIOR_CAT_BY_ID[e.category] || { label: e.category || 'Other', tone: 'neutral', icon: 'info' };
+  const sev      = BEHAVIOR_SEVERITIES[e.severity] || BEHAVIOR_SEVERITIES.minor;
+  const stat     = BEHAVIOR_STATUSES[e.status]     || BEHAVIOR_STATUSES['Open'];
+  const l        = learnerById[e.learnerId];
+  const overdue  = e.status !== 'Resolved' && e.followUpDate && e.followUpDate < todayISO;
+  const dueToday = e.status !== 'Resolved' && e.followUpDate && e.followUpDate === todayISO;
+
+  const toneBg = cat.tone === 'positive' ? 'rgba(25,135,84,0.10)'
+               : cat.tone === 'serious'  ? 'rgba(220,53,69,0.08)'
+               : cat.tone === 'concern'  ? 'rgba(245,158,11,0.08)'
+               : 'transparent';
+
+  return `<div class="bh-row" data-bh-open="${Utils.attr(e.id)}" style="border-left:3px solid ${sev.color};background:${toneBg};">
+    <div class="bh-row-main">
+      <div class="bh-row-line1">
+        ${l ? Utils.avatarHTML(l, 32, 12) : '<div class="mini-avatar" style="background:#627D98;">?</div>'}
+        <div class="bh-row-title">
+          <div class="bh-row-name">${l ? Utils.esc(Utils.displayName(l)) : '—'}</div>
+          <div class="bh-row-meta">
+            <span>${Utils.formatDate(e.date)}</span>
+            <span class="bh-dot">·</span>
+            <span class="badge badge-neutral" style="font-size:9.5px;">${Utils.esc(cat.label)}</span>
+            ${cat.tone !== 'positive' ? `<span class="badge" style="font-size:9.5px;background:${sev.color}1a;color:${sev.color};">${Utils.esc(sev.label)}</span>` : ''}
+            ${e.private ? `<span class="badge badge-warning" style="font-size:9.5px;" title="Hidden from print and CSV">${icon('lock')} Private</span>` : ''}
+          </div>
+        </div>
+        <span class="badge ${stat.badge}" style="font-size:10px;">${Utils.esc(stat.label)}</span>
+      </div>
+      <div class="bh-row-desc">${Utils.esc((e.description || '').slice(0, 180))}${(e.description || '').length > 180 ? '…' : ''}</div>
+      ${e.actionTaken ? `<div class="bh-row-action"><strong>Action:</strong> ${Utils.esc((e.actionTaken || '').slice(0, 140))}${(e.actionTaken || '').length > 140 ? '…' : ''}</div>` : ''}
+    </div>
+    <div class="bh-row-side">
+      ${e.followUpDate ? `
+        <div class="bh-row-follow ${overdue ? 'overdue' : dueToday ? 'duetoday' : ''}">
+          ${icon('timer')}
+          <span>${overdue ? 'Overdue' : dueToday ? 'Due today' : 'Follow-up'} ${Utils.formatDate(e.followUpDate, { month: 'short', day: 'numeric' })}</span>
+        </div>` : ''}
+      <div class="bh-row-actions">
+        ${e.status !== 'Resolved' ? `<button class="icon-btn" data-bh-quick-resolve="${Utils.attr(e.id)}" title="Mark resolved">${icon('check')}</button>` : ''}
+        <button class="icon-btn" data-bh-edit="${Utils.attr(e.id)}" title="Edit">${icon('edit')}</button>
+        <button class="icon-btn" data-bh-del="${Utils.attr(e.id)}" title="Delete">${icon('trash')}</button>
+      </div>
+    </div>
+  </div>`;
+};
+
+/* ------------------------------------------------------------------------
+   VIEW · Grouped by learner
+   ------------------------------------------------------------------------ */
+Pages._bhRenderByLearner = function (content, entries, learnerById, concernCounts) {
+  // Only show learners with at least one entry
+  const grouped = {};
+  entries.forEach(e => {
+    if (!e.learnerId) return;
+    (grouped[e.learnerId] = grouped[e.learnerId] || []).push(e);
+  });
+
+  const rows = Object.entries(grouped).map(([lid, list]) => {
+    const concerns  = list.filter(e => (BEHAVIOR_CAT_BY_ID[e.category] || {}).tone !== 'positive').length;
+    const positives = list.length - concerns;
+    const lastDate  = list.map(e => e.date || '').sort().pop();
+    const open      = list.filter(e => e.status !== 'Resolved').length;
+    return { learnerId: lid, list, concerns, positives, lastDate, open };
+  }).sort((a, b) => b.concerns - a.concerns || (b.lastDate || '').localeCompare(a.lastDate || ''));
+
+  if (!rows.length) {
+    content.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No entries yet',
+      message: 'Once you log behavior entries, a per-learner summary appears here.'
+    })}</div>`;
+    return;
+  }
+
+  const flagged = rows.filter(r => r.concerns >= 3);
+  const normal  = rows.filter(r => r.concerns < 3);
+
+  content.innerHTML = `
+    ${flagged.length ? `
+      <div class="card mb-16" style="border-left:4px solid var(--danger);">
+        <div class="card-head" style="margin-bottom:10px;">
+          <h3 style="color:var(--danger);">${icon('alert')} Learners needing attention</h3>
+          <span class="text-xs text-muted">3 or more concern entries</span>
+        </div>
+        <div class="bh-learner-grid">
+          ${flagged.map(r => Pages._bhRenderLearnerCard(r, learnerById, true)).join('')}
+        </div>
+      </div>` : ''}
+
+    <div class="card">
+      <div class="card-head" style="margin-bottom:10px;">
+        <h3>All learners with entries</h3>
+        <span class="text-xs text-muted">${rows.length} learner${rows.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="bh-learner-grid">
+        ${normal.map(r => Pages._bhRenderLearnerCard(r, learnerById, false)).join('')}
+        ${normal.length === 0 && flagged.length === 0
+          ? '<p class="text-muted text-sm">No learner has any entries yet.</p>' : ''}
+      </div>
+    </div>`;
+
+  content.querySelectorAll('[data-bh-learner-open]').forEach(el => {
+    el.onclick = () => {
+      State._bhUI.learnerId = el.dataset.bhLearnerOpen;
+      State._bhUI.view = 'list';
+      App.navigate('behavior');
+    };
+  });
+  content.querySelectorAll('[data-bh-learner-profile]').forEach(el => {
+    el.onclick = (ev) => { ev.stopPropagation(); App.openLearnerProfile(el.dataset.bhLearnerProfile); };
+  });
+};
+
+Pages._bhRenderLearnerCard = function (r, learnerById, flagged) {
+  const l = learnerById[r.learnerId];
+  if (!l) return '';
+  const total = r.concerns + r.positives;
+  return `<div class="bh-learner-card ${flagged ? 'flagged' : ''}" data-bh-learner-open="${Utils.attr(l.id)}">
+    <div class="bh-learner-card-head">
+      ${Utils.avatarHTML(l, 44, 16)}
+      <div style="flex:1;min-width:0;">
+        <div class="bh-learner-name">${Utils.esc(Utils.fullName(l))}</div>
+        <div class="bh-learner-meta">LRN ${Utils.esc(l.lrn || '—')} · last entry ${r.lastDate ? Utils.formatDate(r.lastDate, { month: 'short', day: 'numeric' }) : '—'}</div>
+      </div>
+      <button class="icon-btn" data-bh-learner-profile="${Utils.attr(l.id)}" title="Open learner profile">${icon('user')}</button>
+    </div>
+    <div class="bh-learner-counts">
+      <div class="bh-lc-item">
+        <div class="bh-lc-value" style="color:var(--success);">${r.positives}</div>
+        <div class="bh-lc-label">Positive</div>
+      </div>
+      <div class="bh-lc-item">
+        <div class="bh-lc-value" style="color:${r.concerns >= 3 ? 'var(--danger)' : 'var(--warning)'};">${r.concerns}</div>
+        <div class="bh-lc-label">Concern${r.concerns === 1 ? '' : 's'}</div>
+      </div>
+      <div class="bh-lc-item">
+        <div class="bh-lc-value" style="color:var(--deped-blue);">${r.open}</div>
+        <div class="bh-lc-label">Open</div>
+      </div>
+      <div class="bh-lc-item">
+        <div class="bh-lc-value" style="color:var(--text-muted);">${total}</div>
+        <div class="bh-lc-label">Total</div>
+      </div>
+    </div>
+    ${flagged ? `<div class="bh-flag-note">${icon('alert')} Needs follow-up</div>` : ''}
+  </div>`;
+};
+
+/* ------------------------------------------------------------------------
+   VIEW · Follow-ups
+   ------------------------------------------------------------------------ */
+Pages._bhRenderFollowUps = function (content, entries, learnerById, todayISO) {
+  const inOneWeekISO = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+
+  const open = entries.filter(e => e.status !== 'Resolved');
+
+  const groups = {
+    overdue:   open.filter(e => e.followUpDate && e.followUpDate < todayISO),
+    today:     open.filter(e => e.followUpDate === todayISO),
+    thisWeek:  open.filter(e => e.followUpDate && e.followUpDate > todayISO && e.followUpDate <= inOneWeekISO),
+    later:     open.filter(e => e.followUpDate && e.followUpDate > inOneWeekISO),
+    undated:   open.filter(e => !e.followUpDate)
+  };
+
+  const section = (label, list, tone) => {
+    if (!list.length) return '';
+    return `
+      <div class="bh-fu-group">
+        <div class="bh-fu-group-head ${tone}">
+          <span>${Utils.esc(label)}</span>
+          <span class="bh-fu-count">${list.length}</span>
+        </div>
+        ${list.map(e => Pages._bhRenderFollowUpRow(e, learnerById, todayISO)).join('')}
+      </div>`;
+  };
+
+  content.innerHTML = `
+    ${!open.length ? `<div class="card">${UI.emptyState({
+      icon: 'check', title: 'Nothing pending',
+      message: 'Every entry is resolved. Nice work!'
+    })}</div>` : `
+      <div class="card">
+        <div class="card-head">
+          <h3>Follow-up queue</h3>
+          <span class="text-xs text-muted">${open.length} open · ${groups.overdue.length} overdue</span>
+        </div>
+        ${section('Overdue',     groups.overdue,  'overdue')}
+        ${section('Due today',   groups.today,    'today')}
+        ${section('Due this week', groups.thisWeek, 'week')}
+        ${section('Later',       groups.later,    'later')}
+        ${section('No date set', groups.undated,  'undated')}
+      </div>`}
+  `;
+
+  content.querySelectorAll('[data-bh-open]').forEach(el => {
+    el.onclick = (ev) => {
+      if (ev.target.closest('button')) return;
+      Pages.openBehaviorDetail(el.dataset.bhOpen);
+    };
+  });
+  content.querySelectorAll('[data-bh-resolve]').forEach(btn => {
+    btn.onclick = (ev) => { ev.stopPropagation(); Pages._bhQuickResolve(btn.dataset.bhResolve); };
+  });
+  content.querySelectorAll('[data-bh-snooze]').forEach(btn => {
+    btn.onclick = (ev) => { ev.stopPropagation(); Pages._bhSnoozeFollowUp(btn.dataset.bhSnooze); };
+  });
+};
+
+Pages._bhRenderFollowUpRow = function (e, learnerById, todayISO) {
+  const l   = learnerById[e.learnerId];
+  const cat = BEHAVIOR_CAT_BY_ID[e.category] || { label: e.category || 'Other', tone: 'neutral' };
+  const sev = BEHAVIOR_SEVERITIES[e.severity] || BEHAVIOR_SEVERITIES.minor;
+  const overdue = e.followUpDate && e.followUpDate < todayISO;
+  const due     = e.followUpDate === todayISO;
+
+  return `<div class="bh-fu-row" data-bh-open="${Utils.attr(e.id)}" style="border-left:3px solid ${sev.color};">
+    <div class="bh-fu-main">
+      ${l ? Utils.avatarHTML(l, 30, 11) : '<div class="mini-avatar" style="background:#627D98;">?</div>'}
+      <div style="flex:1;min-width:0;">
+        <div class="bh-fu-name">${l ? Utils.esc(Utils.displayName(l)) : '—'}</div>
+        <div class="bh-fu-meta">
+          <span class="badge badge-neutral" style="font-size:9.5px;">${Utils.esc(cat.label)}</span>
+          ${e.followUpDate
+            ? `<span class="bh-fu-date ${overdue ? 'overdue' : due ? 'today' : ''}">
+                 ${overdue ? 'Overdue' : due ? 'Due today' : 'Due'} ${Utils.formatDate(e.followUpDate, { month: 'short', day: 'numeric' })}
+               </span>` : `<span class="bh-fu-date">No follow-up date</span>`}
+        </div>
+        ${e.followUp ? `<div class="bh-fu-note">${Utils.esc(e.followUp.slice(0, 120))}</div>` : ''}
+      </div>
+    </div>
+    <div class="bh-fu-actions">
+      <button class="btn btn-sm btn-outline" data-bh-snooze="${Utils.attr(e.id)}" title="Push follow-up by 7 days">Snooze</button>
+      <button class="btn btn-sm btn-primary" data-bh-resolve="${Utils.attr(e.id)}" title="Mark resolved">${icon('check')} Resolve</button>
+    </div>
+  </div>`;
+};
+
+/* ------------------------------------------------------------------------
+   QUICK ACTIONS
+   ------------------------------------------------------------------------ */
+Pages._bhQuickResolve = async function (id) {
+  try {
+    const rec = await DB.get('behaviorLogs', id);
+    if (!rec) return;
+    rec.status = 'Resolved';
+    rec.resolvedAt = new Date().toISOString();
+    rec.updatedAt = rec.resolvedAt;
+    await DB.put('behaviorLogs', rec);
+    App.logActivity('Behavior entry resolved', 'Behavior');
+    UI.toast('Entry marked resolved', 'success');
+    App.navigate('behavior');
+  } catch (e) {
+    UI.toast('Could not update entry.', 'error');
+  }
+};
+
+Pages._bhSnoozeFollowUp = async function (id) {
+  try {
+    const rec = await DB.get('behaviorLogs', id);
+    if (!rec) return;
+    const base = rec.followUpDate ? new Date(rec.followUpDate + 'T00:00:00') : new Date();
+    base.setDate(base.getDate() + 7);
+    rec.followUpDate = base.toISOString().slice(0, 10);
+    rec.updatedAt = new Date().toISOString();
+    await DB.put('behaviorLogs', rec);
+    UI.toast(`Follow-up pushed to ${Utils.formatDate(rec.followUpDate)}`, 'success');
+    App.navigate('behavior');
+  } catch (e) {
+    UI.toast('Could not snooze entry.', 'error');
+  }
+};
+
+/* ------------------------------------------------------------------------
+   DETAIL MODAL — click a row to open
+   ------------------------------------------------------------------------ */
+Pages.openBehaviorDetail = async function (id) {
+  const rec = await DB.get('behaviorLogs', id);
+  if (!rec) { UI.toast('Entry not found.', 'error'); return; }
+  const e   = Pages._bhNormalize(rec);
+  const l   = State.learners.find(x => x.id === e.learnerId);
+  const cat = BEHAVIOR_CAT_BY_ID[e.category] || { label: e.category || 'Other', tone: 'neutral', icon: 'info' };
+  const sev = BEHAVIOR_SEVERITIES[e.severity] || BEHAVIOR_SEVERITIES.minor;
+  const st  = BEHAVIOR_STATUSES[e.status]     || BEHAVIOR_STATUSES['Open'];
+
+  const m = UI.modal({
+    title: 'Behavior Entry',
+    size: 'modal-lg',
+    body: `
+      <div class="bh-detail">
+        <div class="bh-detail-head" style="border-left:4px solid ${sev.color};">
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+            ${l ? Utils.avatarHTML(l, 44, 15) : '<div class="mini-avatar" style="background:#627D98;width:44px;height:44px;">?</div>'}
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:800;font-size:15px;">${l ? Utils.esc(Utils.fullName(l)) : 'Learner not found'}</div>
+              <div class="text-xs text-muted">${Utils.formatDate(e.date, { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
+            </div>
+            <div class="flex gap-6" style="flex-wrap:wrap;">
+              <span class="badge badge-neutral" style="font-size:10px;">${Utils.esc(cat.label)}</span>
+              ${cat.tone !== 'positive'
+                ? `<span class="badge" style="font-size:10px;background:${sev.color}1a;color:${sev.color};">${Utils.esc(sev.label)}</span>` : ''}
+              <span class="badge ${st.badge}" style="font-size:10px;">${Utils.esc(st.label)}</span>
+              ${e.private ? `<span class="badge badge-warning" style="font-size:10px;">${icon('lock')} Private</span>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="bh-detail-section">
+          <div class="bh-detail-label">Description</div>
+          <div class="bh-detail-body">${Utils.esc(e.description || '—')}</div>
+        </div>
+
+        <div class="bh-detail-section">
+          <div class="bh-detail-label">Action taken</div>
+          <div class="bh-detail-body">${Utils.esc(e.actionTaken || '—')}</div>
+        </div>
+
+        ${e.followUp || e.followUpDate ? `
+          <div class="bh-detail-section">
+            <div class="bh-detail-label">Follow-up</div>
+            <div class="bh-detail-body">
+              ${e.followUpDate ? `<div><strong>Date:</strong> ${Utils.formatDate(e.followUpDate, { weekday:'long', month:'long', day:'numeric', year:'numeric' })}</div>` : ''}
+              ${e.followUp ? `<div style="margin-top:6px;">${Utils.esc(e.followUp)}</div>` : ''}
+            </div>
+          </div>` : ''}
+
+        <div class="bh-detail-meta">
+          <span>Created ${Utils.formatDateTime(e.createdAt)}</span>
+          ${e.updatedAt && e.updatedAt !== e.createdAt ? `<span>· Updated ${Utils.timeAgo(e.updatedAt)}</span>` : ''}
+          ${e.resolvedAt ? `<span>· Resolved ${Utils.timeAgo(e.resolvedAt)}</span>` : ''}
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-close>Close</button>
+      ${e.status !== 'Resolved' ? `<button class="btn btn-outline" id="bh-d-log">${icon('message')} Log Parent Contact</button>` : ''}
+      <button class="btn btn-outline" id="bh-d-edit">${icon('edit')} Edit</button>
+      <button class="btn btn-danger" id="bh-d-delete">${icon('trash')} Delete</button>
+      ${e.status !== 'Resolved'
+        ? `<button class="btn btn-primary" id="bh-d-resolve">${icon('check')} Mark Resolved</button>` : ''}
+    `
+  });
+
+  const editBtn = m.overlay.querySelector('#bh-d-edit');
+  if (editBtn) editBtn.onclick = () => { m.close(); Pages.openBehaviorModal(e.id); };
+
+  const delBtn = m.overlay.querySelector('#bh-d-delete');
+  if (delBtn) delBtn.onclick = () => { m.close(); Pages.deleteBehavior(e.id); };
+
+  const resolveBtn = m.overlay.querySelector('#bh-d-resolve');
+  if (resolveBtn) resolveBtn.onclick = async () => {
+    rec.status = 'Resolved';
+    rec.resolvedAt = new Date().toISOString();
+    rec.updatedAt = rec.resolvedAt;
+    await DB.put('behaviorLogs', rec);
+    m.close();
+    UI.toast('Entry marked resolved', 'success');
+    App.navigate('behavior');
+  };
+
+  const logBtn = m.overlay.querySelector('#bh-d-log');
+  if (logBtn) logBtn.onclick = () => {
+    m.close();
+    if (!l) { UI.toast('No learner to log against.', 'warning'); return; }
+    if (typeof Pages.openParentModal === 'function') {
+      Pages.openParentModal();
+      setTimeout(() => {
+        // Prefill what we can in the parent-notes modal
+        const learnerSel = document.getElementById('pl-learner');
+        const concern = document.getElementById('pl-concern');
+        const disc = document.getElementById('pl-disc');
+        if (learnerSel) learnerSel.value = l.id;
+        if (concern && !concern.value) concern.value = cat.label;
+        if (disc && !disc.value) disc.value = (e.description || '').slice(0, 400);
+      }, 80);
+    } else {
+      UI.toast('Parent communication module is not available.', 'info');
+    }
+  };
+};
+
+/* ------------------------------------------------------------------------
+   ENTRY MODAL — create or edit
+   ------------------------------------------------------------------------ */
+Pages.openBehaviorModal = async function (id) {
+  if (!State.learners.length) { UI.toast('No learners in this class.', 'warning'); return; }
+
+  const existing = id ? await DB.get('behaviorLogs', id) : null;
+  const e = existing ? Pages._bhNormalize(existing) : null;
+  const today = Utils.todayISO();
+
+  const learnerOptions = State.learners.map(l =>
+    `<option value="${Utils.attr(l.id)}" ${e && e.learnerId === l.id ? 'selected' : ''}>${Utils.esc(Utils.displayName(l))}</option>`
+  ).join('');
+
+  const catChipsHTML = BEHAVIOR_CATEGORIES.map(c => {
+    const active = e ? e.category === c.id : false;
+    const toneColor = c.tone === 'positive' ? '#198754'
+                    : c.tone === 'serious'  ? '#DC3545'
+                    : c.tone === 'concern'  ? '#F59E0B'
+                    : '#627D98';
+    return `<button type="button" class="bh-cat-chip ${active ? 'active' : ''}"
+                    data-bh-cat="${Utils.attr(c.id)}"
+                    data-tone="${Utils.attr(c.tone)}"
+                    style="--chip-tone:${toneColor};">
+      ${icon(c.icon)}
+      <span>${Utils.esc(c.label)}</span>
+    </button>`;
+  }).join('');
+
+  const sevChipsHTML = Object.entries(BEHAVIOR_SEVERITIES).map(([k, v]) => {
+    const active = e ? e.severity === k : (k === 'minor');
+    return `<button type="button" class="bh-sev-chip ${active ? 'active' : ''}"
+                    data-bh-sev="${Utils.attr(k)}"
+                    style="--chip-tone:${v.color};">
+      <strong>${Utils.esc(v.label)}</strong>
+      <span>${Utils.esc(v.hint)}</span>
+    </button>`;
+  }).join('');
+
+  const m = UI.modal({
+    title: existing ? 'Edit Behavior Entry' : 'New Behavior Entry',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info" style="font-size:12px;">
+        ${icon('info')}
+        <div>
+          Describe <strong>what you saw</strong>, not what you think it means.
+          If the entry is sensitive, tick <strong>Mark as private</strong> — it will be excluded from print and CSV by default.
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Learner <span class="req">*</span></label>
+          <select class="form-control" id="bh-learner">${learnerOptions}</select>
+        </div>
+        <div class="form-group">
+          <label>Date <span class="req">*</span></label>
+          <input type="date" class="form-control" id="bh-date"
+                 value="${Utils.attr(e ? e.date : today)}">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Category <span class="req">*</span></label>
+        <div class="bh-chip-grid" id="bh-cat-grid">${catChipsHTML}</div>
+      </div>
+
+      <div class="form-group" id="bh-sev-wrap">
+        <label>Severity <span class="text-muted" style="font-weight:400;">(for concern entries)</span></label>
+        <div class="bh-chip-grid bh-chip-grid-3">${sevChipsHTML}</div>
+      </div>
+
+      <div class="form-group">
+        <label>What did you observe? <span class="req">*</span></label>
+        <textarea class="form-control" id="bh-desc" rows="3"
+                  placeholder="Describe the specific behaviour — what, when, where. Stick to what can be seen or heard."
+        >${Utils.esc(e ? (e.description || '') : '')}</textarea>
+      </div>
+
+      <div class="form-group">
+        <label>Action taken</label>
+        <textarea class="form-control" id="bh-action" rows="2"
+                  placeholder="e.g. Verbal reminder, seat change, class reflection, parent notified."
+        >${Utils.esc(e ? (e.actionTaken || '') : '')}</textarea>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Follow-up date <span class="text-muted" style="font-weight:400;">(optional)</span></label>
+          <input type="date" class="form-control" id="bh-follow-date"
+                 value="${Utils.attr(e ? (e.followUpDate || '') : '')}">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select class="form-control" id="bh-status">
+            ${Object.entries(BEHAVIOR_STATUSES).map(([k, v]) =>
+              `<option value="${Utils.attr(k)}" ${e && e.status === k ? 'selected' : (!e && k === 'Open' ? 'selected' : '')}>${Utils.esc(v.label)}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Follow-up notes</label>
+        <input class="form-control" id="bh-follow" placeholder="Optional — what to check or do on that date."
+               value="${Utils.attr(e ? (e.followUp || '') : '')}">
+      </div>
+
+      <label class="auth-check">
+        <input type="checkbox" id="bh-private" ${e && e.private ? 'checked' : ''}>
+        <span>Mark as private <span class="text-muted">(hidden from print and CSV by default)</span></span>
+      </label>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="bh-save">${existing ? 'Save Changes' : 'Add Entry'}</button>
+    `
+  });
+
+  const overlay = m.overlay;
+
+  /* ---- Category chips ---- */
+  let selectedCat = e ? e.category : BEHAVIOR_CATEGORIES[0].id;
+  const catGrid   = overlay.querySelector('#bh-cat-grid');
+  const sevWrap   = overlay.querySelector('#bh-sev-wrap');
+  const updateSevVisibility = () => {
+    const tone = (BEHAVIOR_CAT_BY_ID[selectedCat] || {}).tone;
+    // Severity is only meaningful for concern/serious categories.
+    // Show it, but grey out for positive entries.
+    sevWrap.style.opacity = tone === 'positive' ? '0.4' : '1';
+    sevWrap.style.pointerEvents = tone === 'positive' ? 'none' : '';
+  };
+  catGrid.querySelectorAll('[data-bh-cat]').forEach(btn => {
+    btn.onclick = () => {
+      catGrid.querySelectorAll('[data-bh-cat]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedCat = btn.dataset.bhCat;
+      updateSevVisibility();
+    };
+  });
+  updateSevVisibility();
+
+  /* ---- Severity chips ---- */
+  let selectedSev = e ? e.severity : 'minor';
+  overlay.querySelectorAll('[data-bh-sev]').forEach(btn => {
+    btn.onclick = () => {
+      overlay.querySelectorAll('[data-bh-sev]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedSev = btn.dataset.bhSev;
+    };
+  });
+
+  /* ---- Cancel ---- */
+  overlay.querySelector('[data-cancel]').onclick = m.close;
+
+  /* ---- Save ---- */
+  overlay.querySelector('#bh-save').onclick = async () => {
+    const learnerId   = overlay.querySelector('#bh-learner').value;
+    const date        = overlay.querySelector('#bh-date').value;
+    const description = overlay.querySelector('#bh-desc').value.trim();
+    const actionTaken = overlay.querySelector('#bh-action').value.trim();
+    const followUpDate= overlay.querySelector('#bh-follow-date').value;
+    const followUp    = overlay.querySelector('#bh-follow').value.trim();
+    const status      = overlay.querySelector('#bh-status').value;
+    const isPrivate   = overlay.querySelector('#bh-private').checked;
+
+    if (!description) {
+      UI.toast('Please describe what you observed.', 'warning');
+      overlay.querySelector('#bh-desc').focus();
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const rec = {
+      id: existing ? existing.id : Utils.uid('b-'),
+      classId: State.activeClass.id,
+      learnerId,
+      date,
+      category: selectedCat,
+      severity: selectedSev,
+      description,
+      actionTaken,
+      followUp,
+      followUpDate,
+      status,
+      private: isPrivate,
+      createdAt: existing ? existing.createdAt : now,
+      updatedAt: now
+    };
+    // Preserve resolvedAt if it was set and status remains Resolved
+    if (existing && existing.resolvedAt && status === 'Resolved') rec.resolvedAt = existing.resolvedAt;
+    if (status === 'Resolved' && !rec.resolvedAt) rec.resolvedAt = now;
+
+    try {
+      await DB.put('behaviorLogs', rec);
+      App.logActivity(existing ? 'Behavior entry updated' : 'Behavior entry added', 'Behavior');
+      m.close();
+      App.navigate('behavior');
+      UI.toast(existing ? 'Entry updated' : 'Entry saved', 'success');
+    } catch (err) {
+      console.error(err);
+      UI.toast('Could not save entry.', 'error');
+    }
+  };
+};
+
+/* ------------------------------------------------------------------------
+   DELETE
+   ------------------------------------------------------------------------ */
+Pages.deleteBehavior = async function (id) {
+  const rec = await DB.get('behaviorLogs', id);
+  if (!rec) return;
+  const l = State.learners.find(x => x.id === rec.learnerId);
+  UI.confirm({
+    title: 'Delete Entry',
+    message: `Delete this entry${l ? ` for <strong>${Utils.esc(Utils.fullName(l))}</strong>` : ''}? This cannot be undone.`,
+    confirmText: 'Delete',
+    confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      await DB.delete('behaviorLogs', id);
+      App.logActivity('Behavior entry deleted', 'Behavior');
+      App.navigate('behavior');
+      UI.toast('Entry deleted', 'success');
+    }
+  });
+};
+
+/* ------------------------------------------------------------------------
+   EXPORT · CSV
+   Private entries are excluded unless includePrivate=true.
+   ------------------------------------------------------------------------ */
+Pages.exportBehaviorCSV = async function (rows, includePrivate) {
+  // If called without rows, build a full unfiltered list
+  if (!rows) {
+    const all = (await DB.getAll('behaviorLogs')).filter(b => b.classId === State.activeClass.id);
+    rows = all.map(Pages._bhNormalize);
+  }
+
+  const hasPrivate = rows.some(e => e.private);
+  if (hasPrivate && !includePrivate) {
+    // Ask once
+    await new Promise(resolve => {
+      UI.confirm({
+        title: 'Include private entries?',
+        message: `This filtered set contains <strong>${rows.filter(e => e.private).length} private entr${rows.filter(e => e.private).length === 1 ? 'y' : 'ies'}</strong>. Private entries are usually hidden from exports. Include them anyway?`,
+        confirmText: 'Include',
+        confirmClass: 'btn-warning',
+        onConfirm: () => { includePrivate = true; resolve(); }
+      });
+      // Fallback: also resolve if user dismisses by clicking outside
+      setTimeout(() => resolve(), 0);
+    });
+    // Small wait so the modal closes before we proceed
+    await new Promise(r => setTimeout(r, 150));
+  }
+
+  const out = rows.filter(e => includePrivate || !e.private).map(e => {
+    const l = State.learners.find(x => x.id === e.learnerId);
+    return {
+      'Date':          e.date || '',
+      'Learner':       l ? Utils.fullName(l) : '',
+      'LRN':           l ? (l.lrn || '') : '',
+      'Category':      e.category || '',
+      'Severity':      (BEHAVIOR_SEVERITIES[e.severity] || {}).label || '',
+      'Status':        e.status || '',
+      'Description':   e.description || '',
+      'Action Taken':  e.actionTaken || '',
+      'Follow-up':     e.followUp || '',
+      'Follow-up Date':e.followUpDate || '',
+      'Private':       e.private ? 'Yes' : 'No',
+      'Created':       e.createdAt || ''
+    };
+  });
+
+  const safe = `${State.activeClass.gradeLevel}_${State.activeClass.section}`
+              .replace(/[^A-Za-z0-9]+/g, '_');
+  Utils.download(`behavior-log_${safe}_${Utils.timestamp()}.csv`, Utils.toCSV(out), 'text/csv');
+  App.logActivity('Behavior log exported as CSV', 'Behavior');
+  UI.toast(`Exported ${out.length} entr${out.length === 1 ? 'y' : 'ies'}`, 'success');
+};
+
+/* ------------------------------------------------------------------------
+   PRINT · Confidential report (private entries excluded by default)
+   ------------------------------------------------------------------------ */
+Pages.printBehaviorLog = async function (rows) {
+  if (!rows) {
+    const all = (await DB.getAll('behaviorLogs')).filter(b => b.classId === State.activeClass.id);
+    rows = all.map(Pages._bhNormalize);
+  }
+  if (!rows.length) { UI.toast('Nothing to print with the current filters.', 'warning'); return; }
+
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const cls     = State.activeClass;
+  const printable = rows.filter(e => !e.private);
+
+  if (!printable.length) {
+    UI.toast('All entries in this selection are marked private.', 'warning');
+    return;
+  }
+
+  const rowsHTML = printable.map(e => {
+    const l   = State.learners.find(x => x.id === e.learnerId);
+    const sev = (BEHAVIOR_SEVERITIES[e.severity] || {}).label || '';
+    const st  = e.status || 'Open';
+    return `<tr>
+      <td>${Utils.formatDate(e.date)}</td>
+      <td>${Utils.esc(l ? Utils.fullName(l) : '—')}</td>
+      <td>${Utils.esc(e.category || '')}${sev ? ' · ' + Utils.esc(sev) : ''}</td>
+      <td>${Utils.esc(e.description || '')}</td>
+      <td>${Utils.esc(e.actionTaken || '')}</td>
+      <td style="text-align:center;">${Utils.esc(st)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-behavior">
+      ${Pages._buildDepEdHeader({
+        title: 'Behavior / Discipline Log',
+        subtitle: `${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · Confidential`
+      })}
+      <p style="font-size:8.5pt;color:#666;margin:6px 0 10px;">
+        ${printable.length} entr${printable.length === 1 ? 'y' : 'ies'} · Printed ${Utils.formatDate(Utils.todayISO())}
+        ${rows.some(e => e.private) ? `· ${rows.filter(e => e.private).length} private entr${rows.filter(e => e.private).length === 1 ? 'y' : 'ies'} excluded` : ''}
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:9%;">Date</th>
+            <th style="width:18%;">Learner</th>
+            <th style="width:16%;">Category</th>
+            <th>Description</th>
+            <th>Action Taken</th>
+            <th style="width:9%;">Status</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHTML}</tbody>
+      </table>
+      <p style="font-size:8pt;color:#666;margin-top:12px;">
+        Confidential — this log is intended for professional use only.
+        Do not circulate outside school personnel and authorised guardians.
+      </p>
+      ${Pages._buildDepEdFooter()}
+    </div>`;
+
+  App.logActivity('Behavior log printed', 'Behavior');
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1200);
+  });
+};
+
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
 }
