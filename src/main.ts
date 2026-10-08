@@ -49282,9 +49282,17 @@ const AnswerSheetOMR = (() => {
     };
   }
 
+  /* Single-column sheets are shifted right so the grid looks centred on the
+     page. The shift MUST be part of the geometry: the printer and the scanner
+     both read positions from bubblePositions(), so they can never disagree. */
+  function columnShiftMM(questionCount) {
+    return questionCount <= SHEET.maxRowsPerColumn ? 28 : 0;
+  }
+
   function bubblePositions(questionCount) {
     const cols = questionCount <= SHEET.maxRowsPerColumn ? 1
               : questionCount <= SHEET.maxRowsPerColumn * 2 ? 2 : 3;
+    const shift = columnShiftMM(questionCount);
     const perCol = Math.ceil(questionCount / cols);
     const positions = [];
     for (let q = 0; q < questionCount; q++) {
@@ -49294,9 +49302,9 @@ const AnswerSheetOMR = (() => {
       const y = SHEET.headerTopMM + row * SHEET.rowHeightMM + SHEET.rowHeightMM / 2;
       const choices = [];
       for (let ch = 0; ch < SHEET.choiceCount; ch++) {
-        choices.push([c.xFirstBubbleMM + ch * SHEET.bubblePitchMM, y]);
+        choices.push([c.xFirstBubbleMM + shift + ch * SHEET.bubblePitchMM, y]);
       }
-      positions.push({ q, row, col, choices, numberX: c.xQuestionNumberMM, numberY: y });
+      positions.push({ q, row, col, choices, numberX: c.xQuestionNumberMM + shift, numberY: y });
     }
     return positions;
   }
@@ -49504,27 +49512,6 @@ const AnswerSheetOMR = (() => {
     return threshold;
   }
 
-  /* Improvement 7 — rotate an ImageData 90° clockwise. */
-  function rotateImageData90(imageData) {
-    const src = imageData.data;
-    const sw = imageData.width, sh = imageData.height;
-    const dw = sh, dh = sw;
-    const out = new Uint8ClampedArray(dw * dh * 4);
-    for (let y = 0; y < sh; y++) {
-      for (let x = 0; x < sw; x++) {
-        const si = (y * sw + x) * 4;
-        const nx = sh - 1 - y;
-        const ny = x;
-        const di = (ny * dw + nx) * 4;
-        out[di]   = src[si];
-        out[di+1] = src[si+1];
-        out[di+2] = src[si+2];
-        out[di+3] = src[si+3];
-      }
-    }
-    return new ImageData(out, dw, dh);
-  }
-
   /* ========================================================================
      QR DETECTION
      ======================================================================== */
@@ -49566,22 +49553,6 @@ const AnswerSheetOMR = (() => {
       (L.topLeftCorner.x + L.topRightCorner.x + L.bottomLeftCorner.x + L.bottomRightCorner.x) / 4,
       (L.topLeftCorner.y + L.topRightCorner.y + L.bottomLeftCorner.y + L.bottomRightCorner.y) / 4
     ];
-  }
-
-  /* Improvement 7 — try up to 4 rotations looking for anchor QRs.
-     Returns { qrs, rotationDeg, imageData } so callers know how the frame
-     was interpreted. */
-  function detectQRsWithRotation(imageData) {
-    let frame = imageData;
-    for (let rot = 0; rot < 4; rot++) {
-      const qrs = detectQRs(frame, 6);
-      const hasAnyAnchor = qrs.some(q =>
-        ANCHOR_PAYLOADS[String(q.data || '').trim()]
-      );
-      if (hasAnyAnchor) return { qrs, rotationDeg: rot * 90, imageData: frame };
-      frame = rotateImageData90(frame);
-    }
-    return { qrs: [], rotationDeg: 0, imageData };
   }
 
   /* ========================================================================
@@ -49633,6 +49604,16 @@ const AnswerSheetOMR = (() => {
 
     let choice = null;
     let confidence = 0;
+
+    // Two or more clearly shaded bubbles = invalid (multiple marks). Without
+    // this check the "gap to runner-up" rule silently turned them into BLANK.
+    const markedIdx = [];
+    metrics.forEach((m, i) => {
+      if (m.valid && m.ratio < median * CAL.markedRatio && m.fill >= CAL.fillAmbiguous) markedIdx.push(i);
+    });
+    if (markedIdx.length >= 2) {
+      return { choice: null, confidence: 0, multiple: true, candidates: markedIdx, metrics };
+    }
 
     if (darkestIdx >= 0 && belowMedian && belowSecond) {
       if (darkestFill >= CAL.fillStrong) {
@@ -49725,7 +49706,7 @@ const AnswerSheetOMR = (() => {
     const usedColumnCount =
       questionCount <= SHEET.maxRowsPerColumn     ? 1 :
       questionCount <= SHEET.maxRowsPerColumn * 2 ? 2 : 3;
-    const singleColShiftMM = usedColumnCount === 1 ? 28 : 0;
+    const singleColShiftMM = columnShiftMM(questionCount);   // letters row only; bubbles/numbers are already shifted
 
     const bubblesHTML = bubbles.map(b => {
       const dPct  = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
@@ -49733,7 +49714,7 @@ const AnswerSheetOMR = (() => {
 
       const bubbleRow = b.choices.map(([x, y]) =>
         `<div style="position:absolute;
-                     left:${mmToPctX(x + singleColShiftMM)}%;
+                     left:${mmToPctX(x)}%;
                      top:${mmToPctY(y)}%;
                      width:${dPct}%;
                      height:${dPctY}%;
@@ -49744,7 +49725,7 @@ const AnswerSheetOMR = (() => {
       ).join('');
 
       const numLabel = `<div style="position:absolute;
-                                   left:${mmToPctX(b.numberX + singleColShiftMM)}%;
+                                   left:${mmToPctX(b.numberX)}%;
                                    top:${mmToPctY(b.numberY)}%;
                                    transform:translate(-100%,-50%);
                                    font-size:2.8mm;
@@ -49882,9 +49863,36 @@ const AnswerSheetOMR = (() => {
   }
 
   /* ========================================================================
+     SHARED SCANNER HELPERS (audio, preferences)
+     ======================================================================== */
+  let _audioCtx = null;
+  /* One shared AudioContext (a new one per scanner session leaked contexts, and
+     iOS only allows sound that was primed inside a user gesture). */
+  function primeAudio() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      if (!_audioCtx || _audioCtx.state === 'closed') _audioCtx = new Ctx();
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      return _audioCtx;
+    } catch (e) { return null; }
+  }
+  function omrPref(key, def) {
+    try { const v = localStorage.getItem('klazassist.omr.' + key); return v === null ? def : v === '1'; }
+    catch (e) { return def; }
+  }
+  function setOmrPref(key, on) {
+    try { localStorage.setItem('klazassist.omr.' + key, on ? '1' : '0'); } catch (e) {}
+  }
+
+  /* ========================================================================
      SCANNER
      ======================================================================== */
 function openScanner(assessmentId) {
+  // iOS/Safari only allow sound to start inside a user gesture, so prime the
+  // shared AudioContext right here, before any await.
+  const audio = primeAudio();
+
   (async () => {
     await loadCalibration();
 
@@ -49908,17 +49916,25 @@ function openScanner(assessmentId) {
       scanned: [],
       recentScans: new Map(),
       pendingConfirm: new Map(),
-      stream: null, video: null, canvas: null, ctx: null,
-      timer: null, beepCtx: null
+      stream: null, track: null, caps: {}, video: null, canvas: null, ctx: null,
+      hiCanvas: null, hiCtx: null,
+      timer: null, audio,
+      closed: false, paused: false, suspended: false, starting: false,
+      sheetOpen: false, sheetOnClose: null,
+      found: false, procMs: 120, geom: null, ov: null, ovTimer: null,
+      lastCenters: null, torchOn: false, zoomIdx: 0, wakeLock: null,
+      dupShownAt: new Map(), allDoneShown: false,
+      prefs: { sound: omrPref('sound', true), haptics: omrPref('haptics', true) }
     };
 
-    /* ----------------------------------------------------------------
-       Device detection — mobile gets the fullscreen ZipGrade layout,
-       desktop keeps the existing modal scanner.
-       ---------------------------------------------------------------- */
+    /* Working resolutions. QR detection runs at WORK_LONG; once a sheet is locked
+       the bubbles are sampled from a (reused) higher-resolution canvas. */
+    const WORK_LONG = 1280;
+    const HI_LONG   = 1920;
+
     const isMobile =
       window.matchMedia('(max-width: 900px)').matches ||
-      ('ontouchstart' in window && window.innerWidth < 1024);
+      (window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 1100);
 
     const cls = State.activeClass || {};
     const classLabel = [cls.gradeLevel, cls.section].filter(Boolean).join(' – ') || 'No class';
@@ -49926,75 +49942,144 @@ function openScanner(assessmentId) {
     const totalLearners = State.learners.filter(Utils.isActiveLearner).length;
 
     let overlay, closeScanner;
+    let pushedHistory = false, onPop = null, ro = null;
+
+    const $ = (sel) => overlay.querySelector(sel);
 
     /* ══════════════════════════════════════════════════════════════════
-       MOBILE — fullscreen ZipGrade-style scanner
+       MOBILE — fullscreen scanner
        ══════════════════════════════════════════════════════════════════ */
     if (isMobile) {
+      const showCoach = !omrPref('coach', false);
       overlay = document.createElement('div');
       overlay.className = 'zg-scanner';
       overlay.setAttribute('role', 'dialog');
       overlay.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('aria-label', 'Answer sheet scanner');
       overlay.innerHTML = `
         <div class="zg-header">
-          <button type="button" class="zg-header-btn" id="zg-back"
-                  aria-label="Close scanner">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>
-            </svg>
+          <button type="button" class="zg-header-btn" id="zg-back" aria-label="Close scanner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
           </button>
           <div class="zg-header-title">Scanning</div>
-          <button type="button" class="zg-header-btn" id="zg-settings"
-                  aria-label="Calibration settings">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-            </svg>
+          <button type="button" class="zg-header-btn" id="zg-settings" aria-label="Scanner settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
           </button>
         </div>
 
         <div class="zg-video-wrap" id="omr-video-wrap">
           <video id="omr-video" playsinline muted autoplay></video>
           <canvas id="omr-canvas" style="display:none;"></canvas>
+          <canvas id="zg-overlay" class="zg-overlay" aria-hidden="true"></canvas>
 
           <div class="zg-viewfinder tl" aria-hidden="true"></div>
           <div class="zg-viewfinder tr" aria-hidden="true"></div>
           <div class="zg-viewfinder bl" aria-hidden="true"></div>
           <div class="zg-viewfinder br" aria-hidden="true"></div>
 
-          <div class="zg-counter" id="zg-counter" aria-hidden="true">0</div>
+          <button type="button" class="zg-counter" id="zg-counter" aria-label="Show scanned sheets">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
+            <span><span id="zg-count">0</span><span class="zg-count-total">/${totalLearners}</span></span>
+          </button>
+
+          <div class="zg-tools">
+            <button type="button" class="zg-tool" id="zg-torch" aria-label="Toggle flashlight" aria-pressed="false" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>
+            </button>
+            <button type="button" class="zg-tool zg-tool-text" id="zg-zoom" aria-label="Change zoom" hidden>1×</button>
+          </div>
 
           <div class="zg-flash" id="omr-flash"></div>
 
-          <div class="zg-status-pill" id="omr-status-pill">
+          <div class="zg-card" id="zg-card" hidden role="status" aria-live="polite"></div>
+
+          <div class="zg-status-pill" id="omr-status-pill" role="status" aria-live="polite">
             <div class="zg-status-main" id="omr-status-main">Align squares in viewfinders</div>
             <div class="zg-status-sub" id="omr-status-sub">${Utils.esc(assessLabel)} · ${Utils.esc(classLabel)}</div>
           </div>
 
-          <button type="button" class="zg-undo" id="omr-undo"
-                  disabled aria-label="Undo last scan">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 7v6h6"/>
-              <path d="M21 17a9 9 0 01-15-6.7L3 13"/>
-            </svg>
+          <button type="button" class="zg-undo" id="omr-undo" disabled aria-label="Undo last scan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 01-15-6.7L3 13"/></svg>
           </button>
+
+          <div class="zg-camera-error" id="zg-error" hidden></div>
+
+          ${showCoach ? `
+          <div class="zg-coach" id="zg-coach">
+            <div class="zg-coach-card">
+              <h4>Scan like a pro</h4>
+              <ul>
+                <li>Lay the sheet <b>flat</b> in good light.</li>
+                <li>Fit <b>all four corner squares</b> inside the dark boxes.</li>
+                <li>Hold still for a second — it beeps and buzzes when graded.</li>
+                <li>Tap the <b>list</b> (top right) to review uncertain answers.</li>
+              </ul>
+              <button type="button" class="zg-btn primary" id="zg-coach-ok">Got it</button>
+            </div>
+          </div>` : ''}
         </div>
+
+        <div class="zg-sheet-backdrop" id="zg-backdrop" hidden></div>
+        <section class="zg-sheet" id="zg-sheet" role="dialog" aria-modal="true" aria-labelledby="zg-sheet-title" hidden>
+          <div class="zg-sheet-grab" aria-hidden="true"></div>
+          <header class="zg-sheet-head">
+            <h3 id="zg-sheet-title"></h3>
+            <button type="button" class="zg-sheet-x" id="zg-sheet-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </header>
+          <div class="zg-sheet-body" id="zg-sheet-body"></div>
+          <footer class="zg-sheet-foot" id="zg-sheet-foot" hidden></footer>
+        </section>
       `;
       document.body.appendChild(overlay);
       document.body.classList.add('zg-scanner-open');
 
-      closeScanner = () => {
-        stopCamera();
+      // Android back button / swipe-back closes the scanner instead of leaving the app.
+      try {
+        history.pushState({ klazScanner: true }, '');
+        pushedHistory = true;
+        onPop = () => {
+          pushedHistory = false;
+          if (session.sheetOpen) {            // back closes an open sheet first
+            try { history.pushState({ klazScanner: true }, ''); pushedHistory = true; } catch (e) {}
+            closeSheet();
+          } else {
+            closeScanner(true);
+          }
+        };
+        window.addEventListener('popstate', onPop);
+      } catch (e) { pushedHistory = false; }
+
+      closeScanner = (fromPop) => {
+        teardown();
+        if (onPop) { window.removeEventListener('popstate', onPop); onPop = null; }
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
         document.body.classList.remove('zg-scanner-open');
+        if (pushedHistory && fromPop !== true) { pushedHistory = false; try { history.back(); } catch (e) {} }
       };
 
-      overlay.querySelector('#zg-back').onclick     = () => closeScanner();
-      overlay.querySelector('#zg-settings').onclick = () => openCalibrationModal();
-      overlay.querySelector('#omr-undo').onclick    = () => undoLastScan();
+      $('#zg-back').onclick     = () => closeScanner();
+      $('#zg-settings').onclick = () => showSettingsSheet();
+      $('#omr-undo').onclick    = () => undoLastScan();
+      $('#zg-counter').onclick  = () => showResultsSheet();
+      $('#zg-sheet-close').onclick = () => closeSheet();
+      $('#zg-backdrop').onclick    = () => closeSheet();
+      $('#zg-torch').onclick = () => toggleTorch();
+      $('#zg-zoom').onclick  = () => cycleZoom();
+      const coachOk = $('#zg-coach-ok');
+      if (coachOk) coachOk.onclick = () => { setOmrPref('coach', true); const c = $('#zg-coach'); if (c) c.remove(); };
+
+      // Tap the preview to re-focus (supported browsers only).
+      $('#omr-video-wrap').addEventListener('click', (e) => {
+        if (e.target.closest('button, .zg-card, .zg-coach')) return;
+        refocus();
+      });
+
+      if ('ResizeObserver' in window) {
+        ro = new ResizeObserver(() => sizeOverlay());
+        ro.observe($('#omr-video-wrap'));
+      }
 
     /* ══════════════════════════════════════════════════════════════════
        DESKTOP — existing modal scanner
@@ -50077,197 +50162,487 @@ function openScanner(assessmentId) {
     session.video  = overlay.querySelector('#omr-video');
     session.canvas = overlay.querySelector('#omr-canvas');
     session.ctx    = session.canvas.getContext('2d', { willReadFrequently: true });
+    sizeOverlay();
+
+    /* ----------------------------------------------------------------
+       Lifecycle: tab hidden / phone locked → release camera; come back → resume
+       ---------------------------------------------------------------- */
+    const onVisibility = () => {
+      if (session.closed) return;
+      if (document.hidden) {
+        session.suspended = true;
+        stopCamera();
+        releaseWake();
+      } else {
+        session.suspended = false;
+        acquireWake();
+        startCamera();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    function teardown() {
+      if (session.closed) return;
+      session.closed = true;
+      stopCamera();
+      releaseWake();
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (ro) { try { ro.disconnect(); } catch (e) {} ro = null; }
+      if (session.ovTimer) clearTimeout(session.ovTimer);
+      if (cardTimer) clearTimeout(cardTimer);
+      const n = session.scanned.length;
+      if (n) {
+        const avg = Math.round(session.scanned.reduce((s, r) => s + r.percentage, 0) / n);
+        UI.toast(`Scanner closed — ${n} sheet${n === 1 ? '' : 's'} graded · average ${avg}%`, 'success', 4500);
+        try { if (State.currentModule) App.navigate(State.currentModule); } catch (e) {}
+      }
+    }
+
+    /* ----------------------------------------------------------------
+       Wake lock — keep the screen on while scanning a stack of sheets
+       ---------------------------------------------------------------- */
+    async function acquireWake() {
+      try {
+        if (!('wakeLock' in navigator) || session.closed || session.wakeLock) return;
+        session.wakeLock = await navigator.wakeLock.request('screen');
+        session.wakeLock.addEventListener('release', () => { session.wakeLock = null; });
+      } catch (e) { session.wakeLock = null; }
+    }
+    function releaseWake() {
+      try { if (session.wakeLock) session.wakeLock.release(); } catch (e) {}
+      session.wakeLock = null;
+    }
 
     /* ----------------------------------------------------------------
        Camera lifecycle
        ---------------------------------------------------------------- */
     async function startCamera() {
+      if (session.closed || session.stream || session.starting) return;
+      session.starting = true;
       try {
-        session.stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 }
-          },
-          audio: false
-        });
-        session.video.srcObject = session.stream;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          const err = new Error(window.isSecureContext
+            ? 'This browser does not support camera access.'
+            : 'The camera needs a secure (HTTPS) connection.');
+          err.name = 'NotSupportedError';
+          throw err;
+        }
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            audio: false
+          });
+        } catch (e) {
+          if (e && (e.name === 'OverconstrainedError' || e.name === 'ConstraintNotSatisfiedError')) {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          } else { throw e; }
+        }
+        if (session.closed) { stream.getTracks().forEach(t => t.stop()); return; }
+        session.stream = stream;
+        session.track = stream.getVideoTracks()[0] || null;
+        session.video.srcObject = stream;
         await session.video.play();
+        hideCameraError();
+        await setupTrackControls();
+        if (session.track) {
+          session.track.onended = () => {
+            if (session.closed || session.suspended) return;
+            session.stream = null;
+            setStatus('Camera stopped — reconnecting…', 'warn');
+            setTimeout(startCamera, 900);
+          };
+        }
+        acquireWake();
         setStatus('Align squares in viewfinders');
         startDecodeLoop();
-      } catch (e) { showCameraError(e); }
+      } catch (e) {
+        session.stream = null;
+        showCameraError(e);
+      } finally {
+        session.starting = false;
+      }
     }
 
     function stopCamera() {
       if (session.timer) { clearTimeout(session.timer); session.timer = null; }
+      if (session.track) { try { session.track.onended = null; } catch (e) {} }
       if (session.stream) {
         try { session.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
         session.stream = null;
       }
+      session.track = null;
       if (session.video) { try { session.video.srcObject = null; } catch (e) {} }
+      session.lastCenters = null;
     }
 
+    async function setupTrackControls() {
+      const track = session.track;
+      let caps = {};
+      try { caps = (track && track.getCapabilities) ? track.getCapabilities() : {}; } catch (e) {}
+      session.caps = caps || {};
+      // Best effort: continuous autofocus makes close-range sheets far sharper.
+      try {
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+        }
+      } catch (e) {}
+      const torchBtn = overlay.querySelector('#zg-torch');
+      const zoomBtn  = overlay.querySelector('#zg-zoom');
+      if (torchBtn) {
+        torchBtn.hidden = !caps.torch;
+        if (caps.torch && session.torchOn) applyTorch(true);
+      }
+      if (zoomBtn) {
+        const z = caps.zoom;
+        session.zoomSteps = z ? [1, 1.5, 2, 3].filter(v => v >= z.min - 1e-6 && v <= z.max + 1e-6) : [];
+        zoomBtn.hidden = session.zoomSteps.length < 2;
+        if (!zoomBtn.hidden) {
+          session.zoomIdx = Math.min(session.zoomIdx, session.zoomSteps.length - 1);
+          applyZoom();
+        }
+      }
+    }
+
+    async function applyTorch(on) {
+      try {
+        await session.track.applyConstraints({ advanced: [{ torch: !!on }] });
+        session.torchOn = !!on;
+      } catch (e) { session.torchOn = false; }
+      const b = overlay.querySelector('#zg-torch');
+      if (b) { b.classList.toggle('on', session.torchOn); b.setAttribute('aria-pressed', String(session.torchOn)); }
+    }
+    function toggleTorch() { if (session.track && session.caps.torch) applyTorch(!session.torchOn); }
+
+    async function applyZoom() {
+      const z = session.zoomSteps[session.zoomIdx];
+      try { await session.track.applyConstraints({ advanced: [{ zoom: z }] }); } catch (e) {}
+      const b = overlay.querySelector('#zg-zoom');
+      if (b) b.textContent = (Number.isInteger(z) ? z : z.toFixed(1)) + '×';
+    }
+    function cycleZoom() {
+      if (!session.zoomSteps || session.zoomSteps.length < 2) return;
+      session.zoomIdx = (session.zoomIdx + 1) % session.zoomSteps.length;
+      applyZoom();
+    }
+
+    async function refocus() {
+      const caps = session.caps || {};
+      if (!session.track || !caps.focusMode) return;
+      try {
+        if (caps.focusMode.includes('single-shot')) {
+          await session.track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
+          setTimeout(() => {
+            if (session.track && caps.focusMode.includes('continuous')) {
+              session.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+            }
+          }, 900);
+        }
+      } catch (e) {}
+    }
+
+    /* ----------------------------------------------------------------
+       Decode loop — adaptive: never more than ~50% CPU duty so the UI
+       (buttons, sheets) stays responsive, and faster once a sheet is in view.
+       ---------------------------------------------------------------- */
     function startDecodeLoop() {
-      const TICK_MS = 220;
+      if (session.timer) clearTimeout(session.timer);
       const tick = () => {
-        if (!session.stream || !session.video) return;
-        session.timer = setTimeout(tick, TICK_MS);
-        const v = session.video;
-        if (v.readyState !== v.HAVE_ENOUGH_DATA || !v.videoWidth) return;
-
-        const MAX_W = 1200;
-        const scale = Math.min(1, MAX_W / v.videoWidth);
-        session.canvas.width  = Math.round(v.videoWidth  * scale);
-        session.canvas.height = Math.round(v.videoHeight * scale);
-        session.ctx.drawImage(v, 0, 0, session.canvas.width, session.canvas.height);
-
-        let smallData;
-        try { smallData = session.ctx.getImageData(0, 0, session.canvas.width, session.canvas.height); }
-        catch (e) { return; }
-
-        processFrame(smallData, v);
+        session.timer = null;
+        if (session.closed || !session.stream) return;
+        if (session.paused || session.suspended) { session.timer = setTimeout(tick, 250); return; }
+        const t0 = performance.now();
+        try { processFrame(); } catch (e) { console.warn('[OMR] frame error:', e); }
+        const spent = performance.now() - t0;
+        session.procMs = session.procMs * 0.7 + spent * 0.3;
+        const floor = session.found ? 70 : 150;
+        session.timer = setTimeout(tick, Math.max(floor, Math.round(session.procMs * 0.8)));
       };
       tick();
     }
 
     /* ----------------------------------------------------------------
-       Frame processing — unchanged detection pipeline
+       Live overlay — outlines the detected sheet and the answers it read
        ---------------------------------------------------------------- */
-    function processFrame(smallData, videoEl) {
-      const found = detectQRsWithRotation(smallData);
-      if (!found.qrs.length) return;
+    function sizeOverlay() {
+      const cv = overlay.querySelector('#zg-overlay');
+      const wrap = overlay.querySelector('#omr-video-wrap');
+      if (!cv || !wrap) { session.ov = null; return; }
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      const pw = Math.max(1, Math.round(w * dpr)), ph = Math.max(1, Math.round(h * dpr));
+      if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+      session.ov = { cv, ctx: cv.getContext('2d'), dpr, w, h };
+    }
+
+    function clearOverlay() {
+      if (!session.ov) return;
+      session.ov.ctx.clearRect(0, 0, session.ov.cv.width, session.ov.cv.height);
+    }
+
+    /* Maps working-canvas pixels → overlay canvas pixels (video is object-fit: cover). */
+    function overlayMapper() {
+      const g = session.geom, ov = session.ov;
+      if (!g || !ov || !ov.w || !ov.h) return null;
+      const s = Math.max(ov.w / g.vw, ov.h / g.vh);
+      const f = g.vw / g.W;
+      const ox = (ov.w - g.vw * s) / 2, oy = (ov.h - g.vh * s) / 2;
+      return {
+        pt: (x, y) => [(x * f * s + ox) * ov.dpr, (y * f * s + oy) * ov.dpr],
+        scale: f * s * ov.dpr
+      };
+    }
+
+    function drawOverlay(quadPts, color, marks) {
+      if (!session.ov) return;
+      const m = overlayMapper();
+      if (!m) return;
+      const ctx = session.ov.ctx;
+      clearOverlay();
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      if (quadPts && quadPts.length === 4) {
+        ctx.beginPath();
+        quadPts.forEach((p, i) => { const [x, y] = m.pt(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        ctx.closePath();
+        ctx.lineWidth = 3 * session.ov.dpr;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        ctx.fillStyle = color + '22';
+        ctx.fill();
+      }
+      (marks || []).forEach(k => {
+        const [x, y] = m.pt(k.x, k.y);
+        ctx.beginPath();
+        if (k.kind === 'x') {
+          const r = k.r * m.scale;
+          ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r);
+          ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r);
+          ctx.lineWidth = 2.5 * session.ov.dpr; ctx.strokeStyle = k.color; ctx.stroke();
+        } else {
+          ctx.arc(x, y, Math.max(3, k.r * m.scale), 0, Math.PI * 2);
+          ctx.lineWidth = 2.5 * session.ov.dpr; ctx.strokeStyle = k.color; ctx.stroke();
+        }
+      });
+      if (session.ovTimer) clearTimeout(session.ovTimer);
+      session.ovTimer = setTimeout(clearOverlay, 600);
+    }
+
+    /* ----------------------------------------------------------------
+       Frame processing
+       ---------------------------------------------------------------- */
+    function noSheet() {
+      session.found = false;
+      session.lastCenters = null;
+      clearOverlay();
+      setStatus('Align squares in viewfinders');
+    }
+
+    const quadOf = (anchors) => ['TL', 'TR', 'BR', 'BL'].map(k => qrCenter(anchors[k]));
+
+    function processFrame() {
+      const v = session.video;
+      if (!v || v.readyState < 2 || !v.videoWidth) return;
+      const vw = v.videoWidth, vh = v.videoHeight;
+      const k = Math.min(1, WORK_LONG / Math.max(vw, vh));
+      const W = Math.round(vw * k), Hh = Math.round(vh * k);
+      if (session.canvas.width !== W || session.canvas.height !== Hh) {
+        session.canvas.width = W; session.canvas.height = Hh;
+      }
+      session.ctx.drawImage(v, 0, 0, W, Hh);
+      let img;
+      try { img = session.ctx.getImageData(0, 0, W, Hh); } catch (e) { return; }
+      session.geom = { W, H: Hh, vw, vh };
+
+      // QR codes decode at any orientation, and the labelled corners give the
+      // sheet pose, so a single pass is enough (no 4× rotation retries).
+      const qrs = detectQRs(img, 5);
+      if (!qrs.length) { noSheet(); return; }
+      session.found = true;
 
       const anchors = { TL: null, TR: null, BL: null, BR: null };
       let payload = null;
-
-      for (const qr of found.qrs) {
-        const text = String(qr.data || '');
+      for (const qr of qrs) {
+        const text = String(qr.data || '').trim();
         if (ANCHOR_PAYLOADS[text]) { anchors[ANCHOR_PAYLOADS[text]] = qr; continue; }
         if (text.startsWith('{')) {
           try { const p = JSON.parse(text); if (p && p.e) payload = p; } catch (e) {}
         }
       }
 
-      if (!anchors.TL || !anchors.TR || !anchors.BL || !anchors.BR) {
-        setStatus('Show all four corner QR codes', 'warn');
+      const haveN = ['TL', 'TR', 'BL', 'BR'].filter(n => anchors[n]).length;
+      if (haveN < 4) {
+        if (haveN === 0) { noSheet(); return; }
+        drawOverlay(null, '#f59e0b', ['TL', 'TR', 'BL', 'BR'].filter(n => anchors[n]).map(n => {
+          const c = qrCenter(anchors[n]); return { x: c[0], y: c[1], r: 14, color: '#f59e0b' };
+        }));
+        setStatus(`Found ${haveN} of 4 corners — show every corner`, 'warn');
         return;
       }
-      if (!payload || payload.e !== session.assessment.id) {
+
+      const quad = quadOf(anchors);
+      const sheetAnchors = anchorCenters();
+      const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
+      const dstPts = [qrCenter(anchors.TL), qrCenter(anchors.TR), qrCenter(anchors.BL), qrCenter(anchors.BR)];
+
+      // Corner squares touching the frame edge are usually clipped → unreliable.
+      const edge = Math.max(4, Math.round(Math.max(W, Hh) * 0.01));
+      const clipped = ['TL', 'TR', 'BL', 'BR'].some(n => {
+        const L = anchors[n].location;
+        return [L.topLeftCorner, L.topRightCorner, L.bottomLeftCorner, L.bottomRightCorner]
+          .some(p => p.x < edge || p.y < edge || p.x > W - edge || p.y > Hh - edge);
+      });
+      if (clipped) {
+        drawOverlay(quad, '#f59e0b');
+        setStatus('Move back — a corner is cut off', 'warn');
+        return;
+      }
+
+      // Motion gate: motion blur is the #1 cause of misread bubbles.
+      const now = performance.now();
+      const norm = Math.max(W, Hh);
+      const prev = session.lastCenters;
+      let moving = false;
+      if (prev && now - prev.t < 700) {
+        const md = Math.max(...dstPts.map((p, i) => Math.hypot(p[0] - prev.pts[i][0], p[1] - prev.pts[i][1]))) / norm;
+        moving = md > 0.01;
+      }
+      session.lastCenters = { t: now, pts: dstPts };
+      if (moving) {
+        drawOverlay(quad, '#f59e0b');
+        setStatus('Hold steady…', 'warn');
+        return;
+      }
+
+      if (!payload) {
+        drawOverlay(quad, '#f59e0b');
+        setStatus('Reading sheet code — hold steady…', 'warn');
+        return;
+      }
+      if (payload.e !== session.assessment.id) {
+        drawOverlay(quad, '#ef4444');
         setStatus('Sheet is for a different exam', 'warn');
         return;
       }
-
-      const sheetAnchors = anchorCenters();
-      const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
-      const dstPts = [
-        qrCenter(anchors.TL), qrCenter(anchors.TR),
-        qrCenter(anchors.BL), qrCenter(anchors.BR)
-      ];
-
-      if (dstPts[0][0] > dstPts[1][0] || dstPts[0][1] > dstPts[2][1]) {
-        setStatus('Sheet appears upside down — flip it', 'warn');
+      if (payload.n && payload.n !== session.answerKey.length) {
+        drawOverlay(quad, '#ef4444');
+        setStatus(`Exam now has ${session.answerKey.length} items, sheet has ${payload.n} — reprint sheets`, 'err');
         return;
       }
 
       const H = computeHomography(srcPts, dstPts);
       if (!H) { setStatus('Could not align sheet', 'warn'); return; }
-
       const rms = reprojectionError(H, srcPts, dstPts);
       if (rms > CAL.maxReprojErrPx) {
+        drawOverlay(quad, '#f59e0b');
         setStatus('Hold steady — realigning…', 'warn');
         return;
       }
 
-      const bigCanvas = document.createElement('canvas');
-      bigCanvas.width  = videoEl.videoWidth;
-      bigCanvas.height = videoEl.videoHeight;
-      const bigCtx = bigCanvas.getContext('2d', { willReadFrequently: true });
-      bigCtx.drawImage(videoEl, 0, 0);
+      // Sample bubbles from a higher-resolution frame when the camera offers one
+      // (reused canvas — no per-frame allocation of a full-size canvas).
+      let sample = img, f = 1;
+      const kHi = Math.min(1, HI_LONG / Math.max(vw, vh));
+      if (kHi > k * 1.15) {
+        const HW = Math.round(vw * kHi), HH = Math.round(vh * kHi);
+        if (!session.hiCanvas) {
+          session.hiCanvas = document.createElement('canvas');
+          session.hiCtx = session.hiCanvas.getContext('2d', { willReadFrequently: true });
+        }
+        if (session.hiCanvas.width !== HW || session.hiCanvas.height !== HH) {
+          session.hiCanvas.width = HW; session.hiCanvas.height = HH;
+        }
+        session.hiCtx.drawImage(v, 0, 0, HW, HH);
+        try { sample = session.hiCtx.getImageData(0, 0, HW, HH); f = HW / W; }
+        catch (e) { sample = img; f = 1; }
+      }
+      const Hs = [[H[0][0]*f, H[0][1]*f, H[0][2]*f],
+                  [H[1][0]*f, H[1][1]*f, H[1][2]*f],
+                  [H[2][0],   H[2][1],   H[2][2]]];
 
-      let bigData;
-      try { bigData = bigCtx.getImageData(0, 0, bigCanvas.width, bigCanvas.height); }
-      catch (e) { bigData = smallData; }
+      const anchorDistMM = Math.hypot(sheetAnchors.TR[0] - sheetAnchors.TL[0], sheetAnchors.TR[1] - sheetAnchors.TL[1]);
+      const pixelDist = Math.hypot(dstPts[1][0] - dstPts[0][0], dstPts[1][1] - dstPts[0][1]);
+      const mmPerPxWork = pixelDist > 0 ? (anchorDistMM / pixelDist) : 0.15;
+      const mmPerPx = mmPerPxWork / f;
 
-      const useBigFrame = (found.rotationDeg === 0 && bigData !== smallData);
-      const sampleData  = useBigFrame ? bigData : found.imageData;
-      const sampleScale = useBigFrame
-        ? (videoEl.videoWidth / session.canvas.width)
-        : 1;
+      if (SHEET.bubbleDiaMM / mmPerPxWork < 7) {
+        drawOverlay(quad, '#f59e0b');
+        setStatus('Move closer — fill the screen with the sheet', 'warn');
+        return;
+      }
 
-      const Hs = useBigFrame
-        ? [[H[0][0]*sampleScale, H[0][1]*sampleScale, H[0][2]*sampleScale],
-           [H[1][0]*sampleScale, H[1][1]*sampleScale, H[1][2]*sampleScale],
-           [H[2][0],             H[2][1],             H[2][2]]]
-        : H;
-
-      const otsuThresh = otsuThreshold(sampleData);
-
-      const anchorDistMM = Math.hypot(
-        sheetAnchors.TR[0] - sheetAnchors.TL[0],
-        sheetAnchors.TR[1] - sheetAnchors.TL[1]
-      );
-      const pixelDist = Math.hypot(
-        dstPts[1][0] - dstPts[0][0],
-        dstPts[1][1] - dstPts[0][1]
-      );
-      const mmPerPx = pixelDist > 0 ? (anchorDistMM / pixelDist) / sampleScale : 0.15;
-
+      const otsuThresh = otsuThreshold(sample);
       const questionCount = payload.n || session.answerKey.length;
       const positions = bubblePositions(questionCount);
 
       const perQuestion = [];
       let filledCount = 0;
       let ambiguousCount = 0;
+      const marks = [];
+      const bubbleRwork = (SHEET.bubbleDiaMM * 0.5) / mmPerPxWork;
       for (const pos of positions) {
-        const res = detectAnswerForQuestion(Hs, pos.choices, sampleData, mmPerPx, otsuThresh);
+        const res = detectAnswerForQuestion(Hs, pos.choices, sample, mmPerPx, otsuThresh);
         if (res.choice !== null) filledCount++;
         if (res.choice !== null && res.confidence > 0 && res.confidence < 0.6) ambiguousCount++;
         perQuestion.push(res);
+        if (res.choice !== null) {
+          const [bx, by] = applyH(H, pos.choices[res.choice][0], pos.choices[res.choice][1]);
+          marks.push({ x: bx, y: by, r: bubbleRwork * 1.15, color: res.confidence >= 0.6 ? '#22c55e' : '#f59e0b' });
+        } else if (res.multiple) {
+          res.candidates.forEach(ci => {
+            const [bx, by] = applyH(H, pos.choices[ci][0], pos.choices[ci][1]);
+            marks.push({ x: bx, y: by, r: bubbleRwork, kind: 'x', color: '#ef4444' });
+          });
+        }
       }
-
-      if (filledCount / questionCount < 0.4) {
-        setStatus('Sheet not detected — adjust framing', 'warn');
-        return;
-      }
+      drawOverlay(quad, '#22c55e', marks);
 
       let learner = null;
       if (payload.l) {
-        learner = State.learners.find(l =>
-          String(l.lrn || '').trim() === String(payload.l).trim()
-        );
+        learner = State.learners.find(l => String(l.lrn || '').trim() === String(payload.l).trim());
       }
       if (!learner) { setStatus('Learner LRN not in this class', 'warn'); return; }
 
-      const now = Date.now();
+      const t = Date.now();
       const last = session.recentScans.get(learner.id) || 0;
-      if (now - last < 4000) return;
+      if (t - last < 4000) return;
 
       if (session.scanned.some(s => s.learner.id === learner.id)) {
         setStatus('Already scanned this sheet', 'warn');
+        const shownAt = session.dupShownAt.get(learner.id) || 0;
+        if (t - shownAt > 6000) {
+          session.dupShownAt.set(learner.id, t);
+          feedback('warn');
+          const dup = session.scanned.find(s => s.learner.id === learner.id);
+          showCard({
+            kind: 'warn',
+            title: `Already scanned · ${learner.firstName || Utils.fullName(learner)}`,
+            sub: 'Rescan to replace the earlier result.',
+            actions: [{ label: 'Rescan', fn: async () => { await removeResult(dup); setStatus('Hold the sheet in view to rescan', 'warn'); } }],
+            ms: 5000
+          });
+        }
         return;
       }
 
-      const signature = perQuestion
-        .map(p => p.choice === null ? 'x' : p.choice)
-        .join(',');
+      // Votes: the same reading on consecutive frames. A mostly-blank sheet (absent
+      // or low-answered learner) is allowed, but needs a longer hold to confirm.
+      const sparse = filledCount / Math.max(1, questionCount) < 0.4;
+      const needVotes = CAL.confirmFrames + (sparse ? 3 : 0);
+      const signature = perQuestion.map(p => p.choice === null ? (p.multiple ? 'm' : 'x') : p.choice).join(',');
       const pending = session.pendingConfirm.get(learner.id) || { signature: null, votes: 0 };
-
-      if (pending.signature === signature) {
-        pending.votes++;
-      } else {
-        pending.signature = signature;
-        pending.votes = 1;
-      }
+      if (pending.signature === signature) pending.votes++;
+      else { pending.signature = signature; pending.votes = 1; }
       session.pendingConfirm.set(learner.id, pending);
 
-      if (pending.votes < CAL.confirmFrames) {
-        setStatus(`Reading sheet… (${pending.votes}/${CAL.confirmFrames})`, 'warn');
+      if (pending.votes < needVotes) {
+        setStatus(sparse
+          ? `Mostly blank sheet — hold to confirm (${pending.votes}/${needVotes})`
+          : `Reading sheet… (${pending.votes}/${needVotes})`, 'warn');
         return;
       }
 
-      session.recentScans.set(learner.id, now);
+      session.recentScans.set(learner.id, t);
       session.pendingConfirm.delete(learner.id);
-
       gradeAndCommit(learner, perQuestion, ambiguousCount);
     }
 
@@ -50275,18 +50650,23 @@ function openScanner(assessmentId) {
        Grade + persist
        ---------------------------------------------------------------- */
     function gradeAndCommit(learner, perQuestion, ambiguousCount) {
-      let correct = 0, incorrect = 0, blank = 0, ambiguous = 0;
+      let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
       const detail = [];
       for (let i = 0; i < perQuestion.length; i++) {
         const key = session.answerKey[i];
         const det = perQuestion[i];
-        if (key === null) {
+        if (key === null || key === undefined) {
           detail.push({ q: i, status: 'ungraded', correct: null, detected: det.choice, key: null, confidence: det.confidence });
           continue;
         }
         if (det.choice === null) {
-          blank++;
-          detail.push({ q: i, status: 'blank', correct: false, detected: null, key, confidence: 0 });
+          if (det.multiple) {
+            incorrect++; multiple++;
+            detail.push({ q: i, status: 'multiple', correct: false, detected: null, key, confidence: 0, candidates: det.candidates });
+          } else {
+            blank++;
+            detail.push({ q: i, status: 'blank', correct: false, detected: null, key, confidence: 0 });
+          }
         } else if (det.choice === key) {
           if (det.confidence < 0.6) {
             ambiguous++;
@@ -50310,15 +50690,19 @@ function openScanner(assessmentId) {
         learner,
         answers: detail,
         correct: correct + ambiguous,
-        incorrect, blank, ambiguous,
+        incorrect, blank, ambiguous, multiple,
         score, percentage,
-        scannedAt: new Date().toISOString()
+        scannedAt: new Date().toISOString(),
+        prev: null, saving: null
       };
 
-      (async () => {
+      // Saved in the background, but undo/rescan await `result.saving`, so a fast
+      // undo can no longer race the write and leave a ghost result behind.
+      result.saving = (async () => {
         try {
           const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', learner.id))
             .find(r => r.assessmentId === session.assessment.id);
+          result.prev = existing ? JSON.parse(JSON.stringify(existing)) : null;   // so undo can restore it
           const rec = existing || {
             id: Utils.uid('r-'), learnerId: learner.id,
             assessmentId: session.assessment.id,
@@ -50332,55 +50716,152 @@ function openScanner(assessmentId) {
           rec.omrScanned = true;
           rec.updatedAt = new Date().toISOString();
           await DB.put('assessmentResults', rec);
-        } catch (e) { console.warn('[OMR] Could not save result:', e); }
+        } catch (e) {
+          console.warn('[OMR] Could not save result:', e);
+          UI.toast('Could not save the result for ' + Utils.fullName(learner), 'error');
+        }
       })();
 
       session.scanned.push(result);
       renderList();
-      beep();
+      feedback('ok');
       flash();
 
       const first = learner.firstName || Utils.fullName(learner);
-      const ambTag = ambiguous ? ` · ${ambiguous} to review` : '';
+      const flagged = flaggedCount(result);
+      const ambTag = flagged ? ` · ${flagged} to review` : '';
       setStatus(`✓ ${first} — ${percentage}%${ambTag}`, 'ok');
+      showCard({
+        kind: flagged ? 'warn' : 'ok',
+        title: `${first} · ${percentage}%`,
+        sub: `${result.correct} correct · ${result.incorrect} wrong · ${result.blank} blank${flagged ? ` · ${flagged} to review` : ''}`,
+        actions: flagged ? [{ label: 'Review', fn: () => showReviewSheet(result) }] : [],
+        ms: flagged ? 5000 : 2600
+      });
 
       App.logActivity(
         `OMR scanned: ${Utils.fullName(learner)} — ${percentage}% on "${session.assessment.title}"`,
         'Assessments'
       );
 
-      if (ambiguous >= 2) {
-        UI.toast(`${Utils.fullName(learner)}: ${ambiguous} answer${ambiguous === 1 ? '' : 's'} need review`, 'warning', 4000);
+      if (totalLearners && session.scanned.length >= totalLearners && !session.allDoneShown) {
+        session.allDoneShown = true;
+        UI.toast('All learners scanned 🎉', 'success', 3500);
       }
     }
 
     /* ----------------------------------------------------------------
-       Undo last scan (mobile)
+       Undo / rescan
        ---------------------------------------------------------------- */
-    async function undoLastScan() {
-      const last = session.scanned.pop();
-      if (!last) return;
+    async function removeResult(result) {
+      if (!result) return;
+      const idx = session.scanned.indexOf(result);
+      if (idx >= 0) session.scanned.splice(idx, 1);
       renderList();
-
-      // Remove the result we just wrote
+      session.recentScans.delete(result.learner.id);
+      session.pendingConfirm.delete(result.learner.id);
+      try { await result.saving; } catch (e) {}
       try {
-        const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', last.learner.id))
-          .find(r => r.assessmentId === session.assessment.id);
-        if (existing) await DB.delete('assessmentResults', existing.id);
-      } catch (e) { console.warn('[OMR] Undo delete failed:', e); }
+        if (result.prev) {
+          await DB.put('assessmentResults', result.prev);          // restore what was there before the scan
+        } else {
+          const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
+            .find(r => r.assessmentId === session.assessment.id);
+          if (existing) await DB.delete('assessmentResults', existing.id);
+        }
+      } catch (e) { console.warn('[OMR] Undo failed:', e); }
+    }
 
-      // Clear the debounce so the same sheet can be rescanned immediately
-      session.recentScans.delete(last.learner.id);
-
-      setStatus(`Undid scan for ${last.learner.firstName || Utils.fullName(last.learner)}`, 'warn');
+    async function undoLastScan() {
+      const last = session.scanned[session.scanned.length - 1];
+      if (!last) return;
+      await removeResult(last);
+      // Undo means "discard": don't instantly re-grade the same sheet that is still
+      // in front of the camera. (Rescan, by contrast, re-grades immediately.)
+      session.recentScans.set(last.learner.id, Date.now());
+      const who = last.learner.firstName || Utils.fullName(last.learner);
+      setStatus(`Undid scan for ${who}`, 'warn');
+      hideCard();
       UI.toast('Last scan undone', 'info', 2200);
+      App.logActivity(`OMR scan undone: ${Utils.fullName(last.learner)}`, 'Assessments');
+    }
+
+    /* ----------------------------------------------------------------
+       Review: effective score recomputation (shared by desktop + mobile)
+       ---------------------------------------------------------------- */
+    const isFlagged = (p) =>
+      p.correct !== null && p.override === undefined &&
+      (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+       (p.confidence > 0 && p.confidence < 0.6));
+    const flaggedCount = (r) => r.reviewedAt ? 0 : r.answers.filter(isFlagged).length;
+
+    async function commitReview(result) {
+      let correct = 0, incorrect = 0, blank = 0;
+      const detail = [];
+      for (let i = 0; i < result.answers.length; i++) {
+        const p = result.answers[i];
+        const key = session.answerKey[i];
+        const eff = p.override !== undefined ? p.override : p.detected;
+
+        if (key === null || key === undefined) {
+          detail.push({ ...p, status: 'ungraded', correct: null });
+          continue;
+        }
+        if (eff === null) {
+          if (p.override === undefined && p.status === 'multiple') {
+            incorrect++;
+            detail.push({ ...p, status: 'multiple', correct: false });
+          } else {
+            blank++;
+            detail.push({ ...p, status: 'blank', correct: false });
+          }
+        } else if (eff === key) {
+          correct++;
+          detail.push({ ...p, status: 'correct', correct: true });
+        } else {
+          incorrect++;
+          detail.push({ ...p, status: 'incorrect', correct: false });
+        }
+      }
+      const gradable = detail.filter(p => p.correct !== null).length;
+      const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
+      const score = Math.round(correct * pointsPerItem);
+      const percentage = gradable ? Math.round((correct / gradable) * 100) : 0;
+
+      result.correct = correct;
+      result.incorrect = incorrect;
+      result.blank = blank;
+      result.ambiguous = 0;
+      result.score = score;
+      result.percentage = percentage;
+      result.answers = detail;
+      result.reviewedAt = new Date().toISOString();
+
+      try { await result.saving; } catch (e) {}
+      try {
+        const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
+          .find(r => r.assessmentId === session.assessment.id);
+        if (existing) {
+          existing.score = score;
+          existing.percentage = percentage;
+          existing.omrDetails = detail;
+          existing.reviewedAt = result.reviewedAt;
+          existing.updatedAt = new Date().toISOString();
+          await DB.put('assessmentResults', existing);
+        }
+      } catch (e) { console.warn('[OMR] Could not save reviewed score:', e); }
+
+      renderList();
+      App.logActivity(`OMR review: ${Utils.fullName(result.learner)} — ${percentage}%`, 'Assessments');
     }
 
     /* ----------------------------------------------------------------
        UI helpers
        ---------------------------------------------------------------- */
+    let _stText = '', _stKind = '';
     function setStatus(text, kind) {
-      // Mobile — update the two-line status pill
+      if (text === _stText && (kind || '') === _stKind) return;     // avoid DOM churn every frame
+      _stText = text; _stKind = kind || '';
       const mainEl = overlay.querySelector('#omr-status-main');
       if (mainEl) {
         mainEl.textContent = text;
@@ -50390,7 +50871,6 @@ function openScanner(assessmentId) {
         else if (kind === 'err')  mainEl.classList.add('err');
         return;
       }
-      // Desktop — existing single-line status
       const el = overlay.querySelector('#omr-status');
       if (!el) return;
       el.textContent = text;
@@ -50404,44 +50884,75 @@ function openScanner(assessmentId) {
       setTimeout(() => el.classList.remove('on'), 200);
     }
 
-    function beep() {
+    function feedback(kind) {
+      if (session.prefs.sound) beep(kind);
+      if (session.prefs.haptics) {
+        try { if (navigator.vibrate) navigator.vibrate(kind === 'ok' ? 45 : [70, 50, 70]); } catch (e) {}
+      }
+    }
+
+    function beep(kind) {
       try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return;
-        if (!session.beepCtx) session.beepCtx = new Ctx();
-        const ctx = session.beepCtx;
-        if (ctx.state === 'suspended') ctx.resume();
+        const ctx = primeAudio();
+        if (!ctx) return;
         const o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = 'sine'; o.frequency.value = 1200;
+        o.type = 'sine';
+        o.frequency.value = kind === 'ok' ? 1200 : 520;
         o.connect(g); g.connect(ctx.destination);
         const t = ctx.currentTime;
+        const len = kind === 'ok' ? 0.14 : 0.22;
         g.gain.setValueAtTime(0, t);
         g.gain.linearRampToValueAtTime(0.18, t + 0.006);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
-        o.start(t); o.stop(t + 0.16);
+        g.gain.exponentialRampToValueAtTime(0.001, t + len);
+        o.start(t); o.stop(t + len + 0.02);
       } catch (e) {}
     }
 
+    /* Result card (mobile): who was just scanned + one-tap actions. */
+    let cardTimer = null;
+    function hideCard() {
+      const el = overlay.querySelector('#zg-card');
+      if (!el) return;
+      el.classList.remove('show');
+      el.hidden = true;
+      if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
+    }
+    function showCard({ title, sub = '', kind = 'ok', actions = [], ms = 3000 }) {
+      const el = overlay.querySelector('#zg-card');
+      if (!el) return;
+      el.className = 'zg-card ' + kind;
+      el.innerHTML = `
+        <div class="zg-card-text">
+          <div class="zg-card-title">${Utils.esc(title)}</div>
+          ${sub ? `<div class="zg-card-sub">${Utils.esc(sub)}</div>` : ''}
+        </div>
+        ${actions.map((x, i) => `<button type="button" class="zg-card-btn" data-card-act="${i}">${Utils.esc(x.label)}</button>`).join('')}`;
+      el.querySelectorAll('[data-card-act]').forEach(b => {
+        b.onclick = () => { hideCard(); actions[Number(b.dataset.cardAct)].fn(); };
+      });
+      el.hidden = false;
+      requestAnimationFrame(() => el.classList.add('show'));
+      if (cardTimer) clearTimeout(cardTimer);
+      cardTimer = setTimeout(hideCard, ms);
+    }
+
     /* ----------------------------------------------------------------
-       renderList — updates whichever UI is present (mobile counter
-       badge + desktop list). Safe to call on either layout.
+       renderList — updates whichever UI is present
        ---------------------------------------------------------------- */
     function renderList() {
-      // --- Mobile: counter badge + undo enable ---
-      const counterEl = overlay.querySelector('#zg-counter');
-      const undoBtn   = overlay.querySelector('#omr-undo');
-      if (counterEl) counterEl.textContent = String(session.scanned.length);
-      if (undoBtn)   undoBtn.disabled = session.scanned.length === 0;
+      const countEl = overlay.querySelector('#zg-count');
+      const undoBtn = overlay.querySelector('#omr-undo');
+      if (countEl) countEl.textContent = String(session.scanned.length);
+      if (undoBtn) undoBtn.disabled = session.scanned.length === 0;
 
-      // --- Desktop: existing list ---
       const list       = overlay.querySelector('#omr-list');
-      const countEl    = overlay.querySelector('#omr-count');
+      const dCountEl   = overlay.querySelector('#omr-count');
       const fillEl     = overlay.querySelector('#omr-progress-fill');
       const summaryEl  = overlay.querySelector('#omr-summary');
       if (!list) return;
 
       const total = Math.max(1, totalLearners);
-      if (countEl)  countEl.textContent = String(session.scanned.length);
+      if (dCountEl) dCountEl.textContent = String(session.scanned.length);
       if (fillEl)   fillEl.style.width = Math.min(100, Math.round((session.scanned.length / total) * 100)) + '%';
 
       if (!session.scanned.length) {
@@ -50460,8 +50971,9 @@ function openScanner(assessmentId) {
         const idx = session.scanned.length - 1 - ri;
         const pct = r.percentage;
         const color = pct >= 85 ? 'var(--success)' : pct >= 70 ? 'var(--deped-blue)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
-        const ambTag = r.ambiguous
-          ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${r.ambiguous} uncertain</span>`
+        const fl = flaggedCount(r);
+        const ambTag = fl
+          ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${fl} uncertain</span>`
           : '';
         return `<div class="qr-scan-row">
           <div class="qr-scan-avatar">${Utils.avatarHTML(r.learner, 30, 11)}</div>
@@ -50488,8 +51000,252 @@ function openScanner(assessmentId) {
       });
     }
 
+    /* ══════════════════════════════════════════════════════════════════
+       MOBILE bottom sheets
+       ══════════════════════════════════════════════════════════════════ */
+    function openSheet({ title, body, footer = '', onClose = null, tall = false }) {
+      const sheet = $('#zg-sheet'), backdrop = $('#zg-backdrop');
+      $('#zg-sheet-title').textContent = title;
+      const bodyEl = $('#zg-sheet-body');
+      bodyEl.innerHTML = body;
+      bodyEl.scrollTop = 0;
+      const foot = $('#zg-sheet-foot');
+      foot.innerHTML = footer;
+      foot.hidden = !footer;
+      sheet.classList.toggle('tall', !!tall);
+      sheet.hidden = false; backdrop.hidden = false;
+      requestAnimationFrame(() => { sheet.classList.add('open'); backdrop.classList.add('open'); });
+      session.sheetOnClose = onClose;
+      session.sheetOpen = true;
+      session.paused = true;          // stop decoding while the teacher is reading/editing
+      hideCard();
+      return { body: bodyEl, foot };
+    }
+
+    function closeSheet() {
+      if (!session.sheetOpen) return;
+      const sheet = $('#zg-sheet'), backdrop = $('#zg-backdrop');
+      sheet.classList.remove('open'); backdrop.classList.remove('open');
+      setTimeout(() => { if (!session.sheetOpen) { sheet.hidden = true; backdrop.hidden = true; } }, 240);
+      session.sheetOpen = false;
+      session.paused = false;
+      session.lastCenters = null;
+      const cb = session.sheetOnClose; session.sheetOnClose = null;
+      if (cb) cb();
+    }
+
+    const pctColor = (pct) => pct >= 85 ? 'good' : pct >= 70 ? 'ok' : pct >= 50 ? 'mid' : 'low';
+
+    function showResultsSheet() {
+      const n = session.scanned.length;
+      const avg = n ? Math.round(session.scanned.reduce((s, r) => s + r.percentage, 0) / n) : 0;
+      const needReview = session.scanned.filter(r => flaggedCount(r) > 0).length;
+
+      const rows = session.scanned.map((r, i) => ({ r, i })).reverse().map(({ r, i }) => {
+        const fl = flaggedCount(r);
+        return `<button type="button" class="zg-row" data-idx="${i}">
+          <span class="zg-row-av">${Utils.avatarHTML(r.learner, 38, 13)}</span>
+          <span class="zg-row-main">
+            <span class="zg-row-name">${Utils.esc(Utils.fullName(r.learner))}</span>
+            <span class="zg-row-meta">${r.correct} correct · ${r.incorrect} wrong · ${r.blank} blank${fl ? ` · <b class="zg-warn-text">${fl} to review</b>` : ''}</span>
+          </span>
+          <span class="zg-row-pct ${pctColor(r.percentage)}">${r.percentage}%</span>
+        </button>`;
+      }).join('');
+
+      const body = n ? `
+        <div class="zg-summary">
+          <div><b>${n}</b><span>scanned</span></div>
+          <div><b>${Math.max(0, totalLearners - n)}</b><span>to go</span></div>
+          <div><b>${avg}%</b><span>average</span></div>
+          <div class="${needReview ? 'warn' : ''}"><b>${needReview}</b><span>to review</span></div>
+        </div>
+        <div class="zg-rows">${rows}</div>`
+        : `<div class="zg-empty">Nothing scanned yet.<br>Hold an answer sheet up to the camera.</div>`;
+
+      const { body: bodyEl, foot } = openSheet({
+        title: `Scanned sheets`,
+        body,
+        footer: `<button type="button" class="zg-btn primary" id="zg-keep">Keep scanning</button>`,
+        tall: true
+      });
+      foot.querySelector('#zg-keep').onclick = () => closeSheet();
+      bodyEl.querySelectorAll('.zg-row').forEach(b => {
+        b.onclick = () => showReviewSheet(session.scanned[Number(b.dataset.idx)]);
+      });
+    }
+
+    function showReviewSheet(result) {
+      if (!result) return;
+      const edits = new Map();                 // question index → number | null
+      let filter = flaggedCount(result) ? 'flag' : 'all';
+      const eff = (p) => edits.has(p.q) ? edits.get(p.q) : (p.override !== undefined ? p.override : p.detected);
+      const letters = 'ABCDE';
+
+      const tagFor = (p) =>
+        p.status === 'multiple'  ? ['Multiple marks', 'bad'] :
+        p.status === 'blank'     ? ['Blank', 'mute'] :
+        (p.status === 'ambiguous' || (p.confidence > 0 && p.confidence < 0.6)) ? ['Uncertain', 'warn'] :
+        p.status === 'correct'   ? ['Correct', 'good'] :
+        p.status === 'incorrect' ? ['Wrong', 'bad'] : ['Not graded', 'mute'];
+
+      const { body: bodyEl, foot } = openSheet({
+        title: Utils.fullName(result.learner),
+        body: '',
+        footer: `
+          <button type="button" class="zg-btn ghost danger" id="zg-rescan">Rescan</button>
+          <button type="button" class="zg-btn primary" id="zg-save">Save</button>`,
+        tall: true
+      });
+      const rescanBtn = foot.querySelector('#zg-rescan');
+      const saveBtn = foot.querySelector('#zg-save');
+
+      const render = () => {
+        const graded = result.answers.filter(p => p.correct !== null);
+        const flagged = graded.filter(isFlagged);
+        const shown = filter === 'flag' ? flagged : graded;
+        const tops = bodyEl.scrollTop;
+
+        // Live score preview from pending edits
+        let c = 0;
+        graded.forEach(p => { const e = eff(p); if (e !== null && e === p.key) c++; });
+        const pct = graded.length ? Math.round((c / graded.length) * 100) : 0;
+
+        bodyEl.innerHTML = `
+          <div class="zg-rev-top">
+            <div class="zg-rev-score ${pctColor(pct)}">${pct}%</div>
+            <div class="zg-rev-meta">
+              <div>LRN ${Utils.esc(result.learner.lrn || '—')}</div>
+              <div>${c} of ${graded.length} correct${edits.size ? ` · <b class="zg-warn-text">${edits.size} change${edits.size === 1 ? '' : 's'}</b>` : ''}</div>
+            </div>
+          </div>
+          <div class="zg-seg" role="tablist">
+            <button type="button" role="tab" aria-selected="${filter === 'flag'}" class="${filter === 'flag' ? 'on' : ''}" data-f="flag">To review (${flagged.length})</button>
+            <button type="button" role="tab" aria-selected="${filter === 'all'}" class="${filter === 'all' ? 'on' : ''}" data-f="all">All (${graded.length})</button>
+          </div>
+          ${shown.length ? shown.map(p => {
+            const q = session.assessment.questions[p.q] || {};
+            const nCh = Math.min(SHEET.choiceCount, Array.isArray(q.choices) && q.choices.length ? q.choices.length : SHEET.choiceCount);
+            const e = eff(p);
+            const [tag, tagKind] = tagFor(p);
+            const btns = Array.from({ length: nCh }, (_, i) =>
+              `<button type="button" class="zg-ch${e === i ? ' sel' : ''}${p.key === i ? ' key' : ''}" data-q="${p.q}" data-c="${i}" aria-pressed="${e === i}" aria-label="Question ${p.q + 1}, choice ${letters[i]}${p.key === i ? ', correct answer' : ''}">${letters[i]}</button>`).join('');
+            return `<div class="zg-q${edits.has(p.q) ? ' edited' : ''}">
+              <div class="zg-q-head">
+                <b>Q${p.q + 1}</b>
+                <span class="zg-tag ${tagKind}">${tag}</span>
+                <span class="zg-q-key">Key ${p.key !== null && p.key !== undefined ? letters[p.key] : '—'}</span>
+              </div>
+              <div class="zg-q-choices">${btns}
+                <button type="button" class="zg-ch zg-ch-blank${e === null ? ' sel' : ''}" data-q="${p.q}" data-c="blank" aria-pressed="${e === null}" aria-label="Question ${p.q + 1}, blank">Blank</button>
+              </div>
+            </div>`;
+          }).join('') : `<div class="zg-empty">${filter === 'flag' ? 'Nothing uncertain — every answer was read clearly. ✅' : 'No graded questions.'}</div>`}
+        `;
+        bodyEl.scrollTop = tops;
+
+        bodyEl.querySelectorAll('[data-f]').forEach(b => { b.onclick = () => { filter = b.dataset.f; bodyEl.scrollTop = 0; render(); }; });
+        bodyEl.querySelectorAll('.zg-ch').forEach(b => {
+          b.onclick = () => {
+            const qi = Number(b.dataset.q);
+            const val = b.dataset.c === 'blank' ? null : Number(b.dataset.c);
+            const original = result.answers[qi].override !== undefined ? result.answers[qi].override : result.answers[qi].detected;
+            if (val === original) edits.delete(qi); else edits.set(qi, val);
+            try { if (navigator.vibrate && session.prefs.haptics) navigator.vibrate(10); } catch (er) {}
+            render();
+          };
+        });
+        saveBtn.textContent = edits.size ? `Save ${edits.size} change${edits.size === 1 ? '' : 's'}` : (result.reviewedAt ? 'Done' : 'Mark reviewed');
+      };
+
+      let rescanArmed = null;
+      rescanBtn.onclick = async () => {
+        if (!rescanArmed) {
+          rescanBtn.textContent = 'Tap again to rescan';
+          rescanArmed = setTimeout(() => { rescanArmed = null; rescanBtn.textContent = 'Rescan'; }, 3000);
+          return;
+        }
+        clearTimeout(rescanArmed);
+        closeSheet();
+        await removeResult(result);
+        setStatus('Hold the sheet in view to rescan', 'warn');
+        UI.toast(`Rescan ${result.learner.firstName || Utils.fullName(result.learner)}'s sheet`, 'info', 2500);
+      };
+
+      saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        edits.forEach((val, qi) => { result.answers[qi].override = val; });
+        await commitReview(result);
+        closeSheet();
+        UI.toast(edits.size ? 'Reviewed score saved' : 'Marked as reviewed', 'success', 2200);
+      };
+
+      render();
+    }
+
+    function showSettingsSheet() {
+      const sens = Math.abs(CAL.markedRatio - 0.45) < 0.05 ? 'strict'
+                 : Math.abs(CAL.markedRatio - 0.65) < 0.05 ? 'lenient' : 'balanced';
+      const { body: bodyEl } = openSheet({
+        title: 'Scanner settings',
+        body: `
+          <div class="zg-set">
+            <div class="zg-set-label">Shading sensitivity
+              <small>Strict ignores light pencil marks. Lenient accepts faint ones.</small></div>
+            <div class="zg-seg" data-group="sens">
+              <button type="button" data-v="strict"   class="${sens === 'strict' ? 'on' : ''}">Strict</button>
+              <button type="button" data-v="balanced" class="${sens === 'balanced' ? 'on' : ''}">Balanced</button>
+              <button type="button" data-v="lenient"  class="${sens === 'lenient' ? 'on' : ''}">Lenient</button>
+            </div>
+          </div>
+          <div class="zg-set">
+            <div class="zg-set-label">Hold time to confirm
+              <small>More frames = fewer misreads, slightly slower.</small></div>
+            <div class="zg-seg" data-group="frames">
+              ${[1, 2, 3, 4].map(n => `<button type="button" data-v="${n}" class="${CAL.confirmFrames === n ? 'on' : ''}">${n}</button>`).join('')}
+            </div>
+          </div>
+          <div class="zg-set zg-set-row">
+            <div class="zg-set-label">Beep on scan</div>
+            <button type="button" class="zg-switch${session.prefs.sound ? ' on' : ''}" data-pref="sound" role="switch" aria-checked="${session.prefs.sound}"><i></i></button>
+          </div>
+          <div class="zg-set zg-set-row">
+            <div class="zg-set-label">Vibrate on scan</div>
+            <button type="button" class="zg-switch${session.prefs.haptics ? ' on' : ''}" data-pref="haptics" role="switch" aria-checked="${session.prefs.haptics}"><i></i></button>
+          </div>
+          <button type="button" class="zg-btn ghost" id="zg-adv" style="width:100%;margin-top:6px;">Advanced calibration…</button>
+          <p class="zg-fine">${CAL.calibratedAt ? 'Last calibrated ' + Utils.esc(Utils.formatDateTime(CAL.calibratedAt)) + '.' : 'Using factory defaults.'} Settings are stored on this device.</p>
+        `
+      });
+
+      bodyEl.querySelectorAll('[data-group="sens"] button').forEach(b => {
+        b.onclick = async () => {
+          const map = { strict: { markedRatio: 0.45, fillStrong: 0.75 }, balanced: { markedRatio: DEFAULT_CALIBRATION.markedRatio, fillStrong: DEFAULT_CALIBRATION.fillStrong }, lenient: { markedRatio: 0.65, fillStrong: 0.5 } };
+          await saveCalibration(map[b.dataset.v]);
+          bodyEl.querySelectorAll('[data-group="sens"] button').forEach(x => x.classList.toggle('on', x === b));
+        };
+      });
+      bodyEl.querySelectorAll('[data-group="frames"] button').forEach(b => {
+        b.onclick = async () => {
+          await saveCalibration({ confirmFrames: Number(b.dataset.v) });
+          bodyEl.querySelectorAll('[data-group="frames"] button').forEach(x => x.classList.toggle('on', x === b));
+        };
+      });
+      bodyEl.querySelectorAll('[data-pref]').forEach(b => {
+        b.onclick = () => {
+          const key = b.dataset.pref;
+          session.prefs[key] = !session.prefs[key];
+          setOmrPref(key, session.prefs[key]);
+          b.classList.toggle('on', session.prefs[key]);
+          b.setAttribute('aria-checked', String(session.prefs[key]));
+          if (session.prefs[key]) feedback('ok');
+        };
+      });
+      bodyEl.querySelector('#zg-adv').onclick = () => openCalibrationModal();
+    }
+
     /* ----------------------------------------------------------------
-       Review modal — desktop only (mobile has undo + counter)
+       Review modal — desktop
        ---------------------------------------------------------------- */
     function openReviewModal(result) {
       if (!result) return;
@@ -50498,7 +51254,7 @@ function openScanner(assessmentId) {
         const color = p.status === 'correct' ? 'var(--success)'
                     : p.status === 'incorrect' ? 'var(--danger)'
                     : p.status === 'blank' ? 'var(--text-muted)'
-                    : p.status === 'ambiguous' ? 'var(--warning)'
+                    : (p.status === 'ambiguous' || p.status === 'multiple') ? 'var(--warning)'
                     : 'var(--border)';
         const title = `Q${i + 1} · ${p.status}${p.confidence ? ' (' + Math.round(p.confidence * 100) + '% confidence)' : ''}`;
         return `<div style="width:26px;height:26px;border-radius:6px;background:${color}1a;
@@ -50639,59 +51395,9 @@ function openScanner(assessmentId) {
       m.overlay.querySelector('[data-close]').onclick = m.close;
 
       m.overlay.querySelector('#omr-review-save').onclick = async () => {
-        let correct = 0, incorrect = 0, blank = 0;
-        const detail = [];
-        for (let i = 0; i < result.answers.length; i++) {
-          const p = result.answers[i];
-          const key = session.answerKey[i];
-          const eff = p.override !== undefined ? p.override : p.detected;
-
-          if (key === null) {
-            detail.push({ ...p, status: 'ungraded', correct: null });
-            continue;
-          }
-          if (eff === null) {
-            blank++;
-            detail.push({ ...p, status: 'blank', correct: false });
-          } else if (eff === key) {
-            correct++;
-            detail.push({ ...p, status: 'correct', correct: true });
-          } else {
-            incorrect++;
-            detail.push({ ...p, status: 'incorrect', correct: false });
-          }
-        }
-        const gradable = detail.filter(p => p.correct !== null).length;
-        const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
-        const score = Math.round(correct * pointsPerItem);
-        const percentage = gradable ? Math.round((correct / gradable) * 100) : 0;
-
-        result.correct = correct;
-        result.incorrect = incorrect;
-        result.blank = blank;
-        result.ambiguous = 0;
-        result.score = score;
-        result.percentage = percentage;
-        result.answers = detail;
-        result.reviewedAt = new Date().toISOString();
-
-        try {
-          const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
-            .find(r => r.assessmentId === session.assessment.id);
-          if (existing) {
-            existing.score = score;
-            existing.percentage = percentage;
-            existing.omrDetails = detail;
-            existing.reviewedAt = result.reviewedAt;
-            existing.updatedAt = new Date().toISOString();
-            await DB.put('assessmentResults', existing);
-          }
-        } catch (e) { console.warn('[OMR] Could not save reviewed score:', e); }
-
-        renderList();
+        await commitReview(result);
         m.close();
         UI.toast('Reviewed score saved', 'success');
-        App.logActivity(`OMR review: ${Utils.fullName(result.learner)} — ${percentage}%`, 'Assessments');
       };
 
       if (result.answers.length) renderDetail(0);
@@ -50699,7 +51405,7 @@ function openScanner(assessmentId) {
     }
 
     /* ----------------------------------------------------------------
-       Calibration modal — unchanged
+       Calibration modal (advanced)
        ---------------------------------------------------------------- */
     function openCalibrationModal() {
       const m = UI.modal({
@@ -50799,45 +51505,63 @@ function openScanner(assessmentId) {
     /* ----------------------------------------------------------------
        Camera error display
        ---------------------------------------------------------------- */
-    function showCameraError(err) {
-      const wrap = overlay.querySelector('#omr-video-wrap');
-      if (!wrap) return;
-      let msg = 'Camera unavailable.';
-      if (err && err.name === 'NotAllowedError') msg = 'Camera permission was denied.';
-      else if (err && err.name === 'NotFoundError') msg = 'No camera found on this device.';
-      else if (err && err.message) msg = err.message;
-
-      const isMobileLayout = !!overlay.querySelector('.zg-header');
-      if (isMobileLayout) {
-        wrap.innerHTML = `
-          <div class="zg-camera-error">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
-              <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-              <circle cx="12" cy="13" r="4"/>
-              <line x1="2" y1="2" x2="22" y2="22"/>
-            </svg>
-            <div class="zg-camera-error-title">${Utils.esc(msg)}</div>
-            <div class="zg-camera-error-hint">Answer-sheet scanning requires a camera. Check your browser permission and try again.</div>
-          </div>`;
-      } else {
-        wrap.innerHTML = `
-          <div class="qr-camera-error">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="42" height="42">
-              <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-              <circle cx="12" cy="13" r="4"/>
-              <line x1="2" y1="2" x2="22" y2="22"/>
-            </svg>
-            <div class="qr-camera-error-title">${Utils.esc(msg)}</div>
-            <div class="qr-camera-error-hint">Answer-sheet scanning requires a camera.</div>
-          </div>`;
-      }
+    function hideCameraError() {
+      const el = overlay.querySelector('#zg-error');
+      if (el) { el.hidden = true; el.innerHTML = ''; }
     }
 
+    function showCameraError(err) {
+      let msg = 'Camera unavailable.';
+      let hint = 'Answer-sheet scanning requires a camera.';
+      const name = err && err.name;
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied.';
+        hint = 'Allow camera access for this site in your browser settings, then tap Try again.';
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        msg = 'No camera found on this device.';
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        msg = 'The camera is being used by another app.';
+        hint = 'Close other apps or tabs that use the camera, then tap Try again.';
+      } else if (err && err.message) {
+        msg = err.message;
+      }
+
+      const errEl = overlay.querySelector('#zg-error');
+      if (errEl) {                                   // mobile: keep the video + header, offer a retry
+        errEl.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
+            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+            <circle cx="12" cy="13" r="4"/><line x1="2" y1="2" x2="22" y2="22"/>
+          </svg>
+          <div class="zg-camera-error-title">${Utils.esc(msg)}</div>
+          <div class="zg-camera-error-hint">${Utils.esc(hint)}</div>
+          <button type="button" class="zg-btn primary" id="zg-retry">Try again</button>`;
+        errEl.hidden = false;
+        const r = errEl.querySelector('#zg-retry');
+        if (r) r.onclick = () => { hideCameraError(); startCamera(); };
+        return;
+      }
+
+      const wrap = overlay.querySelector('#omr-video-wrap');
+      if (!wrap) return;
+      wrap.innerHTML = `
+        <div class="qr-camera-error">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="42" height="42">
+            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+            <line x1="2" y1="2" x2="22" y2="22"/>
+          </svg>
+          <div class="qr-camera-error-title">${Utils.esc(msg)}</div>
+          <div class="qr-camera-error-hint">${Utils.esc(hint)}</div>
+        </div>`;
+    }
+
+    renderList();
     await startCamera();
   })();
 }
 
-  return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
+  return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, columnShiftMM, loadCalibration };
 })();
 
 window.AnswerSheetOMR = AnswerSheetOMR;

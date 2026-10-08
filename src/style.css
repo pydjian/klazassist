@@ -12026,7 +12026,7 @@ body.zg-scanner-open {
   color: #fff;
   font-family: var(--font);
   overscroll-behavior: contain;
-  touch-action: none;
+  touch-action: manipulation;
 }
 
 /* ---- Green header bar ---- */
@@ -12121,7 +12121,9 @@ body.zg-scanner-open {
   font-weight: 900;
   z-index: 5;
   border: 1.5px solid rgba(255, 255, 255, 0.18);
-  pointer-events: none;
+  gap: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* ---- Success flash ---- */
@@ -12145,9 +12147,9 @@ body.zg-scanner-open {
   bottom: calc(28px + env(safe-area-inset-bottom, 0));
   left: 50%;
   transform: translateX(-50%);
-  min-width: 250px;
-  max-width: 88vw;
-  padding: 10px 22px 12px;
+  min-width: 200px;
+  max-width: calc(100vw - 160px);
+  padding: 10px 16px 12px;
   border-radius: 10px;
   background: rgba(245, 245, 245, 0.95);
   color: #111;
@@ -12240,4 +12242,193 @@ body.zg-scanner-open {
   color: rgba(255, 255, 255, 0.55);
   max-width: 320px;
   line-height: 1.5;
+}
+
+/* ============================================================================
+   MOBILE OMR SCANNER — v2 additions
+   live overlay · camera tools · result card · bottom sheets · review UI
+   ============================================================================ */
+
+/* Modals and toasts must sit ABOVE the fullscreen scanner (it is z-index 9999);
+   before, the calibration modal opened hidden behind it. */
+body.zg-scanner-open .modal-overlay { z-index: 10050; }
+body.zg-scanner-open #toast-container {
+  z-index: 10060;
+  top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 110px);
+  left: 12px; right: 12px;
+}
+
+.zg-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
+.zg-counter svg { width: 18px; height: 18px; flex-shrink: 0; }
+.zg-count-total { opacity: 0.6; font-weight: 700; font-size: 12px; }
+.zg-counter { pointer-events: auto; }
+
+/* ---- Flashlight / zoom ---- */
+.zg-tools {
+  position: absolute; z-index: 5;
+  top: calc(62px + env(safe-area-inset-top, 0px));
+  right: calc(14px + env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 10px;
+}
+.zg-tool {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55); color: #fff;
+  border: 1.5px solid rgba(255,255,255,0.22);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.zg-tool[hidden] { display: none; }
+.zg-tool svg { width: 20px; height: 20px; }
+.zg-tool-text { font: 800 13px var(--font); }
+.zg-tool.on { background: #facc15; color: #111; border-color: #facc15; }
+
+/* ---- Result card ---- */
+.zg-card {
+  position: absolute; z-index: 6;
+  top: calc(12px + env(safe-area-inset-top, 0px)); left: 12px;
+  right: 76px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 14px;
+  background: rgba(255,255,255,0.97); color: #111;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  border-left: 6px solid #22c55e;
+  transform: translateY(-14px); opacity: 0;
+  transition: transform .18s ease, opacity .18s ease;
+}
+.zg-card[hidden] { display: none; }
+.zg-card.show { transform: none; opacity: 1; }
+.zg-card.warn { border-left-color: #f59e0b; }
+.zg-card-text { flex: 1; min-width: 0; }
+.zg-card-title { font-weight: 800; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zg-card-sub { font-size: 12px; color: #444; margin-top: 2px; }
+.zg-card-btn {
+  min-height: 40px; padding: 0 14px; border-radius: 10px; border: 0;
+  background: #1b5e20; color: #fff; font: 800 13px var(--font); cursor: pointer;
+}
+.zg-card.warn .zg-card-btn { background: #b45309; }
+
+/* ---- First-run coach ---- */
+.zg-coach {
+  position: absolute; inset: 0; z-index: 8;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(0,0,0,0.6);
+}
+.zg-coach-card { background: #fff; color: #111; border-radius: 18px; padding: 20px; max-width: 340px; width: 100%; }
+.zg-coach-card h4 { margin: 0 0 8px; font-size: 18px; }
+.zg-coach-card ul { margin: 0 0 16px; padding-left: 18px; font-size: 14px; line-height: 1.55; }
+
+/* ---- Buttons (inside scanner) ---- */
+.zg-btn {
+  min-height: 48px; padding: 0 20px; border-radius: 12px; border: 0;
+  font: 800 15px var(--font); cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.zg-btn.primary { background: #1b5e20; color: #fff; flex: 1; }
+.zg-btn.ghost { background: rgba(0,0,0,0.06); color: #111; }
+.zg-btn.ghost.danger { color: #b91c1c; }
+.zg-btn:disabled { opacity: .5; }
+.zg-camera-error .zg-btn { margin-top: 6px; }
+
+/* ---- Bottom sheet ---- */
+.zg-sheet-backdrop {
+  position: absolute; inset: 0; z-index: 20; background: rgba(0,0,0,0.55);
+  opacity: 0; transition: opacity .2s ease;
+}
+.zg-sheet-backdrop[hidden], .zg-sheet[hidden] { display: none; }
+.zg-sheet-backdrop.open { opacity: 1; }
+.zg-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 21;
+  max-height: 72%; display: flex; flex-direction: column;
+  background: #fff; color: #111;
+  border-radius: 20px 20px 0 0;
+  transform: translateY(100%); transition: transform .24s cubic-bezier(.2,.8,.2,1);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  touch-action: pan-y;
+}
+.zg-sheet.tall { max-height: 92%; height: 92%; }
+.zg-sheet.open { transform: none; }
+.zg-sheet-grab { width: 40px; height: 4px; border-radius: 2px; background: #cbd5e1; margin: 8px auto 0; }
+.zg-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 18px; }
+.zg-sheet-head h3 { margin: 0; font-size: 17px; font-weight: 800; }
+.zg-sheet-x { width: 44px; height: 44px; border: 0; background: transparent; color: #334155; display: flex; align-items: center; justify-content: center; }
+.zg-sheet-x svg { width: 22px; height: 22px; }
+.zg-sheet-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 4px 16px 16px; touch-action: pan-y; }
+.zg-sheet-foot { display: flex; gap: 10px; padding: 10px 16px 14px; border-top: 1px solid #e2e8f0; }
+.zg-sheet-foot[hidden] { display: none; }
+.zg-empty { text-align: center; color: #64748b; padding: 36px 12px; line-height: 1.6; }
+.zg-fine { font-size: 12px; color: #64748b; margin: 12px 0 0; }
+.zg-warn-text { color: #b45309; }
+
+/* ---- Results list ---- */
+.zg-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 4px 0 12px; }
+.zg-summary > div { background: #f1f5f9; border-radius: 12px; padding: 10px 4px; text-align: center; }
+.zg-summary > div.warn { background: #fef3c7; }
+.zg-summary b { display: block; font-size: 18px; }
+.zg-summary span { font-size: 11px; color: #475569; text-transform: uppercase; letter-spacing: .4px; }
+.zg-rows { display: flex; flex-direction: column; }
+.zg-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px;
+  padding: 8px 4px; background: transparent; border: 0; border-bottom: 1px solid #e2e8f0;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+.zg-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.zg-row-name { font-weight: 700; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zg-row-meta { font-size: 12px; color: #64748b; }
+.zg-row-pct { font-weight: 900; font-size: 18px; }
+.zg-row-pct.good, .zg-rev-score.good { color: #15803d; }
+.zg-row-pct.ok,   .zg-rev-score.ok   { color: #1d4ed8; }
+.zg-row-pct.mid,  .zg-rev-score.mid  { color: #b45309; }
+.zg-row-pct.low,  .zg-rev-score.low  { color: #b91c1c; }
+
+/* ---- Review ---- */
+.zg-rev-top { display: flex; align-items: center; gap: 14px; margin: 2px 0 12px; }
+.zg-rev-score { font-size: 40px; font-weight: 900; line-height: 1; }
+.zg-rev-meta { font-size: 13px; color: #475569; line-height: 1.5; }
+.zg-seg { display: flex; background: #e2e8f0; border-radius: 12px; padding: 3px; gap: 3px; margin-bottom: 12px; }
+.zg-seg button { flex: 1; min-height: 40px; border: 0; border-radius: 10px; background: transparent; font: 700 13px var(--font); color: #334155; cursor: pointer; }
+.zg-seg button.on { background: #fff; color: #111; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.zg-q { padding: 10px 0 12px; border-bottom: 1px solid #e2e8f0; }
+.zg-q.edited { background: linear-gradient(90deg, #ede9fe 0, transparent 70%); }
+.zg-q-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+.zg-q-key { margin-left: auto; font-size: 12px; color: #64748b; font-weight: 700; }
+.zg-tag { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; }
+.zg-tag.good { background: #dcfce7; color: #166534; }
+.zg-tag.warn { background: #fef3c7; color: #92400e; }
+.zg-tag.bad  { background: #fee2e2; color: #991b1b; }
+.zg-tag.mute { background: #e2e8f0; color: #475569; }
+.zg-q-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.zg-ch {
+  min-width: 48px; min-height: 48px; padding: 0 10px; border-radius: 12px;
+  border: 2px solid #cbd5e1; background: #fff; color: #111;
+  font: 800 16px var(--font); cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.zg-ch.key { border-color: #22c55e; }
+.zg-ch.sel { background: #1b5e20; border-color: #1b5e20; color: #fff; }
+.zg-ch-blank { font-size: 13px; color: #475569; }
+.zg-ch-blank.sel { background: #475569; border-color: #475569; color: #fff; }
+
+/* ---- Settings ---- */
+.zg-set { margin-bottom: 16px; }
+.zg-set-label { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+.zg-set-label small { display: block; font-weight: 500; color: #64748b; font-size: 12px; margin-top: 2px; }
+.zg-set-row { display: flex; align-items: center; justify-content: space-between; }
+.zg-set-row .zg-set-label { margin: 0; }
+.zg-switch { width: 52px; height: 32px; border-radius: 16px; border: 0; background: #cbd5e1; position: relative; cursor: pointer; flex-shrink: 0; }
+.zg-switch i { position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.zg-switch.on { background: #1b5e20; }
+.zg-switch.on i { transform: translateX(20px); }
+
+/* ---- Landscape phones: reclaim vertical space ---- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .zg-header { height: calc(44px + env(safe-area-inset-top, 0px)); }
+  .zg-header-btn { width: 40px; height: 40px; }
+  .zg-status-pill { bottom: 10px; padding: 6px 16px 8px; min-width: 200px; }
+  .zg-status-sub { display: none; }
+  .zg-undo { bottom: 10px; width: 44px; height: 44px; }
+  .zg-sheet, .zg-sheet.tall { max-height: 96%; height: auto; }
+  .zg-card { right: 140px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zg-sheet, .zg-sheet-backdrop, .zg-card, .zg-flash { transition: none; }
 }
