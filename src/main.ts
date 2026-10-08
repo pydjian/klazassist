@@ -5672,6 +5672,185 @@ _titleize(id) {
     })
     .join(' ');
 },
+
+/* ============================================================================
+   ASSESSMENT · MULTI-CLASS ASSIGNMENT HELPERS
+   ----------------------------------------------------------------------------
+   An assessment has a `classId` (its original owner, kept forever for backward
+   compatibility) and an optional `classIds` array (every class the teacher has
+   assigned it to). All filtering uses `classIds` — falling back to `[classId]`
+   for assessments saved before this feature existed.
+   ============================================================================ */
+
+/** Return the list of class IDs this assessment is available in. */
+_assessmentClassIds(a) {
+  if (!a) return [];
+  if (Array.isArray(a.classIds) && a.classIds.length) return a.classIds.slice();
+  if (a.classId) return [a.classId];
+  return [];
+},
+
+/** True when the given assessment should appear for the given class. */
+_assessmentAppliesToClass(a, classId) {
+  if (!a) return false;
+  const ids = Pages._assessmentClassIds(a);
+  // Legacy / unattached assessments are shown everywhere so nothing
+  // silently disappears.
+  if (!ids.length) return true;
+  if (!classId) return true;
+  return ids.includes(classId);
+},
+
+/** Open the "Assign to Classes" modal for one assessment. */
+async openAssignAssessmentModal(assessmentId) {
+  const a = await DB.get('assessments', assessmentId);
+  if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+
+  const classes = State.classes.slice().sort((x, y) =>
+    (x.gradeLevel + ' ' + x.section).localeCompare(y.gradeLevel + ' ' + y.section)
+  );
+  if (!classes.length) {
+    UI.toast('Create a class first.', 'warning');
+    return;
+  }
+
+  const originallyOwnedId = a.classId || null;
+  const selected = new Set(Pages._assessmentClassIds(a));
+
+  const m = UI.modal({
+    title: 'Assign Assessment to Classes',
+    size: 'modal-lg',
+    body: `
+      <p class="text-sm text-muted mb-12">
+        Choose which classes can see <strong>${Utils.esc(a.title || 'this assessment')}</strong>
+        in the Gradebook, Quiz Manager, and Assessment Builder. Scores are always
+        recorded against the class you're currently signed into — assigning an
+        assessment to more classes does not merge or move any existing results.
+      </p>
+
+      <div class="flex gap-8 mb-12" style="flex-wrap:wrap;">
+        <button type="button" class="btn btn-sm btn-outline" id="aa-select-all">Select all</button>
+        <button type="button" class="btn btn-sm btn-outline" id="aa-select-none">Clear</button>
+        ${originallyOwnedId ? `<button type="button" class="btn btn-sm btn-ghost" id="aa-select-owner">Only the original class</button>` : ''}
+      </div>
+
+      <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+        ${classes.map(c => {
+          const isOwner = c.id === originallyOwnedId;
+          const isChecked = selected.has(c.id);
+          return `
+            <label class="aa-class-row"
+                   style="display:flex;gap:12px;align-items:center;padding:12px 14px;
+                          border-bottom:1px solid var(--border);cursor:pointer;
+                          background:${isChecked ? 'var(--light-blue)' : 'transparent'};">
+              <input type="checkbox" class="aa-class-cb" value="${Utils.attr(c.id)}"
+                     ${isChecked ? 'checked' : ''}
+                     style="width:16px;height:16px;accent-color:var(--deped-blue);flex-shrink:0;">
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;font-size:13px;">
+                  ${Utils.esc(c.gradeLevel || '')}${c.gradeLevel && c.section ? ' – ' : ''}${Utils.esc(c.section || '')}
+                  ${isOwner ? '<span class="badge badge-blue" style="font-size:9px;margin-left:6px;">Original</span>' : ''}
+                </div>
+                <div class="text-xs text-muted" style="margin-top:2px;">
+                  ${Utils.esc(c.subject || 'No subject')}${c.schoolYear ? ' · SY ' + Utils.esc(c.schoolYear) : ''}
+                </div>
+              </div>
+            </label>`;
+        }).join('')}
+      </div>
+
+      <div id="aa-error" class="auth-error mt-12" role="alert" aria-live="polite"></div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="aa-save">${icon('save')} Save Assignment</button>
+    `
+  });
+
+  const overlay = m.overlay;
+  const cbs = () => overlay.querySelectorAll('.aa-class-cb');
+  const syncRows = () => {
+    overlay.querySelectorAll('.aa-class-row').forEach(row => {
+      const cb = row.querySelector('.aa-class-cb');
+      row.style.background = cb.checked ? 'var(--light-blue)' : 'transparent';
+    });
+  };
+
+  overlay.querySelector('#aa-select-all').onclick = () => {
+    cbs().forEach(cb => { cb.checked = true; });
+    syncRows();
+  };
+  overlay.querySelector('#aa-select-none').onclick = () => {
+    cbs().forEach(cb => { cb.checked = false; });
+    syncRows();
+  };
+  const ownerBtn = overlay.querySelector('#aa-select-owner');
+  if (ownerBtn) ownerBtn.onclick = () => {
+    cbs().forEach(cb => { cb.checked = cb.value === originallyOwnedId; });
+    syncRows();
+  };
+
+  overlay.querySelectorAll('.aa-class-cb').forEach(cb => {
+    cb.addEventListener('change', syncRows);
+  });
+
+  overlay.querySelector('[data-cancel]').onclick = m.close;
+
+  overlay.querySelector('#aa-save').onclick = async () => {
+    const errEl = overlay.querySelector('#aa-error');
+    errEl.classList.remove('show');
+
+    const chosen = Array.from(cbs()).filter(cb => cb.checked).map(cb => cb.value);
+    if (!chosen.length) {
+      errEl.textContent = 'Assign this assessment to at least one class.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    try {
+      const fresh = await DB.get('assessments', assessmentId) || a;
+      fresh.classIds = chosen;
+      // Preserve classId as the original owner. If it was missing
+      // (legacy record with only a classIds array), fall back to the
+      // first selected class.
+      if (!fresh.classId) fresh.classId = chosen[0];
+      fresh.updatedAt = new Date().toISOString();
+
+      await DB.put('assessments', fresh);
+
+      App.logActivity(
+        `Assessment "${a.title || ''}" assigned to ${chosen.length} class${chosen.length === 1 ? '' : 'es'}`,
+        'Assessments'
+      );
+
+      // If the assessment was removed from the currently active class,
+      // close the modal and refresh so it disappears cleanly.
+      const activeId = State.activeClass ? State.activeClass.id : null;
+      m.close();
+
+      UI.toast(
+        `Assigned to ${chosen.length} class${chosen.length === 1 ? '' : 'es'}`,
+        'success'
+      );
+
+      // Refresh whichever page launched this modal.
+      if (State.currentModule === 'gradebook') {
+        App.navigate('gradebook');
+      } else if (State.currentModule === 'assessment-builder') {
+        App.navigate('assessment-builder');
+      } else if (State.currentModule === 'quiz-manager') {
+        App.navigate('quiz-manager');
+      } else if (activeId && !chosen.includes(activeId)) {
+        App.navigate(State.currentModule || 'dashboard');
+      }
+    } catch (e) {
+      console.error('[Assign] Save failed:', e);
+      errEl.textContent = 'Could not save: ' + (e.message || 'unknown error');
+      errEl.classList.add('show');
+    }
+  };
+},
+
   toggleSidebar(force) {
     const sb = document.getElementById('sidebar');
     const bd = document.getElementById('sidebar-backdrop');
@@ -14819,7 +14998,8 @@ async gradebook(root) {
 
   if (!State.gbTerm || !policy.terms.includes(State.gbTerm)) State.gbTerm = policy.terms[0];
   const weights = cls.resolvedWeights || policy.weights['KS2_CORE'];
-  const allAssessments = (await DB.getAll('assessments')).filter(a => a.classId === cls.id);
+  const allAssessments = (await DB.getAll('assessments'))
+    .filter(a => Pages._assessmentAppliesToClass(a, cls.id));
   const termAssessments = allAssessments.filter(a => (a.term || policy.terms[0]) === State.gbTerm);
   const ww  = termAssessments.filter(a => a.category === 'WW');
   const pt  = termAssessments.filter(a => a.category === 'PT');
@@ -15369,7 +15549,8 @@ _gbResetColWidths(columns) {
   /* ---------- GRADEBOOK (legacy DO 8, s. 2015 classes — unchanged behavior) ---------- */
   async gradebookLegacy(root, cls) {
     const weights = cls.weights || CONFIG.DEFAULT_WEIGHTS;
-    const assessments = (await DB.getAll('assessments')).filter(a => a.classId === cls.id);
+    const assessments = (await DB.getAll('assessments'))
+      .filter(a => Pages._assessmentAppliesToClass(a, cls.id));
     const ww = assessments.filter(a => a.type === 'WW');
     const pt = assessments.filter(a => a.type === 'PT');
     const qa = assessments.filter(a => a.type === 'QA');
@@ -15516,7 +15697,7 @@ async exportGrades() {
   const allResults     = await DB.getAll('assessmentResults');
   const allAssessments = await DB.getAll('assessments');
   const results     = allResults.filter(r => r.classId === cls.id);
-  const assessments = allAssessments.filter(a => a.classId === cls.id);
+  const assessments = allAssessments.filter(a => Pages._assessmentAppliesToClass(a, cls.id));
 
   // Group assessments by category for a predictable column order
   const order = isLegacy ? ['WW','PT','QA'] : ['WW','PT','ST1','ST2','TE'];
@@ -15603,7 +15784,9 @@ async exportGrades() {
 
   /* ---------- ASSESSMENT ---------- */
 async assessmentBuilder(root) {
-    const assessments = (await DB.getAll('assessments')).filter(a => a.classId === (State.activeClass ? State.activeClass.id : ''));
+    const clsIA = State.activeClass;
+    const assessments = (await DB.getAll('assessments'))
+      .filter(a => Pages._assessmentAppliesToClass(a, clsIA ? clsIA.id : null));
     root.innerHTML = `
       <div class="page-head">
         <div><h2>Assessment Builder</h2><p>Create and manage assessments</p></div>
@@ -15620,18 +15803,24 @@ async assessmentBuilder(root) {
                   <span class="badge badge-blue">${Utils.esc(a.type||a.category||'—')}</span>
                   ${a.term ? ` <span class="badge badge-neutral">${Utils.esc(a.term)}</span>` : ''}
                   ${a.aiGenerated ? ` <span class="badge badge-gold" title="Generated by TOS &amp; Exam Generator">${icon('star')} AI</span>` : ''}
+                  ${(() => {
+                    const ids = Pages._assessmentClassIds(a);
+                    if (ids.length <= 1) return '';
+                    return ` <span class="badge badge-neutral" title="Available in ${ids.length} classes">${icon('users')} ${ids.length} classes</span>`;
+                  })()}
                 </td>
                 <td>${(a.questions||[]).length}</td>
                 <td>${a.maxScore||100}</td>
-                  <td class="table-actions">
-                    <button class="icon-btn" title="Edit" data-assess-edit="${Utils.attr(a.id)}">${icon('edit')}</button>
-                    <button class="icon-btn" title="Print answer sheets" data-assess-sheets="${Utils.attr(a.id)}">${icon('grid')}</button>
-                    <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('camera')}</button>
-                    <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
-                    <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
-                    <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
-                    <button class="icon-btn" title="Delete" data-assess-del="${Utils.attr(a.id)}">${icon('trash')}</button>
-                  </td>
+                <td class="table-actions">
+                  <button class="icon-btn" title="Edit" data-assess-edit="${Utils.attr(a.id)}">${icon('edit')}</button>
+                  <button class="icon-btn" title="Assign to classes" data-assess-assign="${Utils.attr(a.id)}">${icon('users')}</button>
+                  <button class="icon-btn" title="Print answer sheets" data-assess-sheets="${Utils.attr(a.id)}">${icon('grid')}</button>
+                  <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('camera')}</button>
+                  <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
+                  <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
+                  <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
+                  <button class="icon-btn" title="Delete" data-assess-del="${Utils.attr(a.id)}">${icon('trash')}</button>
+                </td>
               </tr>`).join('')}</tbody>
             </table></div>`}
       </div>`;
@@ -15639,6 +15828,7 @@ async assessmentBuilder(root) {
     root.querySelectorAll('[data-assess-print]').forEach(el => el.addEventListener('click', () => Pages.printAssessment(el.dataset.assessPrint)));
     root.querySelectorAll('[data-assess-export]').forEach(el => el.addEventListener('click', () => Pages.exportAssessmentWord(el.dataset.assessExport)));
     root.querySelectorAll('[data-assess-quiz]').forEach(el => el.addEventListener('click', () => Pages.startQuiz(el.dataset.assessQuiz)));
+    root.querySelectorAll('[data-assess-assign]').forEach(el => el.addEventListener('click', () => Pages.openAssignAssessmentModal(el.dataset.assessAssign)));
     root.querySelectorAll('[data-assess-del]').forEach(el => el.addEventListener('click', () => Pages.deleteAssessment(el.dataset.assessDel)));
     root.querySelectorAll('[data-assess-sheets]').forEach(el =>
       el.addEventListener('click', () => AnswerSheetOMR.printSheets(el.dataset.assessSheets))
@@ -15922,7 +16112,16 @@ async assessmentBuilder(root) {
       if (!title) { UI.toast('Title required', 'warning'); return; }
       const rec = {
         id: existing ? existing.id : Utils.uid('a-'),
-        classId: State.activeClass.id, title,
+        // Preserve the original owning class on edit; only new assessments
+        // are owned by the currently-active class.
+        classId: existing && existing.classId ? existing.classId : State.activeClass.id,
+        // The set of classes this assessment is available in.
+        classIds: existing
+          ? (Array.isArray(existing.classIds) && existing.classIds.length
+              ? existing.classIds.slice()
+              : (existing.classId ? [existing.classId] : [State.activeClass.id]))
+          : [State.activeClass.id],
+        title,
         maxScore: Number(m.overlay.querySelector('#af-max').value) || 100,
         timeLimit: Number(m.overlay.querySelector('#af-time').value) || 0,
         instructions: m.overlay.querySelector('#af-instr').value.trim(),
@@ -16384,7 +16583,9 @@ async exportAssessmentWord(id) {
 
         const pct = total ? Utils.round((correct/total)*100, 2) : 0;
         await DB.put('assessmentResults', {
-          id: Utils.uid('r-'), classId: a.classId, assessmentId: a.id,
+          id: Utils.uid('r-'),
+          classId: State.activeClass ? State.activeClass.id : a.classId,
+          assessmentId: a.id,
           learnerId: 'quiz-session', score: correct, maxScore: total, percentage: pct,
           sessionAt: new Date().toISOString()
         });
@@ -16668,7 +16869,9 @@ _formatQuizTime(sec) {
 },
 
   async itemAnalysis(root) {
-    const assessments = (await DB.getAll('assessments')).filter(a => a.classId === (State.activeClass ? State.activeClass.id : ''));
+    const cls0 = State.activeClass;
+    const assessments = (await DB.getAll('assessments'))
+      .filter(a => Pages._assessmentAppliesToClass(a, cls0 ? cls0.id : null));
     const sel = State.itemAnalysisAssessment || (assessments[0] ? assessments[0].id : null);
     State.itemAnalysisAssessment = sel;
     const results = await DB.getAll('assessmentResults');
@@ -16739,7 +16942,7 @@ _formatQuizTime(sec) {
     DB.getAllByIndex('attendance', 'classId', cls.id).catch(() => [])
   ]);
 
-  const assessments    = allAssessments.filter(a => a.classId === cls.id);
+  const assessments    = allAssessments.filter(a => Pages._assessmentAppliesToClass(a, cls.id));
   const results        = allResults.filter(r => r.classId === cls.id);
   const finalizedTerms = (termGrades || []).filter(t => t.status === 'finalized');
 
@@ -17265,7 +17468,7 @@ async learnerPerformance(root) {
     DB.getAllByIndex('attendance', 'classId', cls.id).catch(() => []),
     DB.getAllByIndex('termGrades', 'classId', cls.id).catch(() => [])
   ]);
-  const assessments = allAssessments.filter(a => a.classId === cls.id);
+  const assessments = allAssessments.filter(a => Pages._assessmentAppliesToClass(a, cls.id));
   const results     = allResults.filter(r => r.classId === cls.id);
   const finalized   = (termGrades || []).filter(t => t.status === 'finalized');
 
@@ -19564,6 +19767,11 @@ async tosGenerator(root) {
    Confirms with the user first; then persists a clean state and
    sends the user back to Step 1.
    --------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+   TOS · RESET — wipe every field back to factory defaults.
+   Confirms with the user first; then persists a clean state and
+   sends the user back to Step 1.
+   --------------------------------------------------------------------- */
 async _tosResetAll() {
   const s = State.tos;
   const hasWork = !!(s && (
@@ -19575,9 +19783,21 @@ async _tosResetAll() {
   // Helper that actually performs the reset
   const performReset = async (saveFirst) => {
     if (saveFirst) {
-      Pages._tosPersist();
+      // Persist the CURRENT draft immediately to a dedicated backup key,
+      // so the "fresh" state we set below can't overwrite it.
+      try {
+        const snapshot = JSON.parse(JSON.stringify(State.tos));
+        await DB.setSetting('tosDraftBackup', {
+          state: snapshot,
+          savedAt: new Date().toISOString()
+        });
+        // Keep the legacy key in sync too (no harm).
+        await DB.setSetting('tosState', snapshot);
+      } catch (e) {
+        console.warn('[TOS Reset] Could not save draft backup:', e);
+      }
       UI.toast('Draft saved to this device.', 'success', 2500);
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 500));
     }
 
     const fresh = {
@@ -19586,7 +19806,7 @@ async _tosResetAll() {
       totalItems: 30,
       competencies: [{ text: '', days: 1 }],
       tosData: [],
-      testConfigs: [{ type: Pages._tosTestDefaultType(), count: 5, other: '' }],
+      testConfigs: [{ type: 'Simple Multiple Choice (SMCQ)', count: 5, other: '' }],
       additionalPrompt: '',
       pdfReferenceText: '',
       pdfNames: [],
@@ -19618,47 +19838,44 @@ async _tosResetAll() {
   const m = UI.modal({
     title: 'Start a new TOS & Exam?',
     body: `
-      <p style="font-size:13.5px;line-height:1.6;margin-bottom:12px;">
+      <p style="font-size:13.5px;line-height:1.6;margin-bottom:14px;">
         You currently have an unfinished draft. What would you like to do?
       </p>
 
       <div style="display:flex;flex-direction:column;gap:10px;">
-        <button class="btn btn-primary"
-                id="tos-new-save"
-                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+        <button type="button" class="btn btn-primary" data-tos-action="save"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;height:auto;white-space:normal;">
           <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
             <span style="flex-shrink:0;margin-top:2px;">${icon('save')}</span>
             <span style="flex:1;min-width:0;">
               <span style="display:block;font-weight:700;">Save draft &amp; start new</span>
-              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;white-space:normal;">
                 Keeps the current draft on this device so you can reopen it later.
               </span>
             </span>
           </span>
         </button>
 
-        <button class="btn btn-outline"
-                id="tos-new-discard"
-                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+        <button type="button" class="btn btn-outline" data-tos-action="discard"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;height:auto;white-space:normal;">
           <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
             <span style="flex-shrink:0;margin-top:2px;">${icon('trash')}</span>
             <span style="flex:1;min-width:0;">
               <span style="display:block;font-weight:700;">Discard &amp; start new</span>
-              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;white-space:normal;">
                 Clears the draft immediately. Anything already saved to the Assessment Builder is untouched.
               </span>
             </span>
           </span>
         </button>
 
-        <button class="btn btn-ghost"
-                id="tos-new-cancel"
-                style="justify-content:flex-start;text-align:left;padding:14px 16px;">
+        <button type="button" class="btn btn-ghost" data-tos-action="cancel"
+                style="justify-content:flex-start;text-align:left;padding:14px 16px;height:auto;white-space:normal;">
           <span style="display:flex;gap:12px;align-items:flex-start;width:100%;">
             <span style="flex-shrink:0;margin-top:2px;">${icon('xCircle')}</span>
             <span style="flex:1;min-width:0;">
               <span style="display:block;font-weight:700;">Cancel</span>
-              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;">
+              <span style="display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:2px;white-space:normal;">
                 Stay on the current draft.
               </span>
             </span>
@@ -19666,13 +19883,32 @@ async _tosResetAll() {
         </button>
       </div>
     `,
-    footer: false,
-    onClose: () => { /* user dismissed via backdrop / Esc — do nothing */ }
+    footer: false
   });
 
-  m.overlay.querySelector('#tos-new-save').onclick = () => { m.close(); performReset(true); };
-  m.overlay.querySelector('#tos-new-discard').onclick = () => { m.close(); performReset(false); };
-  m.overlay.querySelector('#tos-new-cancel').onclick = () => m.close();
+  // ─────────────────────────────────────────────────────────────────
+  // EVENT DELEGATION
+  // A single listener on the modal overlay catches clicks from ANY
+  // descendant — the button itself, its SVG icon, or any of the
+  // nested text spans. This is far more reliable than assigning
+  // `.onclick` to each button individually.
+  // ─────────────────────────────────────────────────────────────────
+  m.overlay.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tos-action]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const action = btn.dataset.tosAction;
+    m.close();
+
+    if (action === 'save') {
+      performReset(true).catch(err => console.error('[TOS Reset] Save+start failed:', err));
+    } else if (action === 'discard') {
+      performReset(false).catch(err => console.error('[TOS Reset] Discard failed:', err));
+    }
+    // 'cancel' → modal closes, nothing more to do
+  });
 },
 /* ============================================================================
    TOS — STEP 1 · FRAMEWORK
@@ -30770,7 +31006,7 @@ if (cfg.mode === 'billiard') {
 async quizManager(root) {
   const cls = State.activeClass;
   const assessments = (await DB.getAll('assessments'))
-    .filter(a => a.classId === (cls ? cls.id : ''));
+    .filter(a => Pages._assessmentAppliesToClass(a, cls ? cls.id : null));
 
   // Clean up stale presenter state (e.g. learner window was closed externally)
   if (State.quizPresenter && !(Presenter.isOpen() && Presenter._toolId === 'quiz')) {
@@ -30826,21 +31062,32 @@ async quizManager(root) {
                     </h3>
                     ${isLive ? '<span class="badge badge-blue" style="font-size:10px;flex-shrink:0;">Live</span>' : ''}
                   </div>
-                  <p class="text-sm text-muted">
-                    ${qCount} question${qCount === 1 ? '' : 's'} · ${a.maxScore || 100} pts
-                    ${hasTime ? ` · ${a.timeLimit} min limit` : ''}
-                  </p>
-                  <div class="flex gap-8 mt-12" style="flex-wrap:wrap;">
-                    <button class="btn btn-primary btn-sm" data-quiz-launch="${Utils.attr(a.id)}">
-                      ${icon('play')} Practice
-                    </button>
-                    <button class="btn ${isLive ? 'btn-primary' : 'btn-outline'} btn-sm"
-                            data-quiz-presenter="${Utils.attr(a.id)}"
-                            ${qCount ? '' : 'disabled'}
-                            title="${qCount ? 'Open the learner-facing view (only item number, question, and choices)' : 'Add questions first'}">
-                      ${icon('signal')} ${isLive ? 'Learners View (Live)' : 'Learners View'}
-                    </button>
-                  </div>
+                    <p class="text-sm text-muted">
+                      ${qCount} question${qCount === 1 ? '' : 's'} · ${a.maxScore || 100} pts
+                      ${hasTime ? ` · ${a.timeLimit} min limit` : ''}
+                      ${(() => {
+                        const ids = Pages._assessmentClassIds(a);
+                        return ids.length > 1
+                          ? ` · <span title="Available in ${ids.length} classes">${icon('users')} ${ids.length} classes</span>`
+                          : '';
+                      })()}
+                    </p>
+                      <div class="flex gap-8 mt-12" style="flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-sm" data-quiz-launch="${Utils.attr(a.id)}">
+                          ${icon('play')} Practice
+                        </button>
+                        <button class="btn ${isLive ? 'btn-primary' : 'btn-outline'} btn-sm"
+                                data-quiz-presenter="${Utils.attr(a.id)}"
+                                ${qCount ? '' : 'disabled'}
+                                title="${qCount ? 'Open the learner-facing view (only item number, question, and choices)' : 'Add questions first'}">
+                          ${icon('signal')} ${isLive ? 'Learners View (Live)' : 'Learners View'}
+                        </button>
+                        <button class="btn btn-outline btn-sm"
+                                data-quiz-assign="${Utils.attr(a.id)}"
+                                title="Assign this quiz to other classes">
+                          ${icon('users')} Assign
+                        </button>
+                      </div>
                 </div>`;
             }).join('')}
           </div>`}
@@ -30851,6 +31098,9 @@ async quizManager(root) {
     });
     root.querySelectorAll('[data-quiz-presenter]').forEach(b => {
       b.addEventListener('click', () => Pages.openQuizPresenter(b.dataset.quizPresenter));
+    });
+    root.querySelectorAll('[data-quiz-assign]').forEach(b => {
+      b.addEventListener('click', () => Pages.openAssignAssessmentModal(b.dataset.quizAssign));
     });
 
     // ▼▼▼ End Learners View button ▼▼▼
@@ -50548,7 +50798,11 @@ const AnswerSheetOMR = (() => {
             const rec = existing || {
               id: Utils.uid('r-'), learnerId: learner.id,
               assessmentId: session.assessment.id,
-              classId: session.assessment.classId,
+              // Record the result against the class the scanner is running for,
+              // not the assessment's original owning class.
+              classId: (typeof State !== 'undefined' && State.activeClass)
+                ? State.activeClass.id
+                : session.assessment.classId,
               createdAt: new Date().toISOString()
             };
             rec.score = score;
@@ -52313,6 +52567,177 @@ for (const k in aliases) {
 '_pdRenderRecipientRow','_pdOpenPreviewModal','_pdSendSingle','_pdBatchSend',
 '_pdOpenHistory','_pdExportCSV'    // ← NEW
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
+
+/* ============================================================================
+   ASSESSMENT · MULTI-CLASS ASSIGNMENT HELPERS
+   ----------------------------------------------------------------------------
+   Attached to Pages AFTER the main object literal so a syntax slip can never
+   silently break the whole Pages object. Every page that needs multi-class
+   assessment support relies on these three functions.
+   ============================================================================ */
+
+/** Return the list of class IDs this assessment is available in. */
+Pages._assessmentClassIds = function (a) {
+  if (!a) return [];
+  if (Array.isArray(a.classIds) && a.classIds.length) return a.classIds.slice();
+  if (a.classId) return [a.classId];
+  return [];
+};
+
+/** True when the given assessment should appear for the given class. */
+Pages._assessmentAppliesToClass = function (a, classId) {
+  if (!a) return false;
+  const ids = Pages._assessmentClassIds(a);
+  // Legacy / unattached assessments are shown everywhere so nothing
+  // silently disappears.
+  if (!ids.length) return true;
+  if (!classId) return true;
+  return ids.includes(classId);
+};
+
+/** Open the "Assign to Classes" modal for one assessment. */
+Pages.openAssignAssessmentModal = async function (assessmentId) {
+  const a = await DB.get('assessments', assessmentId);
+  if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+
+  const classes = State.classes.slice().sort((x, y) =>
+    (x.gradeLevel + ' ' + x.section).localeCompare(y.gradeLevel + ' ' + y.section)
+  );
+  if (!classes.length) {
+    UI.toast('Create a class first.', 'warning');
+    return;
+  }
+
+  const originallyOwnedId = a.classId || null;
+  const selected = new Set(Pages._assessmentClassIds(a));
+
+  const m = UI.modal({
+    title: 'Assign Assessment to Classes',
+    size: 'modal-lg',
+    body: `
+      <p class="text-sm text-muted mb-12">
+        Choose which classes can see <strong>${Utils.esc(a.title || 'this assessment')}</strong>
+        in the Gradebook, Quiz Manager, and Assessment Builder. Scores are always
+        recorded against the class you're currently signed into — assigning an
+        assessment to more classes does not merge or move any existing results.
+      </p>
+
+      <div class="flex gap-8 mb-12" style="flex-wrap:wrap;">
+        <button type="button" class="btn btn-sm btn-outline" id="aa-select-all">Select all</button>
+        <button type="button" class="btn btn-sm btn-outline" id="aa-select-none">Clear</button>
+        ${originallyOwnedId ? `<button type="button" class="btn btn-sm btn-ghost" id="aa-select-owner">Only the original class</button>` : ''}
+      </div>
+
+      <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+        ${classes.map(c => {
+          const isOwner = c.id === originallyOwnedId;
+          const isChecked = selected.has(c.id);
+          return `
+            <label class="aa-class-row"
+                   style="display:flex;gap:12px;align-items:center;padding:12px 14px;
+                          border-bottom:1px solid var(--border);cursor:pointer;
+                          background:${isChecked ? 'var(--light-blue)' : 'transparent'};">
+              <input type="checkbox" class="aa-class-cb" value="${Utils.attr(c.id)}"
+                     ${isChecked ? 'checked' : ''}
+                     style="width:16px;height:16px;accent-color:var(--deped-blue);flex-shrink:0;">
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;font-size:13px;">
+                  ${Utils.esc(c.gradeLevel || '')}${c.gradeLevel && c.section ? ' – ' : ''}${Utils.esc(c.section || '')}
+                  ${isOwner ? '<span class="badge badge-blue" style="font-size:9px;margin-left:6px;">Original</span>' : ''}
+                </div>
+                <div class="text-xs text-muted" style="margin-top:2px;">
+                  ${Utils.esc(c.subject || 'No subject')}${c.schoolYear ? ' · SY ' + Utils.esc(c.schoolYear) : ''}
+                </div>
+              </div>
+            </label>`;
+        }).join('')}
+      </div>
+
+      <div id="aa-error" class="auth-error mt-12" role="alert" aria-live="polite"></div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="aa-save">${icon('save')} Save Assignment</button>
+    `
+  });
+
+  const overlay = m.overlay;
+  const cbs = () => overlay.querySelectorAll('.aa-class-cb');
+  const syncRows = () => {
+    overlay.querySelectorAll('.aa-class-row').forEach(row => {
+      const cb = row.querySelector('.aa-class-cb');
+      row.style.background = cb.checked ? 'var(--light-blue)' : 'transparent';
+    });
+  };
+
+  overlay.querySelector('#aa-select-all').onclick = () => {
+    cbs().forEach(cb => { cb.checked = true; });
+    syncRows();
+  };
+  overlay.querySelector('#aa-select-none').onclick = () => {
+    cbs().forEach(cb => { cb.checked = false; });
+    syncRows();
+  };
+  const ownerBtn = overlay.querySelector('#aa-select-owner');
+  if (ownerBtn) ownerBtn.onclick = () => {
+    cbs().forEach(cb => { cb.checked = cb.value === originallyOwnedId; });
+    syncRows();
+  };
+
+  overlay.querySelectorAll('.aa-class-cb').forEach(cb => {
+    cb.addEventListener('change', syncRows);
+  });
+
+  overlay.querySelector('[data-cancel]').onclick = m.close;
+
+  overlay.querySelector('#aa-save').onclick = async () => {
+    const errEl = overlay.querySelector('#aa-error');
+    errEl.classList.remove('show');
+
+    const chosen = Array.from(cbs()).filter(cb => cb.checked).map(cb => cb.value);
+    if (!chosen.length) {
+      errEl.textContent = 'Assign this assessment to at least one class.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    try {
+      const fresh = await DB.get('assessments', assessmentId) || a;
+      fresh.classIds = chosen;
+      if (!fresh.classId) fresh.classId = chosen[0];
+      fresh.updatedAt = new Date().toISOString();
+
+      await DB.put('assessments', fresh);
+
+      App.logActivity(
+        `Assessment "${a.title || ''}" assigned to ${chosen.length} class${chosen.length === 1 ? '' : 'es'}`,
+        'Assessments'
+      );
+
+      m.close();
+      UI.toast(
+        `Assigned to ${chosen.length} class${chosen.length === 1 ? '' : 'es'}`,
+        'success'
+      );
+
+      // Refresh whichever page launched this modal.
+      if (State.currentModule === 'gradebook') {
+        App.navigate('gradebook');
+      } else if (State.currentModule === 'assessment-builder') {
+        App.navigate('assessment-builder');
+      } else if (State.currentModule === 'quiz-manager') {
+        App.navigate('quiz-manager');
+      } else {
+        App.navigate(State.currentModule || 'dashboard');
+      }
+    } catch (e) {
+      console.error('[Assign] Save failed:', e);
+      errEl.textContent = 'Could not save: ' + (e.message || 'unknown error');
+      errEl.classList.add('show');
+    }
+  };
+};
+
 /* ============================================================================
    EXPORTS + BOOT
    ============================================================================ */
