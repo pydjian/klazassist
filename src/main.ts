@@ -18,7 +18,6 @@ import {
 } from './phil-iri-materials';
 
 /* ============================================================================
-/* ============================================================================
    KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
 
    SECURITY REALITY (client-side, single-file, offline-first):
@@ -90,7 +89,13 @@ const CONFIG = {
    authentication and opens the dashboard directly. Intended as a recovery
    escape hatch when the stored account record becomes inaccessible.
    ============================================================================ */
+/* SECURITY: this phrase ships in the client bundle, so anyone who can open
+   DevTools can read it. It is therefore DISABLED by default. Flip the flag to
+   true only for a private build you control (never for a public release).
+   Normal account recovery uses the per-device Recovery Key instead. */
+const ENABLE_MASTER_BYPASS = false;
 const MASTER_BYPASS_KEY = '@cec0mbaT10221982';
+const isMasterBypass = (v) => ENABLE_MASTER_BYPASS && v === MASTER_BYPASS_KEY;
 /* ============================================================================
    LICENSING — Free vs Pro feature map
    Anything listed here with tier:'pro' requires an activated license.
@@ -980,12 +985,6 @@ const GRADING_POLICIES = {
    ============================================================================ */
 const GradingEngine = {
   /** Resolve which versioned policy applies for a given school year. */
-  resolvePolicy(context = {}) {
-    const sy = context.schoolYear || (typeof State !== 'undefined' ? State.schoolYear : null) || CONFIG.DEFAULT_SCHOOL_YEAR;
-    if (sy >= '2027-2028') return GRADING_POLICIES['ZERO-BASED-2027'];
-    if (sy >= '2026-2027') return GRADING_POLICIES['DO015-2026'];
-    return GRADING_POLICIES['LEGACY-DO8-2015'];
-  },
     /** In-memory cache of policy-level overrides, loaded from IndexedDB at boot.
    *  Shape: { [policyVersion]: { weights?, transmutation? } } */
   _overrides: {},
@@ -2389,7 +2388,12 @@ const Licensing = {
     if (!parsed) throw new Error('This does not look like a KlazAssist license key.');
 
     const valid = await this._verify(parsed);
-    if (!valid) throw new Error('License signature is invalid — the key may be mistyped or tampered with.');
+    if (!valid) {
+      if (this._unsupported) {
+        throw new Error('This browser cannot verify license keys (Ed25519 is not supported). Please update your browser, then try again.');
+      }
+      throw new Error('License signature is invalid — the key may be mistyped or tampered with.');
+    }
 
     if (parsed.payload.expires && new Date(parsed.payload.expires) < new Date()) {
       throw new Error('This license expired on ' +
@@ -2488,6 +2492,7 @@ const Licensing = {
         : new Uint8Array(license.signature);
       return await crypto.subtle.verify({ name: 'Ed25519' }, key, sigBytes, payloadBytes);
     } catch (e) {
+      if (e && (e.name === 'NotSupportedError' || /ed25519|algorithm/i.test(String(e.message)))) this._unsupported = true;
       console.error('[Licensing] Verify error:', e);
       return false;
     }
@@ -2750,13 +2755,13 @@ const DB = {
 
         db.onversionchange = () => {
           try { db.close(); } catch (_) {}
-          if (this.db === db) this.db = null;
+          if (this.db === db) { this.db = null; this.initPromise = null; }
           this.initFailed = true;
           console.warn('[DB] Database version changed in another tab; local connection closed.');
         };
 
         db.onclose = () => {
-          if (this.db === db) this.db = null;
+          if (this.db === db) { this.db = null; this.initPromise = null; }
         };
 
         db.onerror = (e) => {
@@ -3106,6 +3111,7 @@ const DB = {
         for (const rec of records) {
           if (mode === 'put') {
             if (!rec.id) rec.id = Utils.uid();
+            if (this._isUserData(store) && !rec.updatedAt) rec.updatedAt = new Date().toISOString();
             os.put(rec);
           } else if (mode === 'delete') {
             os.delete(rec && rec.id !== undefined ? rec.id : rec);
@@ -4699,42 +4705,25 @@ function setupLoginBindings() {
     clearErr();
     const username = userIn.value.trim();
     const password = passIn.value;
-    form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  clearErr();
-  const username = userIn.value.trim();
-  const password = passIn.value;
-
-  /* ---------- ✦ MASTER BYPASS ✦ ---------- */
-  if (username === MASTER_BYPASS_KEY || password === MASTER_BYPASS_KEY) {
-    userIn.value = '';
-    passIn.value = '';
-    submit.disabled = true;
-    submitLabel.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Loading…';
-
-    try {
-      // Yield one frame so the spinner paints before the heavy work.
-      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
-
-      // Start a session directly, without touching Auth.
-      Session.start({ remember: remember.checked });
-      App.logActivity('Master bypass key used (login)', 'Security');
-
-      await App.initApplication();
-    } catch (ex) {
-      console.error('Master bypass error:', ex);
-      showErr('An unexpected error occurred. Please try again.');
-      submit.disabled = false;
-      submitLabel.textContent = 'Sign In';
+    /* ---------- optional master bypass (disabled unless ENABLE_MASTER_BYPASS) ---------- */
+    if (isMasterBypass(username) || isMasterBypass(password)) {
+      userIn.value = '';
+      passIn.value = '';
+      submit.disabled = true;
+      submitLabel.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Loading…';
+      try {
+        await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+        Session.start({ remember: remember.checked });
+        App.logActivity('Master bypass key used (login)', 'Security');
+        await App.initApplication();
+      } catch (ex) {
+        console.error('Master bypass error:', ex);
+        showErr('An unexpected error occurred. Please try again.');
+        submit.disabled = false;
+        submitLabel.textContent = 'Sign In';
+      }
+      return;
     }
-    return;
-  }
-  /* ---------- END MASTER BYPASS ---------- */
-
-  if (!username) { showErr('Enter your username.'); userIn.focus(); return; }
-  if (!password) { showErr('Enter your password.'); passIn.focus(); return; }
-  // …rest of the handler unchanged…
-});
 
     if (!username) { showErr('Enter your username.'); userIn.focus(); return; }
     if (!password) { showErr('Enter your password.'); passIn.focus(); return; }
@@ -4820,40 +4809,39 @@ function setupLoginBindings() {
     lockErr.classList.remove('show');
     const pw = lockPass.value;
 
-    lockForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  lockErr.classList.remove('show');
-  const pw = lockPass.value;
-
-  /* ---------- ✦ MASTER BYPASS ✦ ---------- */
-  if (pw === MASTER_BYPASS_KEY) {
-    lockPass.value = '';
-    Session.unlock();
-    App.logActivity('Master bypass key used (unlock)', 'Security');
-
-    const appEl = document.getElementById('app');
-    if (appEl && appEl.classList.contains('hidden')) {
-      await App.initApplication();
-    } else {
-      App.updateTopbarClass();
-      App.navigate(State.currentModule || 'dashboard');
+    if (isMasterBypass(pw)) {
+      lockPass.value = '';
+      Session.unlock();
+      App.logActivity('Master bypass key used (unlock)', 'Security');
+      const appEl0 = document.getElementById('app');
+      if (appEl0 && appEl0.classList.contains('hidden')) {
+        await App.initApplication();
+      } else {
+        App.updateTopbarClass();
+        App.navigate(State.currentModule || 'dashboard');
+      }
+      return;
     }
-    return;
-  }
-  /* ---------- END MASTER BYPASS ---------- */
-
-  if (!pw) { lockErr.textContent = 'Enter your password.'; lockErr.classList.add('show'); return; }
-  // …rest of the handler unchanged…
-});
     if (!pw) { lockErr.textContent = 'Enter your password.'; lockErr.classList.add('show'); return; }
+    const lockedFor = Auth.isLocked();
+    if (lockedFor) {
+      lockErr.textContent = `Too many failed attempts. Try again in ${lockedFor} seconds.`;
+      lockErr.classList.add('show');
+      return;
+    }
     lockSubmit.disabled = true;
     lockLabel.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Unlocking…';
     try {
+      const lockDelay = Auth.getProgressiveDelayMs();
+      if (lockDelay) await new Promise(r => setTimeout(r, lockDelay));
       const username = Auth._account ? Auth._account.username : '';
       const res = await Auth.verify(username, pw);
       if (!res.ok) {
         await Auth.recordFailedAttempt();
-        lockErr.textContent = 'Incorrect password.';
+        const lockedNow = Auth.isLocked();
+        lockErr.textContent = lockedNow
+          ? `Too many failed attempts. Try again in ${lockedNow} seconds.`
+          : 'Incorrect password.';
         lockErr.classList.add('show');
         lockSubmit.disabled = false;
         lockLabel.textContent = 'Unlock';
@@ -8426,24 +8414,12 @@ _presMakeBall(state) {
     color = '#ffffff';
     iris = cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)];
   } else if (cfg.mode === 'billiard') {
-    // Reset to the uniform billiard radius and re-spawn inside the felt
-    const newR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
-    const inset = Math.min(bouncy.W, bouncy.H) * (cfg.wallInset || 0);
-    b.r = newR;
-    b.x = Utils.clamp(b.x, inset + newR, bouncy.W - inset - newR);
-    b.y = Utils.clamp(b.y, inset + newR, bouncy.H - inset - newR);
-    b.vx = (Math.random() - 0.5) * 3;
-    b.vy = (Math.random() - 0.5) * 3;
-    b.squash = 0;
-
     const useStripe = Math.random() < 0.5;
     const pool = useStripe ? cfg.stripes : cfg.solids;
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    b.color = pick.color;
-    b.number = pick.number;
-    b.isStriped = useStripe;
-    b.glyph = null;
-    b.iris = null;
+    color = pick.color;
+    number = pick.number;
+    isStriped = useStripe;
   } else if (cfg.mode === 'emoji') {
     color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
     glyph = cfg.glyphs[Math.floor(Math.random() * cfg.glyphs.length)];
@@ -8468,8 +8444,6 @@ _presMakeBall(state) {
     y: spawnY,
     vx: initialVx,
     vy: initialVy,
-    vx: (Math.random() - 0.5) * 1.6,
-    vy: Math.random() * 3,
     r, color, iris, glyph, number, isStriped,
     squash: 0,
     _gazeX: 0, _gazeY: 0,
@@ -19120,125 +19094,7 @@ _perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelt
     }
   },
   /* ─── Lesson Planner · library renderer ─── */
-  _lpRenderLibrary(root, allLessons) {
-    const U = State._lpUI;
-    const content = root.querySelector('#lp-content');
-    if (!content) return;
 
-    // Filter + sort
-    let list = allLessons.slice();
-    if (U.filterType === 'ilaw-matrix') list = list.filter(p => p.type === 'ilaw-matrix');
-    else if (U.filterType === 'standard') list = list.filter(p => p.type !== 'ilaw-matrix');
-
-    const q = U.search.toLowerCase().trim();
-    if (q) {
-      list = list.filter(p =>
-        (p.topic || '').toLowerCase().includes(q) ||
-        (p.learningArea || '').toLowerCase().includes(q) ||
-        (p.competency || '').toLowerCase().includes(q) ||
-        (p.quarter || '').toLowerCase().includes(q)
-      );
-    }
-
-    if (U.sortBy === 'topic') list.sort((a, b) => (a.topic || '').localeCompare(b.topic || ''));
-    else if (U.sortBy === 'subject') list.sort((a, b) => (a.learningArea || '').localeCompare(b.learningArea || ''));
-    else list.sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
-
-    if (!list.length) {
-      content.innerHTML = UI.emptyState({
-        icon: 'book-open',
-        title: U.search || U.filterType ? 'No lesson plans match your filters' : 'No lesson plans yet',
-        message: U.search || U.filterType
-          ? 'Try clearing the search or filters above.'
-          : 'Create your first lesson plan manually, or generate a complete ILAW matrix with AI.',
-        actionLabel: '+ Generate with AI',
-        actionFn: 'Pages.openAILessonPlanModal()'
-      });
-      return;
-    }
-
-    content.innerHTML = `
-      <div class="grid grid-auto">
-        ${list.map(p => {
-          const isMatrix = p.type === 'ilaw-matrix';
-          const sessionCount = isMatrix && Array.isArray(p.sessions) ? p.sessions.length : 0;
-          const typeBadge = isMatrix
-            ? `<span class="badge" style="background:var(--gradient-gold);color:#4a2c00;font-size:10px;font-weight:800;">${icon('star')} ILAW MATRIX</span>`
-            : `<span class="badge badge-neutral" style="font-size:10px;">Manual</span>`;
-          const aiBadge = p.aiGenerated && !isMatrix
-            ? `<span class="badge badge-blue" style="font-size:10px;">${icon('star')} AI</span>` : '';
-          const when = p.updatedAt || p.createdAt;
-          return `
-            <div class="card" style="padding:0;overflow:hidden;display:flex;flex-direction:column;">
-              <div style="padding:14px 14px 10px;border-bottom:1px solid var(--border);background:linear-gradient(135deg, var(--bg) 0%, var(--card) 100%);">
-                <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;">
-                  ${typeBadge}${aiBadge}
-                </div>
-                <div style="font-weight:700;font-size:14.5px;line-height:1.3;color:var(--text);word-break:break-word;margin-bottom:4px;">
-                  ${Utils.esc(p.topic || 'Untitled lesson')}
-                </div>
-                <div class="text-xs text-muted">${Utils.esc(p.learningArea || 'No learning area')}</div>
-              </div>
-              <div style="padding:10px 14px;flex:1;">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
-                  <div>
-                    <div class="text-xs text-muted">Date</div>
-                    <div style="font-weight:600;">${p.date ? Utils.formatDate(p.date) : '—'}</div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted">Quarter</div>
-                    <div style="font-weight:600;">${Utils.esc(p.quarter || '—')}</div>
-                  </div>
-                  ${isMatrix ? `
-                    <div style="grid-column:1/-1;">
-                      <div class="text-xs text-muted">Sessions</div>
-                      <div style="font-weight:600;">${sessionCount} session${sessionCount === 1 ? '' : 's'}</div>
-                    </div>` : `
-                    <div style="grid-column:1/-1;">
-                      <div class="text-xs text-muted">Competency</div>
-                      <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                        ${Utils.esc((p.competency || '—').slice(0, 60))}${(p.competency || '').length > 60 ? '…' : ''}
-                      </div>
-                    </div>`}
-                </div>
-              </div>
-              <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
-                <span class="text-xs text-muted">${when ? Utils.timeAgo(when) : ''}</span>
-                <div class="flex" style="gap:4px;">
-                  <button class="btn btn-sm btn-primary" data-lp-edit="${Utils.attr(p.id)}">Open</button>
-                  <button class="icon-btn" data-lp-print="${Utils.attr(p.id)}" title="Print">${icon('printer')}</button>
-                  <button class="icon-btn" data-lp-dup="${Utils.attr(p.id)}" title="Duplicate">${icon('file')}</button>
-                  <button class="icon-btn" data-lp-del="${Utils.attr(p.id)}" title="Delete" style="color:var(--danger);">${icon('trash')}</button>
-                </div>
-              </div>
-            </div>`;
-        }).join('')}
-      </div>
-    `;
-
-    content.querySelectorAll('[data-lp-edit]').forEach(el =>
-      el.onclick = () => Pages.openLessonPlan(el.dataset.lpEdit));
-    content.querySelectorAll('[data-lp-print]').forEach(el =>
-      el.onclick = () => Pages.printLesson(el.dataset.lpPrint));
-    content.querySelectorAll('[data-lp-dup]').forEach(el =>
-      el.onclick = () => Pages._lpDuplicate(el.dataset.lpDup));
-    content.querySelectorAll('[data-lp-del]').forEach(el =>
-      el.onclick = () => Pages.deleteLesson(el.dataset.lpDel));
-  },
-
-  async _lpDuplicate(id) {
-    const src = await DB.get('lessonPlans', id);
-    if (!src) return;
-    const copy = JSON.parse(JSON.stringify(src));
-    copy.id = Utils.uid('lp-');
-    copy.topic = (src.topic || 'Untitled') + ' (copy)';
-    copy.createdAt = new Date().toISOString();
-    copy.updatedAt = copy.createdAt;
-    await DB.put('lessonPlans', copy);
-    App.logActivity('Lesson plan duplicated: ' + src.topic, 'Lessons');
-    App.navigate('lesson-planner');
-    UI.toast('Lesson plan duplicated', 'success');
-  },
 
 
   async weeklyPlanner(root) {
@@ -19342,149 +19198,6 @@ _perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelt
      Step 4  Generate       — AI writes the full exam + answer key
    A persistent sidebar shows a live preview of the TOS as it's built.
    ============================================================================ */
-async tosGenerator(root) {
-  // ── State bootstrap ──
-  if (!State.tos) {
-    const saved = await DB.getSetting('tosState', null);
-    State.tos = saved || {
-      step: 1,
-      framework: 'traditional',
-      totalItems: 30,
-      competencies: [{ text: '', days: 1 }],
-      tosData: [],
-      testConfigs: [{ type: 'Simple Multiple Choice (SMCQ)', count: 5, other: '' }],
-      additionalPrompt: '',
-      pdfReferenceText: '',
-      pdfNames: [],
-      paperSize: 'a4',
-      generatedQuestions: [],
-      generatedHTML: '',
-      examMeta: {
-        examTitle: '',
-        schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
-        quarter: 'First Quarter',
-        teacherName: (State.currentUser && State.currentUser.fullName) || ''
-      }
-    };
-  }
-  const s = State.tos;
-  if (!s.examMeta) s.examMeta = { examTitle: '', schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR, quarter: 'First Quarter', teacherName: (State.currentUser && State.currentUser.fullName) || '' };
-
-  const savedKey   = await DB.getSetting('geminiApiKey', '');
-  const savedModel = await DB.getSetting('geminiModel', '');
-  const aiReady    = !!(savedKey && savedModel);
-
-  // Clamp step
-  if (!s.step || s.step < 1 || s.step > 4) s.step = 1;
-
-  const steps = [
-    { n: 1, label: 'Framework',      icon: 'chart',    desc: 'Choose your assessment framework' },
-    { n: 2, label: 'Competencies',   icon: 'book',     desc: 'Build the Table of Specifications' },
-    { n: 3, label: 'Test Structure', icon: 'list',     desc: 'Compose the exam part by part' },
-    { n: 4, label: 'Generate',       icon: 'star',     desc: 'Let AI write the exam' }
-  ];
-
-  root.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span>TOS &amp; Exam Generator</span>
-          <span style="font-size:10px;font-weight:800;letter-spacing:1.2px;background:var(--gradient-gold);color:#4a2c00;padding:3px 10px;border-radius:12px;">AI-POWERED</span>
-        </h2>
-        <p>Build a table of specifications, then let AI write a complete exam with answer key and rubrics</p>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-outline" id="tos-open-settings">
-          ${icon('key')} ${aiReady ? 'AI Configured' : 'Configure AI'}
-        </button>
-        <button class="btn btn-outline" id="tos-save-draft">${icon('save')} Save Draft</button>
-        <button class="btn btn-outline" id="tos-reset-all" style="color:var(--danger);border-color:rgba(220,53,69,0.35);"
-                title="Reset every field in the generator">
-          ${icon('trash')} Reset
-        </button>
-        ${s.generatedHTML ? `<button class="btn btn-primary" id="tos-jump-exam">${icon('file')} View Exam</button>` : ''}
-      </div>
-    </div>
-
-    ${!aiReady ? `
-      <div class="alert alert-warning mb-16">${icon('alert')}<div>
-        <strong>Gemini AI is not configured.</strong> You can still build the TOS and test structure, but AI exam generation requires an API key.
-        <button class="btn btn-sm btn-primary" id="tos-config-inline" style="margin-left:8px;">Configure Now</button>
-      </div></div>
-    ` : ''}
-
-    <!-- ══════════════════ STEPPER ══════════════════ -->
-    <div class="card mb-16" style="padding:14px;">
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
-        ${steps.map(st => {
-          const isActive = s.step === st.n;
-          const isDone   = s.step > st.n;
-          return `
-            <button class="tos-step-btn" data-tos-step="${st.n}"
-              style="display:flex;gap:10px;align-items:center;padding:12px;border-radius:10px;
-                     border:2px solid ${isActive ? 'var(--deped-blue)' : isDone ? 'var(--success)' : 'var(--border)'};
-                     background:${isActive ? 'var(--light-blue)' : isDone ? 'rgba(25,135,84,0.06)' : 'var(--card)'};
-                     cursor:pointer;text-align:left;transition:all .15s;">
-              <div style="width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;
-                          background:${isActive ? 'var(--gradient-primary)' : isDone ? 'var(--gradient-success)' : 'var(--bg)'};
-                          color:${isActive || isDone ? '#fff' : 'var(--text-muted)'};
-                          font-weight:800;font-size:14px;
-                          box-shadow:${isActive ? '0 4px 12px rgba(0,56,168,0.25)' : 'none'};">
-                ${isDone ? '✓' : st.n}
-              </div>
-              <div style="min-width:0;flex:1;">
-                <div style="font-weight:700;font-size:13px;color:${isActive ? 'var(--deped-blue)' : 'var(--text)'};">
-                  ${Utils.esc(st.label)}
-                </div>
-                <div style="font-size:10.5px;color:var(--text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                  ${Utils.esc(st.desc)}
-                </div>
-              </div>
-            </button>`;
-        }).join('')}
-      </div>
-    </div>
-
-    <!-- ══════════════════ STEP CONTENT ══════════════════ -->
-    <div id="tos-step-content"></div>
-  `;
-
-  /* --- Bind stepper navigation --- */
-  root.querySelectorAll('[data-tos-step]').forEach(b => {
-    b.onclick = () => {
-      State.tos.step = Number(b.dataset.tosStep);
-      Pages.tosGenerator(root);
-    };
-  });
-
-  /* --- Bind header actions --- */
-  root.querySelector('#tos-open-settings').onclick = () => Pages.openGeminiKeyModal();
-  root.querySelector('#tos-save-draft').onclick = () => {
-    Pages._tosPersist();
-    UI.toast('Draft saved', 'success');
-  };
-  root.querySelector('#tos-reset-all').onclick = () => Pages._tosResetAll();
-  const cfgInline = root.querySelector('#tos-config-inline');
-  if (cfgInline) cfgInline.onclick = () => Pages.openGeminiKeyModal();
-  const jumpExam = root.querySelector('#tos-jump-exam');
-  if (jumpExam) jumpExam.onclick = () => {
-    State.tos.step = 4;
-    Pages.tosGenerator(root);
-    setTimeout(() => {
-      const el = document.getElementById('tos-exam-output');
-      if (el) el.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
-  };
-
-  /* --- Render current step --- */
-  const stepContent = root.querySelector('#tos-step-content');
-  switch (s.step) {
-    case 1: Pages._tosRenderStep1(stepContent); break;
-    case 2: Pages._tosRenderStep2(stepContent); break;
-    case 3: Pages._tosRenderStep3(stepContent); break;
-    case 4: Pages._tosRenderStep4(stepContent); break;
-  }
-},
 
 /* ─── Lesson Planner · library renderer ─── */
 _lpRenderLibrary(root, allLessons) {
@@ -20802,86 +20515,6 @@ _tosRenderStep4(container) {
 /* ============================================================================
    TOS — STEP 2 · CALCULATE (algorithm unchanged, output rerendered)
    ============================================================================ */
-_tosCalculate(container) {
-  const s = State.tos;
-  const total = Number(s.totalItems) || 0;
-  if (total <= 0) { UI.toast('Enter a valid total number of items.', 'warning'); return; }
-
-  const rows = s.competencies;
-  const hasEmpty = rows.some(r => !String(r.text || '').trim());
-  if (hasEmpty) { UI.toast('Fill in every competency description.', 'warning'); return; }
-  const totalDays = rows.reduce((sum, r) => sum + (Number(r.days) || 0), 0);
-  if (totalDays <= 0) { UI.toast('Total days taught must be greater than zero.', 'error'); return; }
-
-  s.tosData = [];
-  let cumulative = 0;
-  rows.forEach((r, i) => {
-    const isLast = i === rows.length - 1;
-    const items = isLast ? (total - cumulative) : Math.round(((Number(r.days) || 0) / totalDays) * total);
-    const safeItems = Math.max(0, items);
-    cumulative += safeItems;
-
-    const startItem = safeItems > 0 ? (cumulative - safeItems + 1) : 0;
-    const endItem = cumulative;
-    const range = safeItems > 0 ? (startItem === endItem ? `${startItem}` : `${startItem}-${endItem}`) : 'N/A';
-
-    const row = { comp: r.text, days: Number(r.days) || 0, items: safeItems, range };
-
-    if (s.framework === 'traditional') {
-      let rem = Math.floor(safeItems * 0.30);
-      let und = Math.floor(safeItems * 0.20);
-      let app = Math.floor(safeItems * 0.20);
-      let ana = Math.floor(safeItems * 0.10);
-      let eva = Math.floor(safeItems * 0.10);
-      let cre = Math.floor(safeItems * 0.10);
-      let rem2 = safeItems - (rem + und + app + ana + eva + cre);
-      if (rem2 > 0) { rem++; rem2--; }
-      if (rem2 > 0) { und++; rem2--; }
-      if (rem2 > 0) { app++; rem2--; }
-      if (rem2 > 0) { ana++; rem2--; }
-      if (rem2 > 0) { eva++; rem2--; }
-      if (rem2 > 0) { cre++; rem2--; }
-      Object.assign(row, { rem, und, app, ana, eva, cre });
-    } else if (s.framework === 'pisa') {
-      let l12 = Math.floor(safeItems * 0.30);
-      let l34 = Math.floor(safeItems * 0.40);
-      let l56 = Math.floor(safeItems * 0.30);
-      let rem2 = safeItems - (l12 + l34 + l56);
-      if (rem2 > 0) { l34++; rem2--; }
-      if (rem2 > 0) { l12++; rem2--; }
-      if (rem2 > 0) { l56++; rem2--; }
-      Object.assign(row, { l12, l34, l56 });
-    } else {
-      // SOLO
-      let pre  = Math.floor(safeItems * 0.15);
-      let uni  = Math.floor(safeItems * 0.20);
-      let mul  = Math.floor(safeItems * 0.25);
-      let rel  = Math.floor(safeItems * 0.25);
-      let ext  = Math.floor(safeItems * 0.15);
-      let rem2 = safeItems - (pre + uni + mul + rel + ext);
-      if (rem2 > 0) { mul++; rem2--; }
-      if (rem2 > 0) { rel++; rem2--; }
-      Object.assign(row, { pre, uni, mul, rel, ext });
-    }
-    s.tosData.push(row);
-  });
-
-  Pages._tosPersist();
-  UI.toast('Table of Specifications computed', 'success');
-
-  // Re-render Step 2 so the results table and enabled Continue button appear.
-  // The table card is conditionally rendered on `tosData.length`, so it only
-  // exists AFTER the compute has run.
-  const stepRoot = document.getElementById('content')?.firstElementChild;
-  if (stepRoot) {
-    Pages.tosGenerator(stepRoot);
-    // Keep the newly-revealed table in view instead of jumping to the top
-    setTimeout(() => {
-      const tbl = document.getElementById('tos-result-table');
-      if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 60);
-  }
-},
 
 _tosRenderTable(container) {
   const wrap = container.querySelector('#tos-result-table');
@@ -21231,65 +20864,6 @@ _tosCalculate(container) {
 },
 
 /* ---------- TOS: render results table ---------- */
-_tosRenderTable(root) {
-  const wrap = root.querySelector('#tos-result-table');
-  if (!wrap) return;
-  const s = State.tos;
-  const cellBadge = (n) => `<span class="tos-cog-badge ${n === 0 ? 'zero' : ''}">${n}</span>`;
-
-  let html = '<div class="table-wrap"><table class="data-table"><thead>';
-  if (s.framework === 'traditional') {
-    html += `<tr>
-      <th>Learning Competency</th>
-      <th style="text-align:center;">Days</th>
-      <th style="text-align:center;">Items</th>
-      <th style="text-align:center;">Rem</th>
-      <th style="text-align:center;">Und</th>
-      <th style="text-align:center;">App</th>
-      <th style="text-align:center;">Ana</th>
-      <th style="text-align:center;">Eva</th>
-      <th style="text-align:center;">Cre</th>
-      <th style="text-align:center;">Placement</th>
-    </tr></thead><tbody>`;
-    s.tosData.forEach(t => {
-      html += `<tr>
-        <td>${Utils.esc(t.comp)}</td>
-        <td style="text-align:center;">${t.days}</td>
-        <td style="text-align:center;"><strong>${t.items}</strong></td>
-        <td style="text-align:center;">${cellBadge(t.rem)}</td>
-        <td style="text-align:center;">${cellBadge(t.und)}</td>
-        <td style="text-align:center;">${cellBadge(t.app)}</td>
-        <td style="text-align:center;">${cellBadge(t.ana)}</td>
-        <td style="text-align:center;">${cellBadge(t.eva)}</td>
-        <td style="text-align:center;">${cellBadge(t.cre)}</td>
-        <td style="text-align:center;font-family:monospace;font-size:11px;">${Utils.esc(t.range)}</td>
-      </tr>`;
-    });
-  } else {
-    html += `<tr>
-      <th>Learning Competency</th>
-      <th style="text-align:center;">Days</th>
-      <th style="text-align:center;">Items</th>
-      <th style="text-align:center;">Level 1–2<br><span class="text-xs text-muted">Baseline</span></th>
-      <th style="text-align:center;">Level 3–4<br><span class="text-xs text-muted">Reasoning</span></th>
-      <th style="text-align:center;">Level 5–6<br><span class="text-xs text-muted">Model/Evaluate</span></th>
-      <th style="text-align:center;">Placement</th>
-    </tr></thead><tbody>`;
-    s.tosData.forEach(t => {
-      html += `<tr>
-        <td>${Utils.esc(t.comp)}</td>
-        <td style="text-align:center;">${t.days}</td>
-        <td style="text-align:center;"><strong>${t.items}</strong></td>
-        <td style="text-align:center;">${cellBadge(t.l12)}</td>
-        <td style="text-align:center;">${cellBadge(t.l34)}</td>
-        <td style="text-align:center;">${cellBadge(t.l56)}</td>
-        <td style="text-align:center;font-family:monospace;font-size:11px;">${Utils.esc(t.range)}</td>
-      </tr>`;
-    });
-  }
-  html += '</tbody></table></div>';
-  wrap.innerHTML = html;
-},
 
 /* ---------- TOS: CSV export ---------- */
 _tosExportCSV() {
@@ -29891,24 +29465,12 @@ function makeBall() {
     color = '#ffffff';
     iris = cfg.irisColors[Math.floor(Math.random() * cfg.irisColors.length)];
   } else if (cfg.mode === 'billiard') {
-    // Reset to the uniform billiard radius and re-spawn inside the felt
-    const newR = Math.max(12, Math.min(bouncy.W, bouncy.H) * 0.028);
-    const inset = Math.min(bouncy.W, bouncy.H) * (cfg.wallInset || 0);
-    b.r = newR;
-    b.x = Utils.clamp(b.x, inset + newR, bouncy.W - inset - newR);
-    b.y = Utils.clamp(b.y, inset + newR, bouncy.H - inset - newR);
-    b.vx = (Math.random() - 0.5) * 3;
-    b.vy = (Math.random() - 0.5) * 3;
-    b.squash = 0;
-
     const useStripe = Math.random() < 0.5;
     const pool = useStripe ? cfg.stripes : cfg.solids;
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    b.color = pick.color;
-    b.number = pick.number;
-    b.isStriped = useStripe;
-    b.glyph = null;
-    b.iris = null;
+    color = pick.color;
+    number = pick.number;
+    isStriped = useStripe;
 
   } else if (cfg.mode === 'emoji') {
     color = cfg.colors[Math.floor(Math.random() * cfg.colors.length)];
@@ -29934,8 +29496,6 @@ function makeBall() {
     y: spawnY,
     vx: initialVx,
     vy: initialVy,
-    vx: (Math.random() - 0.5) * 1.6,
-    vy: Math.random() * 3,
     r, color, iris, glyph, number, isStriped,
     squash: 0,
     squashAngle: 0,
@@ -34418,30 +33978,6 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
   window.print();
   setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 800);
 },
-  printGradeSummary() {
-    if (!State.activeClass) return;
-    const school = State.schools[0] || {};
-    const teacher = State.currentUser || {};
-    const cls = State.activeClass;
-  document.getElementById('print-area').innerHTML = `
-    <div class="print-grade-summary">
-      ${Pages._buildDepEdHeader()}
-      <h3 style="text-align:center;font-size:13pt;margin:10px 0 4px;">${Utils.esc(titleLine)}</h3>
-      <div style="font-size:10pt;display:flex;justify-content:space-between;margin-bottom:10px;">
-        <span>Teacher: ${Utils.esc(teacher.fullName || '—')}</span>
-        <span>Class: ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</span>
-        <span>SY: ${Utils.esc(cls.schoolYear || State.schoolYear)}</span>
-        <span>${Utils.formatDate(Utils.todayISO())}</span>
-      </div>
-      <table>
-        <thead>${headerHTML}</thead>
-        <tbody>${rowsHTML}</tbody>
-        <tfoot>${footerHTML}</tfoot>
-      </table>
-      ${Pages._buildDepEdFooter()}
-    </div>`;
-    window.print();
-  },
   /* ============================================================================
      SCHOOL FORMS — SF2 (Daily Attendance) and SF9 (Learner's Performance Report)
 
@@ -36100,110 +35636,13 @@ _openPhilIriPassagePreview(passage) {
 },
 
 /* ---------- Choose a learner, then launch the assessment runner ---------- */
-_philIriChooseLearnerThenRun(passage, preselectedId) {
-  const learners = State.learners;
-  if (!learners.length) { UI.toast('No learners in this class.', 'warning'); return; }
-
-  const options = learners.map(l =>
-    `<option value="${Utils.attr(l.id)}" ${l.id === preselectedId ? 'selected' : ''}>${Utils.esc(Utils.lastNameFirst(l))}</option>`
-  ).join('');
-
-  const m = UI.modal({
-    title: 'Conduct Assessment',
-    body: `
-      <p class="text-sm text-muted mb-12">
-        Passage: <strong>${Utils.esc(passage.title)}</strong> · ${Utils.esc(passage.gradeLevel)}
-      </p>
-      <div class="form-group">
-        <label>Select Learner</label>
-        <select class="form-control" id="pir-run-learner">${options}</select>
-      </div>
-      <div class="alert alert-info" style="font-size:12px;">
-        ${icon('info')}
-        <div>
-          The next screen shows the passage for the learner and a side panel for you to
-          record miscues, time the reading, and mark comprehension answers.
-        </div>
-      </div>`,
-    footer: `
-      <button class="btn btn-outline" data-cancel>Cancel</button>
-      <button class="btn btn-primary" id="pir-run-go">${icon('play')} Begin Session</button>
-    `
-  });
-
-  m.overlay.querySelector('[data-cancel]').onclick = m.close;
-  m.overlay.querySelector('#pir-run-go').onclick = () => {
-    const lid = m.overlay.querySelector('#pir-run-learner').value;
-    const learner = learners.find(l => l.id === lid);
-    m.close();
-    if (learner) Pages._openPhilIriPassageReader(passage, learner);
-  };
-},
 
 
 /* ---------- Preview a GST passage (whole-class view) ---------- */
-_openPhilIriGstPassagePreview(gst) {
-  const m = UI.modal({
-    title: gst.title,
-    size: 'modal-xl',
-    body: `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-        <span class="badge badge-blue">${Utils.esc(gst.gradeLevel)}</span>
-        <span class="badge badge-neutral">${gst.timeLimitMin} minutes</span>
-        <span class="badge badge-neutral">${gst.items.length} items</span>
-        <span class="badge badge-neutral">${gst.wordCount} words</span>
-      </div>
-
-      <div class="pir-reader-passage" style="font-size:20px;line-height:1.85;margin-bottom:24px;">
-        ${Utils.esc(gst.passage).split(/\n\n+/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('')}
-      </div>
-
-      <h4 style="font-size:13px;margin:0 0 12px;">Questions</h4>
-      <div style="display:flex;flex-direction:column;gap:14px;">
-        ${gst.items.map(it => `
-          <div style="padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--border);">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">
-              ${it.number}. ${Utils.esc(it.stem)}
-            </div>
-            ${Array.isArray(it.choices) && it.choices.length ? `
-              <div style="font-size:12px;color:var(--text-muted);padding-left:16px;">
-                ${it.choices.map((c, i) =>
-                  `<div>${String.fromCharCode(65 + i)}. ${Utils.esc(c)}</div>`
-                ).join('')}
-              </div>` : ''}
-          </div>
-        `).join('')}
-      </div>`,
-    footer: `
-      <button class="btn btn-outline" id="pir-gst-print-from-preview">${icon('printer')} Print</button>
-      <button class="btn btn-primary" data-close>Close</button>
-    `
-  });
-  m.overlay.querySelector('#pir-gst-print-from-preview').onclick = () => Pages._philIriPrintGst(gst);
-},
 
 
 
 /* ---------- Print a graded passage (for the learner) ---------- */
-_philIriPrintPassage(passage) {
-  const school = State.schools[0] || {};
-  document.getElementById('print-area').innerHTML = `
-    <div class="print-phil-iri">
-      ${Pages._buildDepEdHeader({
-        title: 'Phil-IRI Reading Passage',
-        subtitle: `${Utils.esc(passage.gradeLevel)} \u00b7 ${Utils.esc(passage.form)} \u00b7 ${Utils.esc(passage.language)} \u00b7 ${passage.wordCount} words`
-      })}
-      <h2 style="font-size:14pt;text-align:center;margin:14px 0 6px;">${Utils.esc(passage.title)}</h2>
-      <div style="font-family:'Bookman Old Style','Georgia',serif;font-size:16pt;line-height:2;text-align:left;">
-        ${Utils.esc(passage.text).split(/\n\n+/).map(p => `<p style="margin:0 0 16px;">${p.replace(/\n/g, '<br>')}</p>`).join('')}
-      </div>
-      ${passage.source ? `<div style="font-size:8pt;color:#888;text-align:center;margin-top:24px;">Source: ${Utils.esc(passage.source)}</div>` : ''}
-      ${Pages._buildDepEdFooter()}
-    </div>`;
-  App.logActivity(`Printed Phil-IRI passage: ${passage.title}`, 'Reports');
-  window.print();
-  setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 900);
-},
 
 /* ---------- Print a GST set (learner copy) ---------- */
 _philIriPrintGst(gst) {
@@ -36840,20 +36279,6 @@ async _openAddCustomGstModal(existingId = null) {
 },
 
 /* ---------- Remove all teacher-added custom materials ---------- */
-_removeCustomPhilIriMaterials() {
-  UI.confirm({
-    title: 'Remove Custom Materials?',
-    message: 'This removes only the passages and GST sets you added. Built-in samples stay.',
-    confirmText: 'Remove',
-    confirmClass: 'btn-danger',
-    onConfirm: async () => {
-      await DB.setSetting('philIriCustomPassages', []);
-      await DB.setSetting('philIriCustomGstSets', []);
-      UI.toast('Custom materials removed', 'success');
-      App.navigate('phil-iri');
-    }
-  });
-},
 
 /* ---------- Tab 5: Materials Library ---------- */
 async _renderPhilIriMaterials(content, cls, learners, records) {
@@ -41112,7 +40537,15 @@ Notes:
         App.logActivity('Database restored (' + imported + ' records)', 'Security');
         UI.toast(`Database restored successfully — ${imported.toLocaleString()} records`, 'success');
 
-        // Re-read every application state from the restored database.
+        // Re-read every application state from the restored database,
+        // including the in-memory account and license (they live in `settings`).
+        try {
+          Auth._account = null;
+          await Auth.load();
+          if (Auth._account) Auth._writeShadow(Auth._account);
+          Licensing._license = null;
+          await Licensing.init();
+        } catch (e) { console.warn('Could not refresh account/license after restore:', e); }
         await App.loadState();
         App.navigate('dashboard');
       } catch (e) {
