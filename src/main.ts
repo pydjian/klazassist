@@ -50451,34 +50451,122 @@ const AnswerSheetOMR = (() => {
   /* ========================================================================
      SCANNER
      ======================================================================== */
-  function openScanner(assessmentId) {
-    (async () => {
-      await loadCalibration();
+function openScanner(assessmentId) {
+  (async () => {
+    await loadCalibration();
 
-      const a = await DB.get('assessments', assessmentId);
-      if (!a) { UI.toast('Assessment not found.', 'error'); return; }
-      const ok = await ensureLibs();
-      if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
+    const a = await DB.get('assessments', assessmentId);
+    if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+    const ok = await ensureLibs();
+    if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
-      const answerKey = (a.questions || []).map(q => {
-        const type = (q.type || '').toLowerCase();
-        if (type !== 'multiple choice') return null;
-        const choices = Array.isArray(q.choices) ? q.choices : [];
-        const clean = choices.map((c, i) => Utils.stripChoiceLetter(c, i));
-        const idx = clean.findIndex(c => c.toLowerCase() === String(q.answer || '').trim().toLowerCase());
-        return idx >= 0 ? idx : null;
-      });
+    const answerKey = (a.questions || []).map(q => {
+      const type = (q.type || '').toLowerCase();
+      if (type !== 'multiple choice') return null;
+      const choices = Array.isArray(q.choices) ? q.choices : [];
+      const clean = choices.map((c, i) => Utils.stripChoiceLetter(c, i));
+      const idx = clean.findIndex(c => c.toLowerCase() === String(q.answer || '').trim().toLowerCase());
+      return idx >= 0 ? idx : null;
+    });
 
-      const session = {
-        assessment: a,
-        answerKey,
-        scanned: [],
-        recentScans: new Map(),
-        pendingConfirm: new Map(),   // learnerId → { signature, votes }
-        stream: null, video: null, canvas: null, ctx: null,
-        timer: null, beepCtx: null
+    const session = {
+      assessment: a,
+      answerKey,
+      scanned: [],
+      recentScans: new Map(),
+      pendingConfirm: new Map(),
+      stream: null, video: null, canvas: null, ctx: null,
+      timer: null, beepCtx: null
+    };
+
+    /* ----------------------------------------------------------------
+       Device detection — mobile gets the fullscreen ZipGrade layout,
+       desktop keeps the existing modal scanner.
+       ---------------------------------------------------------------- */
+    const isMobile =
+      window.matchMedia('(max-width: 900px)').matches ||
+      ('ontouchstart' in window && window.innerWidth < 1024);
+
+    const cls = State.activeClass || {};
+    const classLabel = [cls.gradeLevel, cls.section].filter(Boolean).join(' – ') || 'No class';
+    const assessLabel = (a.title || 'Assessment').toUpperCase();
+    const totalLearners = State.learners.filter(Utils.isActiveLearner).length;
+
+    let overlay, closeScanner;
+
+    /* ══════════════════════════════════════════════════════════════════
+       MOBILE — fullscreen ZipGrade-style scanner
+       ══════════════════════════════════════════════════════════════════ */
+    if (isMobile) {
+      overlay = document.createElement('div');
+      overlay.className = 'zg-scanner';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.innerHTML = `
+        <div class="zg-header">
+          <button type="button" class="zg-header-btn" id="zg-back"
+                  aria-label="Close scanner">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>
+            </svg>
+          </button>
+          <div class="zg-header-title">Scanning</div>
+          <button type="button" class="zg-header-btn" id="zg-settings"
+                  aria-label="Calibration settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="zg-video-wrap" id="omr-video-wrap">
+          <video id="omr-video" playsinline muted autoplay></video>
+          <canvas id="omr-canvas" style="display:none;"></canvas>
+
+          <div class="zg-viewfinder tl" aria-hidden="true"></div>
+          <div class="zg-viewfinder tr" aria-hidden="true"></div>
+          <div class="zg-viewfinder bl" aria-hidden="true"></div>
+          <div class="zg-viewfinder br" aria-hidden="true"></div>
+
+          <div class="zg-counter" id="zg-counter" aria-hidden="true">0</div>
+
+          <div class="zg-flash" id="omr-flash"></div>
+
+          <div class="zg-status-pill" id="omr-status-pill">
+            <div class="zg-status-main" id="omr-status-main">Align squares in viewfinders</div>
+            <div class="zg-status-sub" id="omr-status-sub">${Utils.esc(assessLabel)} · ${Utils.esc(classLabel)}</div>
+          </div>
+
+          <button type="button" class="zg-undo" id="omr-undo"
+                  disabled aria-label="Undo last scan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7v6h6"/>
+              <path d="M21 17a9 9 0 01-15-6.7L3 13"/>
+            </svg>
+          </button>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      document.body.classList.add('zg-scanner-open');
+
+      closeScanner = () => {
+        stopCamera();
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        document.body.classList.remove('zg-scanner-open');
       };
 
+      overlay.querySelector('#zg-back').onclick     = () => closeScanner();
+      overlay.querySelector('#zg-settings').onclick = () => openCalibrationModal();
+      overlay.querySelector('#omr-undo').onclick    = () => undoLastScan();
+
+    /* ══════════════════════════════════════════════════════════════════
+       DESKTOP — existing modal scanner
+       ══════════════════════════════════════════════════════════════════ */
+    } else {
       const modal = UI.modal({
         title: 'Scan Answer Sheets · ' + (a.title || ''),
         size: 'modal-lg',
@@ -50487,15 +50575,18 @@ const AnswerSheetOMR = (() => {
             <div class="qr-video-wrap" id="omr-video-wrap">
               <video id="omr-video" playsinline muted autoplay></video>
               <canvas id="omr-canvas" style="display:none;"></canvas>
+
               <div class="qr-reticle" aria-hidden="true">
                 <span class="qr-reticle-corner tl"></span>
                 <span class="qr-reticle-corner tr"></span>
                 <span class="qr-reticle-corner bl"></span>
                 <span class="qr-reticle-corner br"></span>
               </div>
+
               <div class="qr-flash" id="omr-flash"></div>
               <div class="qr-video-status" id="omr-status">Starting camera…</div>
             </div>
+
             <div class="qr-stats-row">
               <div class="qr-stat">
                 <span class="qr-stat-label">Scanned</span>
@@ -50503,12 +50594,13 @@ const AnswerSheetOMR = (() => {
               </div>
               <div class="qr-stat">
                 <span class="qr-stat-label">Total</span>
-                <span class="qr-stat-value">${State.learners.filter(Utils.isActiveLearner).length}</span>
+                <span class="qr-stat-value">${totalLearners}</span>
               </div>
               <div class="qr-progress-wrap">
                 <div class="qr-progress-bar"><div id="omr-progress-fill" style="width:0%"></div></div>
               </div>
             </div>
+
             <div class="qr-scan-list-wrap">
               <div class="qr-scan-list-head">
                 <span>Graded sheets</span>
@@ -50516,11 +50608,13 @@ const AnswerSheetOMR = (() => {
               </div>
               <div class="qr-scan-list" id="omr-list">
                 <div class="qr-scan-empty">
-                  Point the camera at a printed answer sheet. Align all four corner QR codes in view.
-                  Each sheet is graded automatically and can be reviewed if any answer is uncertain.
+                  Point the camera at a printed answer sheet. Align all four corner
+                  QR codes in view. Each sheet is graded automatically and can be
+                  reviewed if any answer is uncertain.
                 </div>
               </div>
             </div>
+
             <div class="alert alert-info" style="font-size:12px;margin:0;">
               ${icon('info')}
               <div>
@@ -50537,699 +50631,762 @@ const AnswerSheetOMR = (() => {
         onClose: () => stopCamera()
       });
 
-      const overlay = modal.overlay;
-      session.video  = overlay.querySelector('#omr-video');
-      session.canvas = overlay.querySelector('#omr-canvas');
-      session.ctx    = session.canvas.getContext('2d', { willReadFrequently: true });
-      overlay.querySelector('#omr-close').onclick = () => modal.close();
+      overlay = modal.overlay;
+      closeScanner = () => modal.close();
+
+      overlay.querySelector('#omr-close').onclick     = () => modal.close();
       overlay.querySelector('#omr-calibrate').onclick = () => openCalibrationModal();
+    }
 
-      async function startCamera() {
-        try {
-          session.stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: 'environment' },
-              width:  { ideal: 1920 },
-              height: { ideal: 1080 }
-            },
-            audio: false
-          });
-          session.video.srcObject = session.stream;
-          await session.video.play();
-          setStatus('Scanning…');
-          startDecodeLoop();
-        } catch (e) { showCameraError(e); }
+    /* ----------------------------------------------------------------
+       Common refs
+       ---------------------------------------------------------------- */
+    session.video  = overlay.querySelector('#omr-video');
+    session.canvas = overlay.querySelector('#omr-canvas');
+    session.ctx    = session.canvas.getContext('2d', { willReadFrequently: true });
+
+    /* ----------------------------------------------------------------
+       Camera lifecycle
+       ---------------------------------------------------------------- */
+    async function startCamera() {
+      try {
+        session.stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          audio: false
+        });
+        session.video.srcObject = session.stream;
+        await session.video.play();
+        setStatus('Align squares in viewfinders');
+        startDecodeLoop();
+      } catch (e) { showCameraError(e); }
+    }
+
+    function stopCamera() {
+      if (session.timer) { clearTimeout(session.timer); session.timer = null; }
+      if (session.stream) {
+        try { session.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        session.stream = null;
+      }
+      if (session.video) { try { session.video.srcObject = null; } catch (e) {} }
+    }
+
+    function startDecodeLoop() {
+      const TICK_MS = 220;
+      const tick = () => {
+        if (!session.stream || !session.video) return;
+        session.timer = setTimeout(tick, TICK_MS);
+        const v = session.video;
+        if (v.readyState !== v.HAVE_ENOUGH_DATA || !v.videoWidth) return;
+
+        const MAX_W = 1200;
+        const scale = Math.min(1, MAX_W / v.videoWidth);
+        session.canvas.width  = Math.round(v.videoWidth  * scale);
+        session.canvas.height = Math.round(v.videoHeight * scale);
+        session.ctx.drawImage(v, 0, 0, session.canvas.width, session.canvas.height);
+
+        let smallData;
+        try { smallData = session.ctx.getImageData(0, 0, session.canvas.width, session.canvas.height); }
+        catch (e) { return; }
+
+        processFrame(smallData, v);
+      };
+      tick();
+    }
+
+    /* ----------------------------------------------------------------
+       Frame processing — unchanged detection pipeline
+       ---------------------------------------------------------------- */
+    function processFrame(smallData, videoEl) {
+      const found = detectQRsWithRotation(smallData);
+      if (!found.qrs.length) return;
+
+      const anchors = { TL: null, TR: null, BL: null, BR: null };
+      let payload = null;
+
+      for (const qr of found.qrs) {
+        const text = String(qr.data || '');
+        if (ANCHOR_PAYLOADS[text]) { anchors[ANCHOR_PAYLOADS[text]] = qr; continue; }
+        if (text.startsWith('{')) {
+          try { const p = JSON.parse(text); if (p && p.e) payload = p; } catch (e) {}
+        }
       }
 
-      function stopCamera() {
-        if (session.timer) { clearTimeout(session.timer); session.timer = null; }
-        if (session.stream) {
-          try { session.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-          session.stream = null;
-        }
-        if (session.video) { try { session.video.srcObject = null; } catch (e) {} }
+      if (!anchors.TL || !anchors.TR || !anchors.BL || !anchors.BR) {
+        setStatus('Show all four corner QR codes', 'warn');
+        return;
+      }
+      if (!payload || payload.e !== session.assessment.id) {
+        setStatus('Sheet is for a different exam', 'warn');
+        return;
       }
 
-      function startDecodeLoop() {
-        const TICK_MS = 220;
-        const tick = () => {
-          if (!session.stream || !session.video) return;
-          session.timer = setTimeout(tick, TICK_MS);
-          const v = session.video;
-          if (v.readyState !== v.HAVE_ENOUGH_DATA || !v.videoWidth) return;
+      const sheetAnchors = anchorCenters();
+      const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
+      const dstPts = [
+        qrCenter(anchors.TL), qrCenter(anchors.TR),
+        qrCenter(anchors.BL), qrCenter(anchors.BR)
+      ];
 
-          // Downscaled canvas for QR detection.
-          const MAX_W = 1200;
-          const scale = Math.min(1, MAX_W / v.videoWidth);
-          session.canvas.width  = Math.round(v.videoWidth  * scale);
-          session.canvas.height = Math.round(v.videoHeight * scale);
-          session.ctx.drawImage(v, 0, 0, session.canvas.width, session.canvas.height);
-
-          let smallData;
-          try { smallData = session.ctx.getImageData(0, 0, session.canvas.width, session.canvas.height); }
-          catch (e) { return; }
-
-          processFrame(smallData, v);
-        };
-        tick();
+      if (dstPts[0][0] > dstPts[1][0] || dstPts[0][1] > dstPts[2][1]) {
+        setStatus('Sheet appears upside down — flip it', 'warn');
+        return;
       }
 
-      function processFrame(smallData, videoEl) {
-        // Improvement 7 — rotate-aware QR detection.
-        const found = detectQRsWithRotation(smallData);
-        if (!found.qrs.length) return;
+      const H = computeHomography(srcPts, dstPts);
+      if (!H) { setStatus('Could not align sheet', 'warn'); return; }
 
-        const anchors = { TL: null, TR: null, BL: null, BR: null };
-        let payload = null;
+      const rms = reprojectionError(H, srcPts, dstPts);
+      if (rms > CAL.maxReprojErrPx) {
+        setStatus('Hold steady — realigning…', 'warn');
+        return;
+      }
 
-        for (const qr of found.qrs) {
-          const text = String(qr.data || '');
-          if (ANCHOR_PAYLOADS[text]) { anchors[ANCHOR_PAYLOADS[text]] = qr; continue; }
-          if (text.startsWith('{')) {
-            try { const p = JSON.parse(text); if (p && p.e) payload = p; } catch (e) {}
-          }
-        }
+      const bigCanvas = document.createElement('canvas');
+      bigCanvas.width  = videoEl.videoWidth;
+      bigCanvas.height = videoEl.videoHeight;
+      const bigCtx = bigCanvas.getContext('2d', { willReadFrequently: true });
+      bigCtx.drawImage(videoEl, 0, 0);
 
-        if (!anchors.TL || !anchors.TR || !anchors.BL || !anchors.BR) {
-          setStatus('Show all four corner QR codes', 'warn');
-          return;
-        }
-        if (!payload || payload.e !== session.assessment.id) {
-          setStatus('Sheet is for a different exam', 'warn');
-          return;
-        }
+      let bigData;
+      try { bigData = bigCtx.getImageData(0, 0, bigCanvas.width, bigCanvas.height); }
+      catch (e) { bigData = smallData; }
 
-        // Compute homography using the SAME rotation the detection used.
-        const sheetAnchors = anchorCenters();
-        const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
-        const dstPts = [
-          qrCenter(anchors.TL), qrCenter(anchors.TR),
-          qrCenter(anchors.BL), qrCenter(anchors.BR)
-        ];
+      const useBigFrame = (found.rotationDeg === 0 && bigData !== smallData);
+      const sampleData  = useBigFrame ? bigData : found.imageData;
+      const sampleScale = useBigFrame
+        ? (videoEl.videoWidth / session.canvas.width)
+        : 1;
 
-        // Validate corner order — TL must be left of TR and above BL.
-        // If not, the sheet is upside down and the anchors are mislabelled.
-        if (dstPts[0][0] > dstPts[1][0] || dstPts[0][1] > dstPts[2][1]) {
-          setStatus('Sheet appears upside down — flip it', 'warn');
-          return;
-        }
+      const Hs = useBigFrame
+        ? [[H[0][0]*sampleScale, H[0][1]*sampleScale, H[0][2]*sampleScale],
+           [H[1][0]*sampleScale, H[1][1]*sampleScale, H[1][2]*sampleScale],
+           [H[2][0],             H[2][1],             H[2][2]]]
+        : H;
 
-        const H = computeHomography(srcPts, dstPts);
-        if (!H) { setStatus('Could not align sheet', 'warn'); return; }
+      const otsuThresh = otsuThreshold(sampleData);
 
-        // Improvement 6 — reject bad alignments.
-        const rms = reprojectionError(H, srcPts, dstPts);
-        if (rms > CAL.maxReprojErrPx) {
-          setStatus('Hold steady — realigning…', 'warn');
-          return;
-        }
+      const anchorDistMM = Math.hypot(
+        sheetAnchors.TR[0] - sheetAnchors.TL[0],
+        sheetAnchors.TR[1] - sheetAnchors.TL[1]
+      );
+      const pixelDist = Math.hypot(
+        dstPts[1][0] - dstPts[0][0],
+        dstPts[1][1] - dstPts[0][1]
+      );
+      const mmPerPx = pixelDist > 0 ? (anchorDistMM / pixelDist) / sampleScale : 0.15;
 
-        // Improvement 3 — high-resolution sampling for bubbles only.
-        // QR decode already succeeded on the small frame; bubbles get the
-        // full-resolution frame for maximum sampling precision.
-        const bigCanvas = document.createElement('canvas');
-        bigCanvas.width  = videoEl.videoWidth;
-        bigCanvas.height = videoEl.videoHeight;
-        const bigCtx = bigCanvas.getContext('2d', { willReadFrequently: true });
-        bigCtx.drawImage(videoEl, 0, 0);
+      const questionCount = payload.n || session.answerKey.length;
+      const positions = bubblePositions(questionCount);
 
-        let bigData;
-        try { bigData = bigCtx.getImageData(0, 0, bigCanvas.width, bigCanvas.height); }
-        catch (e) { bigData = smallData; }
+      const perQuestion = [];
+      let filledCount = 0;
+      let ambiguousCount = 0;
+      for (const pos of positions) {
+        const res = detectAnswerForQuestion(Hs, pos.choices, sampleData, mmPerPx, otsuThresh);
+        if (res.choice !== null) filledCount++;
+        if (res.choice !== null && res.confidence > 0 && res.confidence < 0.6) ambiguousCount++;
+        perQuestion.push(res);
+      }
 
-        // If the small frame was rotated (improvement 7), the homography
-        // src/dst are in rotated coordinates. The big frame is NOT rotated,
-        // so we skip the big-frame path in that case and fall back to the
-        // rotated small frame. This keeps the math simple and correct.
-        const useBigFrame = (found.rotationDeg === 0 && bigData !== smallData);
-        const sampleData  = useBigFrame ? bigData : found.imageData;
-        const sampleScale = useBigFrame
-          ? (videoEl.videoWidth / session.canvas.width)
-          : 1;
+      if (filledCount / questionCount < 0.4) {
+        setStatus('Sheet not detected — adjust framing', 'warn');
+        return;
+      }
 
-        // Scale the homography if we're sampling from the full-resolution frame.
-        const Hs = useBigFrame
-          ? [[H[0][0]*sampleScale, H[0][1]*sampleScale, H[0][2]*sampleScale],
-             [H[1][0]*sampleScale, H[1][1]*sampleScale, H[1][2]*sampleScale],
-             [H[2][0],             H[2][1],             H[2][2]]]
-          : H;
-
-        // Improvement 8 — compute an Otsu threshold once per frame.
-        const otsuThresh = otsuThreshold(sampleData);
-
-        // Estimate millimetres-per-pixel from the anchor spacing.
-        const anchorDistMM = Math.hypot(
-          sheetAnchors.TR[0] - sheetAnchors.TL[0],
-          sheetAnchors.TR[1] - sheetAnchors.TL[1]
+      let learner = null;
+      if (payload.l) {
+        learner = State.learners.find(l =>
+          String(l.lrn || '').trim() === String(payload.l).trim()
         );
-        const pixelDist = Math.hypot(
-          dstPts[1][0] - dstPts[0][0],
-          dstPts[1][1] - dstPts[0][1]
-        );
-        const mmPerPx = pixelDist > 0 ? (anchorDistMM / pixelDist) / sampleScale : 0.15;
+      }
+      if (!learner) { setStatus('Learner LRN not in this class', 'warn'); return; }
 
-        const questionCount = payload.n || session.answerKey.length;
-        const positions = bubblePositions(questionCount);
+      const now = Date.now();
+      const last = session.recentScans.get(learner.id) || 0;
+      if (now - last < 4000) return;
 
-        const perQuestion = [];
-        let filledCount = 0;
-        let ambiguousCount = 0;
-        for (const pos of positions) {
-          const res = detectAnswerForQuestion(Hs, pos.choices, sampleData, mmPerPx, otsuThresh);
-          if (res.choice !== null) filledCount++;
-          if (res.choice !== null && res.confidence > 0 && res.confidence < 0.6) ambiguousCount++;
-          perQuestion.push(res);
-        }
-
-        if (filledCount / questionCount < 0.4) {
-          setStatus('Sheet not detected — adjust framing', 'warn');
-          return;
-        }
-
-        // Identify learner from payload LRN.
-        let learner = null;
-        if (payload.l) {
-          learner = State.learners.find(l =>
-            String(l.lrn || '').trim() === String(payload.l).trim()
-          );
-        }
-        if (!learner) { setStatus('Learner LRN not in this class', 'warn'); return; }
-
-        const now = Date.now();
-        const last = session.recentScans.get(learner.id) || 0;
-        if (now - last < 4000) return;
-
-        if (session.scanned.some(s => s.learner.id === learner.id)) {
-          setStatus('Already scanned this sheet', 'warn');
-          return;
-        }
-
-        // Improvement 2 — multi-frame confirmation.
-        const signature = perQuestion
-          .map(p => p.choice === null ? 'x' : p.choice)
-          .join(',');
-        const pending = session.pendingConfirm.get(learner.id) || { signature: null, votes: 0 };
-
-        if (pending.signature === signature) {
-          pending.votes++;
-        } else {
-          pending.signature = signature;
-          pending.votes = 1;
-        }
-        session.pendingConfirm.set(learner.id, pending);
-
-        if (pending.votes < CAL.confirmFrames) {
-          setStatus(`Reading sheet… (${pending.votes}/${CAL.confirmFrames})`, 'warn');
-          return;
-        }
-
-        // Confirmed — commit the scan.
-        session.recentScans.set(learner.id, now);
-        session.pendingConfirm.delete(learner.id);
-
-        gradeAndCommit(learner, perQuestion, ambiguousCount);
+      if (session.scanned.some(s => s.learner.id === learner.id)) {
+        setStatus('Already scanned this sheet', 'warn');
+        return;
       }
 
-      function gradeAndCommit(learner, perQuestion, ambiguousCount) {
-        let correct = 0, incorrect = 0, blank = 0, ambiguous = 0;
-        const detail = [];
-        for (let i = 0; i < perQuestion.length; i++) {
-          const key = session.answerKey[i];
-          const det = perQuestion[i];
-          if (key === null) {
-            detail.push({ q: i, status: 'ungraded', correct: null, detected: det.choice, key: null, confidence: det.confidence });
-            continue;
-          }
-          if (det.choice === null) {
-            blank++;
-            detail.push({ q: i, status: 'blank', correct: false, detected: null, key, confidence: 0 });
-          } else if (det.choice === key) {
-            if (det.confidence < 0.6) {
-              ambiguous++;
-              detail.push({ q: i, status: 'ambiguous', correct: true, detected: det.choice, key, confidence: det.confidence });
-            } else {
-              correct++;
-              detail.push({ q: i, status: 'correct', correct: true, detected: det.choice, key, confidence: det.confidence });
-            }
+      const signature = perQuestion
+        .map(p => p.choice === null ? 'x' : p.choice)
+        .join(',');
+      const pending = session.pendingConfirm.get(learner.id) || { signature: null, votes: 0 };
+
+      if (pending.signature === signature) {
+        pending.votes++;
+      } else {
+        pending.signature = signature;
+        pending.votes = 1;
+      }
+      session.pendingConfirm.set(learner.id, pending);
+
+      if (pending.votes < CAL.confirmFrames) {
+        setStatus(`Reading sheet… (${pending.votes}/${CAL.confirmFrames})`, 'warn');
+        return;
+      }
+
+      session.recentScans.set(learner.id, now);
+      session.pendingConfirm.delete(learner.id);
+
+      gradeAndCommit(learner, perQuestion, ambiguousCount);
+    }
+
+    /* ----------------------------------------------------------------
+       Grade + persist
+       ---------------------------------------------------------------- */
+    function gradeAndCommit(learner, perQuestion, ambiguousCount) {
+      let correct = 0, incorrect = 0, blank = 0, ambiguous = 0;
+      const detail = [];
+      for (let i = 0; i < perQuestion.length; i++) {
+        const key = session.answerKey[i];
+        const det = perQuestion[i];
+        if (key === null) {
+          detail.push({ q: i, status: 'ungraded', correct: null, detected: det.choice, key: null, confidence: det.confidence });
+          continue;
+        }
+        if (det.choice === null) {
+          blank++;
+          detail.push({ q: i, status: 'blank', correct: false, detected: null, key, confidence: 0 });
+        } else if (det.choice === key) {
+          if (det.confidence < 0.6) {
+            ambiguous++;
+            detail.push({ q: i, status: 'ambiguous', correct: true, detected: det.choice, key, confidence: det.confidence });
           } else {
-            incorrect++;
-            detail.push({ q: i, status: 'incorrect', correct: false, detected: det.choice, key, confidence: det.confidence });
+            correct++;
+            detail.push({ q: i, status: 'correct', correct: true, detected: det.choice, key, confidence: det.confidence });
           }
-        }
-
-        const gradable = detail.filter(p => p.correct !== null).length;
-        const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
-        const score = Math.round((correct + ambiguous) * pointsPerItem);
-        const percentage = gradable ? Math.round(((correct + ambiguous) / gradable) * 100) : 0;
-
-        const result = {
-          learner,
-          answers: detail,
-          correct: correct + ambiguous,
-          incorrect, blank, ambiguous,
-          score, percentage,
-          scannedAt: new Date().toISOString()
-        };
-
-        (async () => {
-          try {
-            const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', learner.id))
-              .find(r => r.assessmentId === session.assessment.id);
-            const rec = existing || {
-              id: Utils.uid('r-'), learnerId: learner.id,
-              assessmentId: session.assessment.id,
-              // Record the result against the class the scanner is running for,
-              // not the assessment's original owning class.
-              classId: (typeof State !== 'undefined' && State.activeClass)
-                ? State.activeClass.id
-                : session.assessment.classId,
-              createdAt: new Date().toISOString()
-            };
-            rec.score = score;
-            rec.maxScore = session.assessment.maxScore || gradable;
-            rec.percentage = percentage;
-            rec.omrDetails = detail;
-            rec.omrScanned = true;
-            rec.updatedAt = new Date().toISOString();
-            await DB.put('assessmentResults', rec);
-          } catch (e) { console.warn('[OMR] Could not save result:', e); }
-        })();
-
-        session.scanned.push(result);
-        renderList();
-        beep();
-        flash();
-
-        const ambiguousTag = ambiguous ? ` · ${ambiguous} uncertain` : '';
-        setStatus(`✓ ${learner.firstName || Utils.fullName(learner)} — ${percentage}%${ambiguousTag}`, 'ok');
-        App.logActivity(`OMR scanned: ${Utils.fullName(learner)} — ${percentage}% on "${session.assessment.title}"`, 'Assessments');
-
-        // Improvement 10 — flag low-confidence scans for review.
-        if (ambiguous >= 2) {
-          UI.toast(`${Utils.fullName(learner)}: ${ambiguous} answer${ambiguous === 1 ? '' : 's'} need review`, 'warning', 5000);
+        } else {
+          incorrect++;
+          detail.push({ q: i, status: 'incorrect', correct: false, detected: det.choice, key, confidence: det.confidence });
         }
       }
 
-      /* ---------- UI helpers ---------- */
-      function setStatus(text, kind) {
-        const el = overlay.querySelector('#omr-status');
-        if (!el) return;
-        el.textContent = text;
-        el.dataset.kind = kind || '';
-      }
+      const gradable = detail.filter(p => p.correct !== null).length;
+      const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
+      const score = Math.round((correct + ambiguous) * pointsPerItem);
+      const percentage = gradable ? Math.round(((correct + ambiguous) / gradable) * 100) : 0;
 
-      function flash() {
-        const el = overlay.querySelector('#omr-flash');
-        if (!el) return;
-        el.classList.add('on');
-        setTimeout(() => el.classList.remove('on'), 200);
-      }
+      const result = {
+        learner,
+        answers: detail,
+        correct: correct + ambiguous,
+        incorrect, blank, ambiguous,
+        score, percentage,
+        scannedAt: new Date().toISOString()
+      };
 
-      function beep() {
+      (async () => {
         try {
-          const Ctx = window.AudioContext || window.webkitAudioContext;
-          if (!Ctx) return;
-          if (!session.beepCtx) session.beepCtx = new Ctx();
-          const ctx = session.beepCtx;
-          if (ctx.state === 'suspended') ctx.resume();
-          const o = ctx.createOscillator(), g = ctx.createGain();
-          o.type = 'sine'; o.frequency.value = 1200;
-          o.connect(g); g.connect(ctx.destination);
-          const t = ctx.currentTime;
-          g.gain.setValueAtTime(0, t);
-          g.gain.linearRampToValueAtTime(0.18, t + 0.006);
-          g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
-          o.start(t); o.stop(t + 0.16);
-        } catch (e) {}
-      }
-
-      function renderList() {
-        const list = overlay.querySelector('#omr-list');
-        const countEl = overlay.querySelector('#omr-count');
-        const fillEl = overlay.querySelector('#omr-progress-fill');
-        const summaryEl = overlay.querySelector('#omr-summary');
-        const total = Math.max(1, State.learners.filter(Utils.isActiveLearner).length);
-
-        countEl.textContent = String(session.scanned.length);
-        fillEl.style.width = Math.min(100, Math.round((session.scanned.length / total) * 100)) + '%';
-
-        if (!session.scanned.length) {
-          list.innerHTML = `<div class="qr-scan-empty">
-            Point the camera at a printed answer sheet. Align all four corner QR codes in view.
-            Each sheet is graded automatically and can be reviewed if any answer is uncertain.
-          </div>`;
-          summaryEl.textContent = '';
-          return;
-        }
-
-        const avg = Math.round(session.scanned.reduce((s, r) => s + r.percentage, 0) / session.scanned.length);
-        summaryEl.textContent = `Class average: ${avg}%`;
-
-        list.innerHTML = session.scanned.slice().reverse().map((r, ri) => {
-          const idx = session.scanned.length - 1 - ri;
-          const pct = r.percentage;
-          const color = pct >= 85 ? 'var(--success)' : pct >= 70 ? 'var(--deped-blue)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
-          const ambTag = r.ambiguous
-            ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${r.ambiguous} uncertain</span>`
-            : '';
-          return `<div class="qr-scan-row">
-            <div class="qr-scan-avatar">${Utils.avatarHTML(r.learner, 30, 11)}</div>
-            <div class="qr-scan-body">
-              <div class="qr-scan-name">${Utils.esc(Utils.fullName(r.learner))}${ambTag}</div>
-              <div class="qr-scan-meta">
-                ${r.correct} correct · ${r.incorrect} wrong · ${r.blank} blank
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <div style="font-weight:800;color:${color};font-size:15px;">${pct}%</div>
-              <button class="icon-btn" data-omr-review="${idx}" title="Review answers" style="width:28px;height:28px;">
-                ${icon('eye')}
-              </button>
-            </div>
-          </div>`;
-        }).join('');
-
-        list.querySelectorAll('[data-omr-review]').forEach(btn => {
-          btn.onclick = (e) => {
-            e.stopPropagation();
-            openReviewModal(session.scanned[Number(btn.dataset.omrReview)]);
+          const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', learner.id))
+            .find(r => r.assessmentId === session.assessment.id);
+          const rec = existing || {
+            id: Utils.uid('r-'), learnerId: learner.id,
+            assessmentId: session.assessment.id,
+            classId: State.activeClass ? State.activeClass.id : session.assessment.classId,
+            createdAt: new Date().toISOString()
           };
-        });
+          rec.score = score;
+          rec.maxScore = session.assessment.maxScore || gradable;
+          rec.percentage = percentage;
+          rec.omrDetails = detail;
+          rec.omrScanned = true;
+          rec.updatedAt = new Date().toISOString();
+          await DB.put('assessmentResults', rec);
+        } catch (e) { console.warn('[OMR] Could not save result:', e); }
+      })();
+
+      session.scanned.push(result);
+      renderList();
+      beep();
+      flash();
+
+      const first = learner.firstName || Utils.fullName(learner);
+      const ambTag = ambiguous ? ` · ${ambiguous} to review` : '';
+      setStatus(`✓ ${first} — ${percentage}%${ambTag}`, 'ok');
+
+      App.logActivity(
+        `OMR scanned: ${Utils.fullName(learner)} — ${percentage}% on "${session.assessment.title}"`,
+        'Assessments'
+      );
+
+      if (ambiguous >= 2) {
+        UI.toast(`${Utils.fullName(learner)}: ${ambiguous} answer${ambiguous === 1 ? '' : 's'} need review`, 'warning', 4000);
+      }
+    }
+
+    /* ----------------------------------------------------------------
+       Undo last scan (mobile)
+       ---------------------------------------------------------------- */
+    async function undoLastScan() {
+      const last = session.scanned.pop();
+      if (!last) return;
+      renderList();
+
+      // Remove the result we just wrote
+      try {
+        const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', last.learner.id))
+          .find(r => r.assessmentId === session.assessment.id);
+        if (existing) await DB.delete('assessmentResults', existing.id);
+      } catch (e) { console.warn('[OMR] Undo delete failed:', e); }
+
+      // Clear the debounce so the same sheet can be rescanned immediately
+      session.recentScans.delete(last.learner.id);
+
+      setStatus(`Undid scan for ${last.learner.firstName || Utils.fullName(last.learner)}`, 'warn');
+      UI.toast('Last scan undone', 'info', 2200);
+    }
+
+    /* ----------------------------------------------------------------
+       UI helpers
+       ---------------------------------------------------------------- */
+    function setStatus(text, kind) {
+      // Mobile — update the two-line status pill
+      const mainEl = overlay.querySelector('#omr-status-main');
+      if (mainEl) {
+        mainEl.textContent = text;
+        mainEl.classList.remove('warn', 'ok', 'err');
+        if (kind === 'ok')        mainEl.classList.add('ok');
+        else if (kind === 'warn') mainEl.classList.add('warn');
+        else if (kind === 'err')  mainEl.classList.add('err');
+        return;
+      }
+      // Desktop — existing single-line status
+      const el = overlay.querySelector('#omr-status');
+      if (!el) return;
+      el.textContent = text;
+      el.dataset.kind = kind || '';
+    }
+
+    function flash() {
+      const el = overlay.querySelector('#omr-flash');
+      if (!el) return;
+      el.classList.add('on');
+      setTimeout(() => el.classList.remove('on'), 200);
+    }
+
+    function beep() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!session.beepCtx) session.beepCtx = new Ctx();
+        const ctx = session.beepCtx;
+        if (ctx.state === 'suspended') ctx.resume();
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = 1200;
+        o.connect(g); g.connect(ctx.destination);
+        const t = ctx.currentTime;
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.18, t + 0.006);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+        o.start(t); o.stop(t + 0.16);
+      } catch (e) {}
+    }
+
+    /* ----------------------------------------------------------------
+       renderList — updates whichever UI is present (mobile counter
+       badge + desktop list). Safe to call on either layout.
+       ---------------------------------------------------------------- */
+    function renderList() {
+      // --- Mobile: counter badge + undo enable ---
+      const counterEl = overlay.querySelector('#zg-counter');
+      const undoBtn   = overlay.querySelector('#omr-undo');
+      if (counterEl) counterEl.textContent = String(session.scanned.length);
+      if (undoBtn)   undoBtn.disabled = session.scanned.length === 0;
+
+      // --- Desktop: existing list ---
+      const list       = overlay.querySelector('#omr-list');
+      const countEl    = overlay.querySelector('#omr-count');
+      const fillEl     = overlay.querySelector('#omr-progress-fill');
+      const summaryEl  = overlay.querySelector('#omr-summary');
+      if (!list) return;
+
+      const total = Math.max(1, totalLearners);
+      if (countEl)  countEl.textContent = String(session.scanned.length);
+      if (fillEl)   fillEl.style.width = Math.min(100, Math.round((session.scanned.length / total) * 100)) + '%';
+
+      if (!session.scanned.length) {
+        list.innerHTML = `<div class="qr-scan-empty">
+          Point the camera at a printed answer sheet. Align all four corner QR codes in view.
+          Each sheet is graded automatically and can be reviewed if any answer is uncertain.
+        </div>`;
+        if (summaryEl) summaryEl.textContent = '';
+        return;
       }
 
-      /* Improvement 10 — review modal. Lets the teacher confirm or override
-         any question's detected answer, then re-saves the score. */
-      function openReviewModal(result) {
-        if (!result) return;
-        const qCount = result.answers.length;
-        const dots = result.answers.map((p, i) => {
-          const color = p.status === 'correct' ? 'var(--success)'
-                      : p.status === 'incorrect' ? 'var(--danger)'
-                      : p.status === 'blank' ? 'var(--text-muted)'
-                      : p.status === 'ambiguous' ? 'var(--warning)'
-                      : 'var(--border)';
-          const title = `Q${i + 1} · ${p.status}${p.confidence ? ' (' + Math.round(p.confidence * 100) + '% confidence)' : ''}`;
-          return `<div style="width:26px;height:26px;border-radius:6px;background:${color}1a;
-                              border:2px solid ${color};
-                              display:flex;align-items:center;justify-content:center;
-                              font-size:11px;font-weight:700;color:${color};cursor:pointer;"
-                       data-omr-review-q="${i}" title="${Utils.attr(title)}">
-            ${i + 1}
-          </div>`;
+      const avg = Math.round(session.scanned.reduce((s, r) => s + r.percentage, 0) / session.scanned.length);
+      if (summaryEl) summaryEl.textContent = `Class average: ${avg}%`;
+
+      list.innerHTML = session.scanned.slice().reverse().map((r, ri) => {
+        const idx = session.scanned.length - 1 - ri;
+        const pct = r.percentage;
+        const color = pct >= 85 ? 'var(--success)' : pct >= 70 ? 'var(--deped-blue)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
+        const ambTag = r.ambiguous
+          ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${r.ambiguous} uncertain</span>`
+          : '';
+        return `<div class="qr-scan-row">
+          <div class="qr-scan-avatar">${Utils.avatarHTML(r.learner, 30, 11)}</div>
+          <div class="qr-scan-body">
+            <div class="qr-scan-name">${Utils.esc(Utils.fullName(r.learner))}${ambTag}</div>
+            <div class="qr-scan-meta">
+              ${r.correct} correct · ${r.incorrect} wrong · ${r.blank} blank
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="font-weight:800;color:${color};font-size:15px;">${pct}%</div>
+            <button class="icon-btn" data-omr-review="${idx}" title="Review answers" style="width:28px;height:28px;">
+              ${icon('eye')}
+            </button>
+          </div>
+        </div>`;
+      }).join('');
+
+      list.querySelectorAll('[data-omr-review]').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          openReviewModal(session.scanned[Number(btn.dataset.omrReview)]);
+        };
+      });
+    }
+
+    /* ----------------------------------------------------------------
+       Review modal — desktop only (mobile has undo + counter)
+       ---------------------------------------------------------------- */
+    function openReviewModal(result) {
+      if (!result) return;
+      const qCount = result.answers.length;
+      const dots = result.answers.map((p, i) => {
+        const color = p.status === 'correct' ? 'var(--success)'
+                    : p.status === 'incorrect' ? 'var(--danger)'
+                    : p.status === 'blank' ? 'var(--text-muted)'
+                    : p.status === 'ambiguous' ? 'var(--warning)'
+                    : 'var(--border)';
+        const title = `Q${i + 1} · ${p.status}${p.confidence ? ' (' + Math.round(p.confidence * 100) + '% confidence)' : ''}`;
+        return `<div style="width:26px;height:26px;border-radius:6px;background:${color}1a;
+                            border:2px solid ${color};
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:11px;font-weight:700;color:${color};cursor:pointer;"
+                     data-omr-review-q="${i}" title="${Utils.attr(title)}">
+          ${i + 1}
+        </div>`;
+      }).join('');
+
+      const m = UI.modal({
+        title: 'Review Scan · ' + Utils.fullName(result.learner),
+        size: 'modal-lg',
+        body: `
+          <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+            ${Utils.avatarHTML(result.learner, 44, 15)}
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;font-size:15px;">${Utils.esc(Utils.fullName(result.learner))}</div>
+              <div class="text-xs text-muted">LRN ${Utils.esc(result.learner.lrn || '—')}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:24px;font-weight:800;">${result.percentage}%</div>
+              <div class="text-xs text-muted">${result.correct} correct · ${result.incorrect} wrong · ${result.blank} blank${result.ambiguous ? ' · ' + result.ambiguous + ' uncertain' : ''}</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(26px,1fr));gap:4px;margin-bottom:14px;">
+            ${dots}
+          </div>
+
+          <div class="alert alert-info" style="font-size:12px;">
+            ${icon('info')}
+            <div>
+              Click any question number to override its detected answer.
+              <strong>Green</strong> = correct, <strong>red</strong> = wrong,
+              <strong>amber</strong> = uncertain, <strong>grey</strong> = blank.
+            </div>
+          </div>
+
+          <div id="omr-review-detail"></div>
+        `,
+        footer: `
+          <button class="btn btn-outline" data-close>Close</button>
+          <button class="btn btn-primary" id="omr-review-save">Save Changes</button>
+        `
+      });
+
+      const detailEl = m.overlay.querySelector('#omr-review-detail');
+
+      const renderDetail = (qIdx) => {
+        const p = result.answers[qIdx];
+        const key = session.answerKey[qIdx];
+        if (!p) { detailEl.innerHTML = ''; return; }
+
+        const choices = Array.isArray(session.assessment.questions[qIdx].choices)
+          ? session.assessment.questions[qIdx].choices
+          : [];
+
+        const choicesHTML = choices.map((c, i) => {
+          const clean = Utils.stripChoiceLetter(c, i);
+          const isKey = key === i;
+          const isDet = p.detected === i;
+          const isCurrent = p.override !== undefined ? p.override === i : isDet;
+          const bg = isCurrent ? 'var(--gradient-primary)' : 'var(--card)';
+          const color = isCurrent ? '#fff' : 'var(--text)';
+          const border = isKey ? '2px solid var(--success)' : '1px solid var(--border)';
+          return `<button type="button"
+                          data-omr-pick="${qIdx}-${i}"
+                          style="display:block;width:100%;text-align:left;
+                                 padding:10px 12px;margin-bottom:6px;border-radius:8px;
+                                 background:${bg};color:${color};border:${border};
+                                 cursor:pointer;font-family:inherit;font-size:13px;
+                                 font-weight:600;">
+            <span style="display:inline-block;width:20px;font-weight:800;">${String.fromCharCode(65 + i)}.</span>
+            ${Utils.esc(clean)}
+            ${isKey ? '<span style="float:right;color:var(--success);font-weight:800;">✓ key</span>' : ''}
+          </button>`;
         }).join('');
 
-        const m = UI.modal({
-          title: 'Review Scan · ' + Utils.fullName(result.learner),
-          size: 'modal-lg',
-          body: `
-            <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
-              ${Utils.avatarHTML(result.learner, 44, 15)}
-              <div style="flex:1;min-width:0;">
-                <div style="font-weight:700;font-size:15px;">${Utils.esc(Utils.fullName(result.learner))}</div>
-                <div class="text-xs text-muted">LRN ${Utils.esc(result.learner.lrn || '—')}</div>
-              </div>
-              <div style="text-align:right;">
-                <div style="font-size:24px;font-weight:800;">${result.percentage}%</div>
-                <div class="text-xs text-muted">${result.correct} correct · ${result.incorrect} wrong · ${result.blank} blank${result.ambiguous ? ' · ' + result.ambiguous + ' uncertain' : ''}</div>
-              </div>
+        detailEl.innerHTML = `
+          <div class="card" style="padding:14px;background:var(--bg);">
+            <div class="flex-between mb-12" style="gap:8px;flex-wrap:wrap;">
+              <strong>Q${qIdx + 1}</strong>
+              <span class="badge ${p.status === 'correct' ? 'badge-success' : p.status === 'incorrect' ? 'badge-danger' : p.status === 'ambiguous' ? 'badge-warning' : 'badge-neutral'}">
+                ${Utils.esc(p.status)}
+              </span>
             </div>
-
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(26px,1fr));gap:4px;margin-bottom:14px;">
-              ${dots}
+            <div style="font-size:13px;margin-bottom:12px;line-height:1.5;">
+              ${Utils.esc(session.assessment.questions[qIdx].text || '')}
             </div>
+            ${choicesHTML}
+            <button type="button" data-omr-clear="${qIdx}"
+                    style="display:block;width:100%;text-align:center;
+                           padding:8px;margin-top:6px;border-radius:8px;
+                           background:transparent;color:var(--text-muted);
+                           border:1px dashed var(--border);cursor:pointer;font-family:inherit;font-size:12px;">
+              Mark as blank
+            </button>
+          </div>`;
 
-            <div class="alert alert-info" style="font-size:12px;">
-              ${icon('info')}
-              <div>
-                Click any question number to override its detected answer.
-                <strong>Green</strong> = correct, <strong>red</strong> = wrong,
-                <strong>amber</strong> = uncertain, <strong>grey</strong> = blank.
-              </div>
-            </div>
-
-            <div id="omr-review-detail"></div>
-          `,
-          footer: `
-            <button class="btn btn-outline" data-close>Close</button>
-            <button class="btn btn-primary" id="omr-review-save">Save Changes</button>
-          `
-        });
-
-        const detailEl = m.overlay.querySelector('#omr-review-detail');
-
-        const renderDetail = (qIdx) => {
-          const p = result.answers[qIdx];
-          const key = session.answerKey[qIdx];
-          if (!p) { detailEl.innerHTML = ''; return; }
-
-          const choices = Array.isArray(session.assessment.questions[qIdx].choices)
-            ? session.assessment.questions[qIdx].choices
-            : [];
-
-          const choicesHTML = choices.map((c, i) => {
-            const clean = Utils.stripChoiceLetter(c, i);
-            const isKey = key === i;
-            const isDet = p.detected === i;
-            const isCurrent = p.override !== undefined ? p.override === i : isDet;
-            const bg = isCurrent ? 'var(--gradient-primary)' : 'var(--card)';
-            const color = isCurrent ? '#fff' : 'var(--text)';
-            const border = isKey ? '2px solid var(--success)' : '1px solid var(--border)';
-            return `<button type="button"
-                            data-omr-pick="${qIdx}-${i}"
-                            style="display:block;width:100%;text-align:left;
-                                   padding:10px 12px;margin-bottom:6px;border-radius:8px;
-                                   background:${bg};color:${color};border:${border};
-                                   cursor:pointer;font-family:inherit;font-size:13px;
-                                   font-weight:600;">
-              <span style="display:inline-block;width:20px;font-weight:800;">${String.fromCharCode(65 + i)}.</span>
-              ${Utils.esc(clean)}
-              ${isKey ? '<span style="float:right;color:var(--success);font-weight:800;">✓ key</span>' : ''}
-            </button>`;
-          }).join('');
-
-          detailEl.innerHTML = `
-            <div class="card" style="padding:14px;background:var(--bg);">
-              <div class="flex-between mb-12" style="gap:8px;flex-wrap:wrap;">
-                <strong>Q${qIdx + 1}</strong>
-                <span class="badge ${p.status === 'correct' ? 'badge-success' : p.status === 'incorrect' ? 'badge-danger' : p.status === 'ambiguous' ? 'badge-warning' : 'badge-neutral'}">
-                  ${Utils.esc(p.status)}
-                </span>
-              </div>
-              <div style="font-size:13px;margin-bottom:12px;line-height:1.5;">
-                ${Utils.esc(session.assessment.questions[qIdx].text || '')}
-              </div>
-              ${choicesHTML}
-              <button type="button" data-omr-clear="${qIdx}"
-                      style="display:block;width:100%;text-align:center;
-                             padding:8px;margin-top:6px;border-radius:8px;
-                             background:transparent;color:var(--text-muted);
-                             border:1px dashed var(--border);cursor:pointer;font-family:inherit;font-size:12px;">
-                Mark as blank
-              </button>
-            </div>`;
-
-          detailEl.querySelectorAll('[data-omr-pick]').forEach(btn => {
-            btn.onclick = () => {
-              const [q, c] = btn.dataset.omrPick.split('-').map(Number);
-              result.answers[q].override = c;
-              renderDetail(q);
-              renderDots();
-            };
-          });
-          detailEl.querySelector(`[data-omr-clear="${qIdx}"]`).onclick = () => {
-            result.answers[qIdx].override = null;
-            renderDetail(qIdx);
+        detailEl.querySelectorAll('[data-omr-pick]').forEach(btn => {
+          btn.onclick = () => {
+            const [q, c] = btn.dataset.omrPick.split('-').map(Number);
+            result.answers[q].override = c;
+            renderDetail(q);
             renderDots();
           };
+        });
+        detailEl.querySelector(`[data-omr-clear="${qIdx}"]`).onclick = () => {
+          result.answers[qIdx].override = null;
+          renderDetail(qIdx);
+          renderDots();
         };
+      };
 
-        const renderDots = () => {
-          m.overlay.querySelectorAll('[data-omr-review-q]').forEach(el => {
-            const i = Number(el.dataset.omrReviewQ);
-            const p = result.answers[i];
-            const eff = p.override !== undefined ? p.override : p.detected;
-            const correct = eff !== null && eff === session.answerKey[i];
-            const isOverridden = p.override !== undefined;
-            const color = isOverridden ? 'var(--accent-purple)'
-                        : correct ? 'var(--success)'
-                        : eff === null ? 'var(--text-muted)'
-                        : 'var(--danger)';
-            el.style.background = color + '1a';
-            el.style.borderColor = color;
-            el.style.color = color;
-          });
-        };
-
+      const renderDots = () => {
         m.overlay.querySelectorAll('[data-omr-review-q]').forEach(el => {
-          el.onclick = () => renderDetail(Number(el.dataset.omrReviewQ));
+          const i = Number(el.dataset.omrReviewQ);
+          const p = result.answers[i];
+          const eff = p.override !== undefined ? p.override : p.detected;
+          const correct = eff !== null && eff === session.answerKey[i];
+          const isOverridden = p.override !== undefined;
+          const color = isOverridden ? 'var(--accent-purple)'
+                      : correct ? 'var(--success)'
+                      : eff === null ? 'var(--text-muted)'
+                      : 'var(--danger)';
+          el.style.background = color + '1a';
+          el.style.borderColor = color;
+          el.style.color = color;
         });
+      };
 
-        m.overlay.querySelector('[data-close]').onclick = m.close;
+      m.overlay.querySelectorAll('[data-omr-review-q]').forEach(el => {
+        el.onclick = () => renderDetail(Number(el.dataset.omrReviewQ));
+      });
 
-        m.overlay.querySelector('#omr-review-save').onclick = async () => {
-          // Recompute score with overrides applied.
-          let correct = 0, incorrect = 0, blank = 0;
-          const detail = [];
-          for (let i = 0; i < result.answers.length; i++) {
-            const p = result.answers[i];
-            const key = session.answerKey[i];
-            const eff = p.override !== undefined ? p.override : p.detected;
+      m.overlay.querySelector('[data-close]').onclick = m.close;
 
-            if (key === null) {
-              detail.push({ ...p, status: 'ungraded', correct: null });
-              continue;
-            }
-            if (eff === null) {
-              blank++;
-              detail.push({ ...p, status: 'blank', correct: false });
-            } else if (eff === key) {
-              correct++;
-              detail.push({ ...p, status: 'correct', correct: true });
-            } else {
-              incorrect++;
-              detail.push({ ...p, status: 'incorrect', correct: false });
-            }
+      m.overlay.querySelector('#omr-review-save').onclick = async () => {
+        let correct = 0, incorrect = 0, blank = 0;
+        const detail = [];
+        for (let i = 0; i < result.answers.length; i++) {
+          const p = result.answers[i];
+          const key = session.answerKey[i];
+          const eff = p.override !== undefined ? p.override : p.detected;
+
+          if (key === null) {
+            detail.push({ ...p, status: 'ungraded', correct: null });
+            continue;
           }
-          const gradable = detail.filter(p => p.correct !== null).length;
-          const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
-          const score = Math.round(correct * pointsPerItem);
-          const percentage = gradable ? Math.round((correct / gradable) * 100) : 0;
+          if (eff === null) {
+            blank++;
+            detail.push({ ...p, status: 'blank', correct: false });
+          } else if (eff === key) {
+            correct++;
+            detail.push({ ...p, status: 'correct', correct: true });
+          } else {
+            incorrect++;
+            detail.push({ ...p, status: 'incorrect', correct: false });
+          }
+        }
+        const gradable = detail.filter(p => p.correct !== null).length;
+        const pointsPerItem = gradable ? (session.assessment.maxScore || gradable) / gradable : 1;
+        const score = Math.round(correct * pointsPerItem);
+        const percentage = gradable ? Math.round((correct / gradable) * 100) : 0;
 
-          result.correct = correct;
-          result.incorrect = incorrect;
-          result.blank = blank;
-          result.ambiguous = 0;
-          result.score = score;
-          result.percentage = percentage;
-          result.answers = detail;
-          result.reviewedAt = new Date().toISOString();
+        result.correct = correct;
+        result.incorrect = incorrect;
+        result.blank = blank;
+        result.ambiguous = 0;
+        result.score = score;
+        result.percentage = percentage;
+        result.answers = detail;
+        result.reviewedAt = new Date().toISOString();
 
-          try {
-            const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
-              .find(r => r.assessmentId === session.assessment.id);
-            if (existing) {
-              existing.score = score;
-              existing.percentage = percentage;
-              existing.omrDetails = detail;
-              existing.reviewedAt = result.reviewedAt;
-              existing.updatedAt = new Date().toISOString();
-              await DB.put('assessmentResults', existing);
-            }
-          } catch (e) { console.warn('[OMR] Could not save reviewed score:', e); }
+        try {
+          const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
+            .find(r => r.assessmentId === session.assessment.id);
+          if (existing) {
+            existing.score = score;
+            existing.percentage = percentage;
+            existing.omrDetails = detail;
+            existing.reviewedAt = result.reviewedAt;
+            existing.updatedAt = new Date().toISOString();
+            await DB.put('assessmentResults', existing);
+          }
+        } catch (e) { console.warn('[OMR] Could not save reviewed score:', e); }
 
-          renderList();
-          m.close();
-          UI.toast('Reviewed score saved', 'success');
-          App.logActivity(`OMR review: ${Utils.fullName(result.learner)} — ${percentage}%`, 'Assessments');
-        };
+        renderList();
+        m.close();
+        UI.toast('Reviewed score saved', 'success');
+        App.logActivity(`OMR review: ${Utils.fullName(result.learner)} — ${percentage}%`, 'Assessments');
+      };
 
-        if (result.answers.length) renderDetail(0);
-        renderDots();
-      }
+      if (result.answers.length) renderDetail(0);
+      renderDots();
+    }
 
-      /* ---------- Calibration modal (Improvement 11) ---------- */
-      function openCalibrationModal() {
-        const m = UI.modal({
-          title: 'OMR Calibration',
-          size: 'modal-lg',
-          body: `
-            <div class="alert alert-info mb-16">
-              ${icon('info')}
-              <div>
-                Adjust the detector's sensitivity if your scanner is systematically
-                reading shaded bubbles as blank (or vice versa). Calibration is
-                stored on this device.
-              </div>
+    /* ----------------------------------------------------------------
+       Calibration modal — unchanged
+       ---------------------------------------------------------------- */
+    function openCalibrationModal() {
+      const m = UI.modal({
+        title: 'OMR Calibration',
+        size: 'modal-lg',
+        body: `
+          <div class="alert alert-info mb-16">
+            ${icon('info')}
+            <div>
+              Adjust the detector's sensitivity if your scanner is systematically
+              reading shaded bubbles as blank (or vice versa). Calibration is
+              stored on this device.
             </div>
+          </div>
 
-            <div class="form-group">
-              <label>Mark detection sensitivity: <span id="omr-cal-marked-val">${CAL.markedRatio.toFixed(2)}</span></label>
-              <input type="range" min="0.30" max="0.80" step="0.01" value="${CAL.markedRatio}"
-                     id="omr-cal-marked" class="noise-slider" style="width:100%;">
-              <small class="text-muted">Lower = stricter (fewer false marks). Higher = more lenient.</small>
-            </div>
+          <div class="form-group">
+            <label>Mark detection sensitivity: <span id="omr-cal-marked-val">${CAL.markedRatio.toFixed(2)}</span></label>
+            <input type="range" min="0.30" max="0.80" step="0.01" value="${CAL.markedRatio}"
+                   id="omr-cal-marked" class="noise-slider" style="width:100%;">
+            <small class="text-muted">Lower = stricter (fewer false marks). Higher = more lenient.</small>
+          </div>
 
-            <div class="form-group">
-              <label>Runner-up gap: <span id="omr-cal-gap-val">${CAL.gapRatio.toFixed(2)}</span></label>
-              <input type="range" min="0.50" max="0.95" step="0.01" value="${CAL.gapRatio}"
-                     id="omr-cal-gap" class="noise-slider" style="width:100%;">
-              <small class="text-muted">Lower = demands the marked bubble be much darker than the runner-up.</small>
-            </div>
+          <div class="form-group">
+            <label>Runner-up gap: <span id="omr-cal-gap-val">${CAL.gapRatio.toFixed(2)}</span></label>
+            <input type="range" min="0.50" max="0.95" step="0.01" value="${CAL.gapRatio}"
+                   id="omr-cal-gap" class="noise-slider" style="width:100%;">
+            <small class="text-muted">Lower = demands the marked bubble be much darker than the runner-up.</small>
+          </div>
 
-            <div class="form-group">
-              <label>Confident fill fraction: <span id="omr-cal-fill-val">${CAL.fillStrong.toFixed(2)}</span></label>
-              <input type="range" min="0.40" max="0.90" step="0.01" value="${CAL.fillStrong}"
-                     id="omr-cal-fill" class="noise-slider" style="width:100%;">
-              <small class="text-muted">Higher = requires more complete shading before treating as confident.</small>
-            </div>
+          <div class="form-group">
+            <label>Confident fill fraction: <span id="omr-cal-fill-val">${CAL.fillStrong.toFixed(2)}</span></label>
+            <input type="range" min="0.40" max="0.90" step="0.01" value="${CAL.fillStrong}"
+                   id="omr-cal-fill" class="noise-slider" style="width:100%;">
+            <small class="text-muted">Higher = requires more complete shading before treating as confident.</small>
+          </div>
 
-            <div class="form-group">
-              <label>Frames to confirm: <span id="omr-cal-frames-val">${CAL.confirmFrames}</span></label>
-              <input type="range" min="1" max="4" step="1" value="${CAL.confirmFrames}"
-                     id="omr-cal-frames" class="noise-slider" style="width:100%;">
-              <small class="text-muted">More frames = fewer false grades but slower confirmation.</small>
-            </div>
+          <div class="form-group">
+            <label>Frames to confirm: <span id="omr-cal-frames-val">${CAL.confirmFrames}</span></label>
+            <input type="range" min="1" max="4" step="1" value="${CAL.confirmFrames}"
+                   id="omr-cal-frames" class="noise-slider" style="width:100%;">
+            <small class="text-muted">More frames = fewer false grades but slower confirmation.</small>
+          </div>
 
-            <div class="form-group">
-              <label>Max alignment error (px): <span id="omr-cal-rms-val">${CAL.maxReprojErrPx.toFixed(1)}</span></label>
-              <input type="range" min="1.5" max="8" step="0.5" value="${CAL.maxReprojErrPx}"
-                     id="omr-cal-rms" class="noise-slider" style="width:100%;">
-              <small class="text-muted">Higher = accepts sheets photographed at an angle.</small>
-            </div>
+          <div class="form-group">
+            <label>Max alignment error (px): <span id="omr-cal-rms-val">${CAL.maxReprojErrPx.toFixed(1)}</span></label>
+            <input type="range" min="1.5" max="8" step="0.5" value="${CAL.maxReprojErrPx}"
+                   id="omr-cal-rms" class="noise-slider" style="width:100%;">
+            <small class="text-muted">Higher = accepts sheets photographed at an angle.</small>
+          </div>
 
-            <div class="divider"></div>
-            <p class="text-xs text-muted" style="margin:0;">
-              ${CAL.calibratedAt
-                ? 'Last calibrated: ' + Utils.formatDateTime(CAL.calibratedAt)
-                : 'Using factory defaults.'}
-            </p>
-          `,
-          footer: `
-            <button class="btn btn-ghost" id="omr-cal-reset">Reset to defaults</button>
-            <button class="btn btn-outline" data-close>Cancel</button>
-            <button class="btn btn-primary" id="omr-cal-save">Save</button>
-          `
+          <div class="divider"></div>
+          <p class="text-xs text-muted" style="margin:0;">
+            ${CAL.calibratedAt
+              ? 'Last calibrated: ' + Utils.formatDateTime(CAL.calibratedAt)
+              : 'Using factory defaults.'}
+          </p>
+        `,
+        footer: `
+          <button class="btn btn-ghost" id="omr-cal-reset">Reset to defaults</button>
+          <button class="btn btn-outline" data-close>Cancel</button>
+          <button class="btn btn-primary" id="omr-cal-save">Save</button>
+        `
+      });
+
+      const bind = (id, valId, key, fmt) => {
+        const input = m.overlay.querySelector(id);
+        const valEl = m.overlay.querySelector(valId);
+        input.oninput = () => { valEl.textContent = fmt(input.value); };
+      };
+      bind('#omr-cal-marked', '#omr-cal-marked-val', 'markedRatio', v => Number(v).toFixed(2));
+      bind('#omr-cal-gap',    '#omr-cal-gap-val',    'gapRatio',    v => Number(v).toFixed(2));
+      bind('#omr-cal-fill',   '#omr-cal-fill-val',   'fillStrong',  v => Number(v).toFixed(2));
+      bind('#omr-cal-frames', '#omr-cal-frames-val', 'confirmFrames', v => v);
+      bind('#omr-cal-rms',    '#omr-cal-rms-val',    'maxReprojErrPx', v => Number(v).toFixed(1));
+
+      m.overlay.querySelector('[data-close]').onclick = m.close;
+
+      m.overlay.querySelector('#omr-cal-reset').onclick = async () => {
+        await saveCalibration({ ...DEFAULT_CALIBRATION });
+        m.close();
+        UI.toast('Calibration reset to defaults', 'success');
+      };
+
+      m.overlay.querySelector('#omr-cal-save').onclick = async () => {
+        await saveCalibration({
+          markedRatio:    Number(m.overlay.querySelector('#omr-cal-marked').value),
+          gapRatio:       Number(m.overlay.querySelector('#omr-cal-gap').value),
+          fillStrong:     Number(m.overlay.querySelector('#omr-cal-fill').value),
+          confirmFrames:  Number(m.overlay.querySelector('#omr-cal-frames').value),
+          maxReprojErrPx: Number(m.overlay.querySelector('#omr-cal-rms').value)
         });
+        m.close();
+        UI.toast('Calibration saved', 'success');
+      };
+    }
 
-        const bind = (id, valId, key, fmt) => {
-          const input = m.overlay.querySelector(id);
-          const valEl = m.overlay.querySelector(valId);
-          input.oninput = () => { valEl.textContent = fmt(input.value); };
-        };
-        bind('#omr-cal-marked', '#omr-cal-marked-val', 'markedRatio', v => Number(v).toFixed(2));
-        bind('#omr-cal-gap',    '#omr-cal-gap-val',    'gapRatio',    v => Number(v).toFixed(2));
-        bind('#omr-cal-fill',   '#omr-cal-fill-val',   'fillStrong',  v => Number(v).toFixed(2));
-        bind('#omr-cal-frames', '#omr-cal-frames-val', 'confirmFrames', v => v);
-        bind('#omr-cal-rms',    '#omr-cal-rms-val',    'maxReprojErrPx', v => Number(v).toFixed(1));
+    /* ----------------------------------------------------------------
+       Camera error display
+       ---------------------------------------------------------------- */
+    function showCameraError(err) {
+      const wrap = overlay.querySelector('#omr-video-wrap');
+      if (!wrap) return;
+      let msg = 'Camera unavailable.';
+      if (err && err.name === 'NotAllowedError') msg = 'Camera permission was denied.';
+      else if (err && err.name === 'NotFoundError') msg = 'No camera found on this device.';
+      else if (err && err.message) msg = err.message;
 
-        m.overlay.querySelector('[data-close]').onclick = m.close;
-
-        m.overlay.querySelector('#omr-cal-reset').onclick = async () => {
-          await saveCalibration({ ...DEFAULT_CALIBRATION });
-          m.close();
-          UI.toast('Calibration reset to defaults', 'success');
-        };
-
-        m.overlay.querySelector('#omr-cal-save').onclick = async () => {
-          await saveCalibration({
-            markedRatio:    Number(m.overlay.querySelector('#omr-cal-marked').value),
-            gapRatio:       Number(m.overlay.querySelector('#omr-cal-gap').value),
-            fillStrong:     Number(m.overlay.querySelector('#omr-cal-fill').value),
-            confirmFrames:  Number(m.overlay.querySelector('#omr-cal-frames').value),
-            maxReprojErrPx: Number(m.overlay.querySelector('#omr-cal-rms').value)
-          });
-          m.close();
-          UI.toast('Calibration saved', 'success');
-        };
-      }
-
-      function showCameraError(err) {
-        const wrap = overlay.querySelector('#omr-video-wrap');
-        if (!wrap) return;
-        let msg = 'Camera unavailable.';
-        if (err && err.name === 'NotAllowedError') msg = 'Camera permission was denied.';
-        else if (err && err.name === 'NotFoundError') msg = 'No camera found on this device.';
-        else if (err && err.message) msg = err.message;
+      const isMobileLayout = !!overlay.querySelector('.zg-header');
+      if (isMobileLayout) {
+        wrap.innerHTML = `
+          <div class="zg-camera-error">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
+              <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+              <line x1="2" y1="2" x2="22" y2="22"/>
+            </svg>
+            <div class="zg-camera-error-title">${Utils.esc(msg)}</div>
+            <div class="zg-camera-error-hint">Answer-sheet scanning requires a camera. Check your browser permission and try again.</div>
+          </div>`;
+      } else {
         wrap.innerHTML = `
           <div class="qr-camera-error">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="42" height="42">
@@ -51241,10 +51398,11 @@ const AnswerSheetOMR = (() => {
             <div class="qr-camera-error-hint">Answer-sheet scanning requires a camera.</div>
           </div>`;
       }
+    }
 
-      await startCamera();
-    })();
-  }
+    await startCamera();
+  })();
+}
 
   return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
 })();
