@@ -53473,8 +53473,10 @@ const SyncManager = {
       // true as soon as the host obtains its room code. Keep the host alive only
       // while waiting for a connection, and always resolve the startup promise.
       this._connectTimer = setTimeout(() => {
-        if (!this._conn && !this._completed) {
-          this._fail('No device joined within 3 minutes. The room code has expired.');
+        // A PeerJS connection object may exist without ever opening. Time out
+        // until the data channel actually opens, not merely until _conn exists.
+        if (!this._flowStarted && !this._completed) {
+          this._fail('No device connected within 3 minutes. The room code has expired.');
           settle(null);
         }
       }, 180000);
@@ -53520,14 +53522,15 @@ const SyncManager = {
       this._peer.on('open', () => {
         const conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
         this._conn = conn;
-        this._wireConnection(() => settle(true));
-
+        // Arm the timeout before wiring: _wireConnection can synchronously
+        // start the flow when PeerJS returns an already-open connection.
         this._connectTimer = setTimeout(() => {
           if (!this._flowStarted && !this._completed) {
             this._fail('Could not reach the other device. Check the code, internet access, and network restrictions.');
             settle(false);
           }
         }, 30000);
+        this._wireConnection(() => settle(true));
       });
 
       this._peer.on('error', (err) => {
@@ -53651,7 +53654,13 @@ const SyncManager = {
 
     let i = 0;
     const pump = () => {
-      const buffered = this._conn && this._conn.dataChannel
+      // Check the connection before back-pressure; otherwise a closed channel
+      // with a stale bufferedAmount can leave this timer rescheduling forever.
+      if (!this._conn || !this._conn.open || this._completed) {
+        this._sending = false;
+        return;
+      }
+      const buffered = this._conn.dataChannel
         ? this._conn.dataChannel.bufferedAmount
         : 0;
       if (buffered > 512 * 1024) { setTimeout(pump, 40); return; }
@@ -53812,7 +53821,7 @@ const SyncManager = {
     if (this._completed) return;          // guard against double-finish
     this._completed = true;
     const cb = this._onComplete;
-    this.close();
+    this.close(true);
     if (typeof cb === 'function') { try { cb(result); } catch (e) {} }
   },
 
@@ -53820,12 +53829,13 @@ const SyncManager = {
     if (this._completed) return;          // already succeeded — don't clobber
     this._completed = true;
     const cb = this._onError;
-    this.close();
+    this.close(true);
     console.warn('[Sync]', message);
     if (typeof cb === 'function') { try { cb(message); } catch (e) {} }
   },
 
-  close() {
+  close(preserveCompletion = false) {
+    const wasCompleted = this._completed;
     if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
@@ -53837,6 +53847,10 @@ const SyncManager = {
     this._onComplete = null;
     this._onError = null;
     this._resetState();
+    // _finish/_fail must remain terminal after cleanup. A manual close resets
+    // the manager so a new session can start; terminal cleanup must not.
+    if (preserveCompletion) this._completed = true;
+    else if (wasCompleted) this._completed = false;
   }
 };
 
