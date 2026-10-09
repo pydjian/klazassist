@@ -52962,27 +52962,24 @@ Pages._syncOpenSenderModal = async function () {
     onClose: () => SyncManager.close()
   });
 
-  const bodyEl   = m.overlay.querySelector('#sync-sender-body');
-  const cancelBtn = m.overlay.querySelector('#sync-cancel');
-  cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
+  const bodyEl = m.overlay.querySelector('#sync-sender-body');
+  m.overlay.querySelector('#sync-cancel').onclick = () => { SyncManager.close(); m.close(); };
 
+  // Note: onProgress does NOT capture `code` — it reads SyncManager._code.
   const code = await SyncManager.startHost({
     mode: 'send',
-    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, code),
-    onComplete: (r) => {
+    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p),
+    onComplete: () => {
       Pages._syncRenderSenderDone(bodyEl, true);
-      setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
       App.logActivity('Sync: sent data to another device', 'Sync');
+      setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
     },
-    onError: (msg) => {
-      Pages._syncRenderSenderError(bodyEl, msg);
-    }
+    onError: (msg) => Pages._syncRenderSenderError(bodyEl, msg)
   });
 
   if (code) {
     Pages._syncRenderSenderCode(bodyEl, code);
-  } else if (!bodyEl.querySelector('.sync-error')) {
-    // No code and no explicit error — treat it as a silent failure.
+  } else if (!bodyEl.querySelector('.sync-result')) {
     Pages._syncRenderSenderError(bodyEl, 'Could not start the sync service.');
   }
 };
@@ -53004,27 +53001,34 @@ Pages._syncRenderSenderCode = function (bodyEl, code) {
   `;
 };
 
-Pages._syncRenderSenderProgress = function (bodyEl, p, code) {
-  // Keep the code visible until the peer connects, then switch to progress view.
-  if (!bodyEl.querySelector('.sync-progress-wrap')) {
-    // fallback — shouldn't happen but safe
-    if (code) Pages._syncRenderSenderCode(bodyEl, code);
+Pages._syncRenderSenderProgress = function (bodyEl, p) {
+  if (!bodyEl) return;
+
+  // Make sure the code screen is rendered before we try to update progress.
+  if (!bodyEl.querySelector('.sync-progress-wrap') && SyncManager._code) {
+    Pages._syncRenderSenderCode(bodyEl, SyncManager._code);
   }
-  const wrap   = bodyEl.querySelector('#sync-progress-wrap');
+
+  const wrap   = bodyEl.querySelector('.sync-progress-wrap');
   const label  = bodyEl.querySelector('#sync-progress-label');
   const fill   = bodyEl.querySelector('#sync-progress-fill');
   const pctEl  = bodyEl.querySelector('#sync-progress-pct');
   const hintEl = bodyEl.querySelector('.sync-code-hint');
+  if (!wrap) return;
 
-  if (p.phase === 'waiting') return;   // still on the code screen
+  if (p.phase === 'waiting' || p.phase === 'waiting-ready' || p.phase === 'waiting-data') {
+    if (hintEl && p.message) {
+      hintEl.innerHTML = `${icon('signal')} ${Utils.esc(p.message)}`;
+    }
+    return;
+  }
 
-  if (wrap)   wrap.style.display = '';
+  wrap.style.display = '';
   if (hintEl) hintEl.innerHTML = `${icon('check')} Connected`;
   if (label)  label.textContent = p.message || 'Working…';
   if (fill && typeof p.percent === 'number') fill.style.width = p.percent + '%';
   if (pctEl && typeof p.percent === 'number') pctEl.textContent = p.percent + '%';
 };
-
 Pages._syncRenderSenderDone = function (bodyEl, ok) {
   bodyEl.innerHTML = `
     <div class="sync-result ${ok ? 'ok' : 'err'}">
@@ -53074,7 +53078,7 @@ Pages._syncOpenReceiverModal = async function (code) {
       <div class="sync-progress-pct" id="sync-progress-pct">0%</div>
     </div>`;
 
-  const connected = await SyncManager.joinAsGuest({
+  await SyncManager.joinAsGuest({
     code,
     mode: 'receive',
     onProgress: (p) => {
@@ -53108,18 +53112,8 @@ Pages._syncOpenReceiverModal = async function (code) {
         </div>`;
     }
   });
-
-  if (!connected && !bodyEl.querySelector('.sync-result')) {
-    bodyEl.innerHTML = `
-      <div class="sync-result err">
-        ${icon('alert')}
-        <div>
-          <div class="sync-result-title">Could not connect</div>
-          <div class="sync-result-sub">Check that the code matches and both devices are on the same network.</div>
-        </div>
-      </div>`;
-  }
 };
+
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
 }
@@ -53355,8 +53349,8 @@ Pages.openAssignAssessmentModal = async function (assessmentId) {
 const SyncManager = {
   _peer: null,
   _conn: null,
-  _role: null,                     // 'host' | 'guest'
-  _mode: 'send',                   // 'send' | 'receive'
+  _role: null,
+  _mode: 'send',
   _code: null,
   _snapshot: null,
   _recvChunks: [],
@@ -53364,12 +53358,14 @@ const SyncManager = {
   _recvSize: 0,
   _sendSize: 0,
   _sendSent: 0,
+  _sending: false,
+  _flowStarted: false,
+  _completed: false,
   _onProgress: null,
   _onComplete: null,
   _onError: null,
   _libLoaded: false,
 
-  /* ---------- lib loader ---------- */
   async _ensureLib() {
     if (window.Peer) { this._libLoaded = true; return true; }
     return new Promise((resolve) => {
@@ -53391,9 +53387,8 @@ const SyncManager = {
     });
   },
 
-  /* ---------- code generator ---------- */
   _generateCode() {
-    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // no I/O/0/1
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let out = '';
     const bytes = new Uint8Array(6);
     crypto.getRandomValues(bytes);
@@ -53404,11 +53399,21 @@ const SyncManager = {
     return 'klazassist-' + String(code).toLowerCase();
   },
 
-  /* ========================================================================
-     HOST — the device that pushes its data out
-     ======================================================================== */
+  _resetState() {
+    this._snapshot = null;
+    this._recvChunks = [];
+    this._recvTotal = 0;
+    this._recvSize = 0;
+    this._sendSize = 0;
+    this._sendSent = 0;
+    this._sending = false;
+    this._flowStarted = false;
+    this._completed = false;
+  },
+
   async startHost(opts = {}) {
     if (this._peer || this._conn) this.close();
+    this._resetState();
     this._mode = opts.mode || 'send';
     this._role = 'host';
     this._onProgress = opts.onProgress || null;
@@ -53422,7 +53427,15 @@ const SyncManager = {
     const peerId = this._peerIdForCode(this._code);
 
     try {
-      this._peer = new window.Peer(peerId, { debug: 0 });
+      this._peer = new window.Peer(peerId, {
+        debug: 0,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
     } catch (e) {
       this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
       return null;
@@ -53432,22 +53445,17 @@ const SyncManager = {
       let settled = false;
       const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-      this._peer.on('open', () => {
-        this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
-        settle(this._code);
-      });
+      this._peer.on('open', () => settle(this._code));
 
       this._peer.on('connection', (conn) => {
-        // Reject a second connection — one at a time.
         if (this._conn) { try { conn.close(); } catch (e) {} return; }
         this._conn = conn;
         this._wireConnection();
       });
 
       this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
+        const msg = String((err && err.type) || (err && err.message) || err);
         if (msg.includes('unavailable-id')) {
-          // Extremely unlikely, but a code collision on the public server
           this.close();
           this.startHost(opts);
           return;
@@ -53456,7 +53464,6 @@ const SyncManager = {
         settle(null);
       });
 
-      // Cap the waiting window at 3 minutes — after that the code is stale.
       setTimeout(() => {
         if (!this._conn && !settled) {
           this._fail('No device joined within 3 minutes. Code expired.');
@@ -53467,11 +53474,9 @@ const SyncManager = {
     });
   },
 
-  /* ========================================================================
-     GUEST — the device that receives (or sends, if mode='send' is set)
-     ======================================================================== */
   async joinAsGuest(opts = {}) {
     if (this._peer || this._conn) this.close();
+    this._resetState();
     const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
@@ -53487,7 +53492,15 @@ const SyncManager = {
     this._code = code;
 
     try {
-      this._peer = new window.Peer(null, { debug: 0 });
+      this._peer = new window.Peer(null, {
+        debug: 0,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
     } catch (e) {
       this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
       return false;
@@ -53498,14 +53511,10 @@ const SyncManager = {
       const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
       this._peer.on('open', () => {
-        this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
         const conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
         this._conn = conn;
         this._wireConnection();
 
-        conn.on('open', () => settle(true));
-
-        // If the host never responds, bail out after 30 s.
         setTimeout(() => {
           if (!conn.open && !settled) {
             this._fail('Could not reach the other device. Double-check the code and that both devices are on the same network.');
@@ -53516,89 +53525,65 @@ const SyncManager = {
       });
 
       this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
+        const msg = String((err && err.type) || (err && err.message) || err);
         this._fail('Sync error: ' + msg);
         settle(false);
       });
     });
   },
 
-  /* ========================================================================
-     WIRE THE DATA CHANNEL
-     ======================================================================== */
   _wireConnection() {
     const conn = this._conn;
     if (!conn) return;
 
-    conn.on('open', () => {
-      this._progress({ phase: 'connected', message: 'Devices connected.' });
-      // Host initiates the flow; guest waits.
-      if (this._role === 'host') {
-        this._hostFlow();
-      } else {
-        this._guestFlow();
-      }
-    });
-
+    // Attach handlers BEFORE checking conn.open so we never miss a message.
     conn.on('data', (data) => this._handleMessage(data));
-
     conn.on('error', (err) => {
-      this._fail('Connection error: ' + (err.message || 'unknown'));
+      this._fail('Connection error: ' + ((err && err.message) || 'unknown'));
     });
-
     conn.on('close', () => {
-      // If we were mid-transfer, this is a failure; otherwise just cleanup.
-      if (this._onComplete && this._recvChunks.length > 0 && !this._snapshot) {
-        // unlikely path — ignore
+      // Only treat as a failure if we never completed.
+      if (!this._completed && (this._onComplete || this._onError)) {
+        this._fail('The connection closed before the sync finished.');
       }
     });
+
+    let flowStarted = false;
+    const startFlow = () => {
+      if (flowStarted) return;
+      flowStarted = true;
+      this._flowStarted = true;
+      this._progress({ phase: 'connected', message: 'Devices connected.' });
+      if (this._role === 'host') this._hostFlow();
+      else this._guestFlow();
+    };
+
+    // CRITICAL FIX — PeerJS may hand us a connection that is *already open*.
+    // In that case, `conn.on('open')` will never fire. Check `conn.open` first.
+    if (conn.open) startFlow();
+    else conn.on('open', startFlow);
   },
 
-  /* ========================================================================
-     HOST FLOW — build snapshot, send it
-     ======================================================================== */
   async _hostFlow() {
     if (this._mode === 'send') {
-      this._progress({ phase: 'preparing', message: 'Building snapshot…' });
-      try {
-        this._snapshot = await this._buildSnapshot();
-      } catch (e) {
-        this._fail('Could not read local data: ' + (e.message || ''));
-        return;
-      }
-
-      this._progress({ phase: 'sending', message: 'Sending data…', percent: 0 });
-      this._sendChunkedSnapshot(this._snapshot);
+      // Wait for the guest to signal readiness — do NOT start sending yet.
+      this._progress({ phase: 'waiting-ready', message: 'Waiting for the other device to be ready…' });
     } else {
-      // 'receive' — host expects to receive from guest
       this._progress({ phase: 'waiting-data', message: 'Waiting for the other device to send…' });
       this._sendMessage({ type: 'ready-to-receive' });
     }
   },
 
-  /* ========================================================================
-     GUEST FLOW — receive or send based on mode
-     ======================================================================== */
   async _guestFlow() {
     if (this._mode === 'receive') {
       this._progress({ phase: 'waiting-data', message: 'Waiting for data…' });
       this._sendMessage({ type: 'ready-to-receive' });
     } else {
-      // guest is the sender
-      this._progress({ phase: 'preparing', message: 'Building snapshot…' });
-      try {
-        this._snapshot = await this._buildSnapshot();
-      } catch (e) {
-        this._fail('Could not read local data: ' + (e.message || ''));
-        return;
-      }
-      this._sendMessage({ type: 'ready-to-send' });
+      // Guest is the sender — wait for host's ready signal.
+      this._progress({ phase: 'waiting-ready', message: 'Waiting for the other device to be ready…' });
     }
   },
 
-  /* ========================================================================
-     SNAPSHOT BUILDER — same shape as Pages.backupAll
-     ======================================================================== */
   async _buildSnapshot() {
     const data = {
       application: CONFIG.APP_NAME,
@@ -53613,7 +53598,6 @@ const SyncManager = {
     for (const store of CONFIG.STORES) {
       let rows = await DB.getAll(store);
       if (!Array.isArray(rows)) throw new Error('Could not read store: ' + store);
-      // Skip derived image cache — it bloats the snapshot with no value.
       if (store === 'settings') {
         rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
       }
@@ -53623,17 +53607,17 @@ const SyncManager = {
     return data;
   },
 
-  /* ========================================================================
-     CHUNKED SEND
-     ======================================================================== */
   _sendMessage(msg) {
     if (!this._conn || !this._conn.open) return;
     try { this._conn.send(msg); } catch (e) { console.warn('[Sync] send failed:', e); }
   },
 
   _sendChunkedSnapshot(snapshot) {
+    if (this._sending) return;   // guard against double-send
+    this._sending = true;
+
     const json = JSON.stringify(snapshot);
-    const CHUNK = 16 * 1024;                    // 16 KB — safe across browsers
+    const CHUNK = 16 * 1024;
     const totalChunks = Math.ceil(json.length / CHUNK);
     this._sendSize = json.length;
     this._sendSent = 0;
@@ -53648,14 +53632,10 @@ const SyncManager = {
 
     let i = 0;
     const pump = () => {
-      // If the channel is buffering, wait for it to drain before pushing more.
       const buffered = this._conn && this._conn.dataChannel
         ? this._conn.dataChannel.bufferedAmount
         : 0;
-      if (buffered > 512 * 1024) {
-        setTimeout(pump, 40);
-        return;
-      }
+      if (buffered > 512 * 1024) { setTimeout(pump, 40); return; }
 
       if (i >= totalChunks) {
         this._sendMessage({ type: 'snapshot-done' });
@@ -53671,28 +53651,33 @@ const SyncManager = {
       const pct = Math.round((this._sendSent / this._sendSize) * 100);
       this._progress({ phase: 'sending', message: 'Sending data…', percent: pct });
 
-      // Small yield so the buffer can breathe.
       setTimeout(pump, 0);
     };
     pump();
   },
 
-  /* ========================================================================
-     MESSAGE HANDLER
-     ======================================================================== */
   async _handleMessage(data) {
     if (!data || typeof data !== 'object') return;
 
     switch (data.type) {
 
       case 'ready-to-receive':
-        // The other side is ready — if we're the sender, begin.
-        if (this._snapshot) this._sendChunkedSnapshot(this._snapshot);
+        // Other side is ready — if we're the sender and haven't started, begin.
+        if (this._mode === 'send' && !this._sending && !this._completed) {
+          this._progress({ phase: 'preparing', message: 'Building snapshot…' });
+          try {
+            this._snapshot = await this._buildSnapshot();
+          } catch (e) {
+            this._fail('Could not read local data: ' + (e.message || ''));
+            return;
+          }
+          this._progress({ phase: 'sending', message: 'Sending data…', percent: 0 });
+          this._sendChunkedSnapshot(this._snapshot);
+        }
         break;
 
       case 'ready-to-send':
-        // Other side says it will send — we just wait.
-        break;
+        break;   // legacy no-op
 
       case 'snapshot-meta':
         this._recvChunks = new Array(data.totalChunks);
@@ -53704,20 +53689,21 @@ const SyncManager = {
       case 'snapshot-chunk': {
         if (!Array.isArray(this._recvChunks)) return;
         this._recvChunks[data.index] = data.chunk;
-        const got = this._recvChunks.filter(Boolean).join('').length;
+        const got = this._recvChunks.reduce((n, c) => n + (c ? c.length : 0), 0);
         const pct = this._recvSize ? Math.round((got / this._recvSize) * 100) : 0;
         this._progress({ phase: 'receiving', message: 'Receiving data…', percent: pct });
         break;
       }
 
       case 'snapshot-done': {
-        // Reassemble and apply.
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
         try {
           const json = this._recvChunks.join('');
           const snapshot = JSON.parse(json);
           await this._applySnapshot(snapshot);
           this._sendMessage({ type: 'applied' });
+          // Let the 'applied' message flush before we tear down the channel.
+          setTimeout(() => this._finish({ success: true }), 500);
         } catch (e) {
           console.error('[Sync] apply failed:', e);
           this._sendMessage({ type: 'apply-failed', error: String(e.message || e) });
@@ -53737,53 +53723,47 @@ const SyncManager = {
     }
   },
 
-  /* ========================================================================
-     APPLY — safe replace via the existing restore pipeline
-     ======================================================================== */
   async _applySnapshot(snapshot) {
     if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
-    // restoreSnapshot validates every record before committing.
     const written = await DB.restoreSnapshot(snapshot, { replace: true });
-    // Reload application state so the UI reflects the new data.
     await App.loadState();
     App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
   },
 
-  /* ========================================================================
-     PROGRESS / FINISH / FAIL
-     ======================================================================== */
   _progress(payload) {
     if (typeof this._onProgress === 'function') {
-      try { this._onProgress(payload); } catch (e) {}
+      try { this._onProgress(payload); } catch (e) { console.warn('[Sync] progress handler error:', e); }
     }
   },
+
   _finish(result) {
+    if (this._completed) return;          // guard against double-finish
+    this._completed = true;
     const cb = this._onComplete;
     this.close();
     if (typeof cb === 'function') { try { cb(result); } catch (e) {} }
   },
+
   _fail(message) {
-    console.warn('[Sync]', message);
+    if (this._completed) return;          // already succeeded — don't clobber
+    this._completed = true;
     const cb = this._onError;
     this.close();
+    console.warn('[Sync]', message);
     if (typeof cb === 'function') { try { cb(message); } catch (e) {} }
   },
 
-  /* ========================================================================
-     TEARDOWN
-     ======================================================================== */
   close() {
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
     this._peer = null;
     this._conn = null;
-    this._snapshot = null;
-    this._recvChunks = [];
-    this._recvTotal = 0;
-    this._recvSize = 0;
-    this._sendSize = 0;
-    this._sendSent = 0;
     this._role = null;
+    this._code = null;
+    this._onProgress = null;
+    this._onComplete = null;
+    this._onError = null;
+    this._resetState();
   }
 };
 
