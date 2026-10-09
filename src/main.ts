@@ -17,6 +17,9 @@ import {
   type PhilIriReadingLevel
 } from './phil-iri-materials';
 
+// Sync Over WiFi — registered after Pages/State/DB are defined below.
+import { registerSyncWifi } from './sync-wifi';
+
 /* ============================================================================
    KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
 
@@ -33,7 +36,7 @@ import {
    ============================================================================ */
 const CONFIG = {
   APP_NAME: 'KlazAssist',
-  VERSION: '2.0.0',
+  VERSION: '2.0.109',
   DB_NAME: 'DepEdTeacherToolkitDB',
   DB_VERSION: 13,  // hardened schema migration: atomic store/index repair
   STORES: [
@@ -4145,10 +4148,13 @@ const NAV = [
     { id: 'printable-reports', label: 'Printable Reports', icon: 'printer' },
     { id: 'export-center', label: 'Export Center', icon: 'download' }
   ]},
-{ section: 'RESOURCES', items: [
-    { id: 'notes', label: 'Notes', icon: 'note' },
-    { id: 'teaching-load', label: 'Teaching Load', icon: 'calendar' }
-]},
+  { section: 'RESOURCES', items: [
+      { id: 'notes', label: 'Notes', icon: 'note' },
+      { id: 'teaching-load', label: 'Teaching Load', icon: 'calendar' }
+  ]},
+  { section: 'CONNECTIVITY', items: [
+    { id: 'sync-wifi', label: 'Sync Over WiFi', icon: 'signal' }
+  ]},
   { section: 'SECURITY & SETTINGS', items: [
     { id: 'settings', label: 'Settings', icon: 'settings' },
     { id: 'security-settings', label: 'Security', icon: 'shield' },
@@ -53075,6 +53081,24 @@ window.Security = Security;
 window.AuthUI = AuthUI;
 window.SetupWizard = SetupWizard;
 window.PhilIriPdfImporter = PhilIriPdfImporter;
+
+ // === SYNC OVER WIFI — register the page + transport =============
+ try {
+   registerSyncWifi({
+     Pages,
+     State,
+     DB,
+     Utils,
+     UI,
+     MergeEngine,
+     CONFIG,
+     App,
+     NAV
+   });
+ } catch (err) {
+   console.error('[Sync] Failed to register:', err);
+ }
+// =================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => { console.error('Uncaught error:', e.error || e.message); });
