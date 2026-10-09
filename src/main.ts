@@ -52870,9 +52870,10 @@ Pages.sync = async function (root) {
       ${icon('info')}
       <div>
         <strong>How it works:</strong> one device sends, the other receives.
-        Only the initial handshake uses a public server — the actual data flows
-        <strong>device-to-device</strong> over WebRTC, preferring your WiFi network.
-        Nothing is uploaded to KlazAssist servers because there aren't any.
+        The initial connection requires internet access to PeerJS's public signalling service.
+        After connection, the data transfer is encrypted and peer-to-peer; same-WiFi routing
+        is preferred when available but cannot be guaranteed. This version does not support
+        connection setup on a completely disconnected LAN.
       </div>
     </div>
 
@@ -52903,8 +52904,8 @@ Pages.sync = async function (root) {
         </div>
         <p class="text-sm text-muted mb-16" style="line-height:1.65;">
           Enter the 6-character code shown on the sending device.
-          <strong style="color:var(--danger);">This device's current data will be replaced.</strong>
-          Back up first if you're unsure.
+          <strong style="color:var(--danger);">Receiving replaces this device's current data.</strong>
+          Create a backup first. Only receive from a device you trust.
         </p>
         <div style="display:flex;gap:8px;margin-bottom:12px;">
           <input class="form-control" id="sync-code-input" maxlength="6"
@@ -52922,11 +52923,11 @@ Pages.sync = async function (root) {
         ${icon('shield')} Safety reminders
       </h4>
       <ul style="font-size:12.5px;line-height:1.7;color:var(--text-muted);margin:0;padding-left:18px;">
-        <li>Both devices must be on the <strong>same WiFi network</strong> for the fastest transfer.</li>
-        <li>Sync works with a phone hotspot too, if only one device has a cellular connection.</li>
+        <li>Both devices should be on the same trusted Wi-Fi network or hotspot.</li>
+        <li><strong>Internet is currently required</strong> to establish the PeerJS connection; the data payload itself is sent peer-to-peer.</li>
         <li>The room code is <strong>only valid while the sending modal is open</strong>. Close it and the code dies.</li>
         <li>Only one device can join at a time.</li>
-        <li>If the transfer fails, nothing on either device is changed.</li>
+        <li>If the connection fails near the end, check the receiving device before retrying; it may already have applied the snapshot.</li>
       </ul>
     </div>
   `;
@@ -53359,7 +53360,9 @@ const SyncManager = {
   _sendSize: 0,
   _sendSent: 0,
   _sending: false,
+  _preparing: false,
   _flowStarted: false,
+  _connectTimer: null,
   _completed: false,
   _onProgress: null,
   _onComplete: null,
@@ -53407,7 +53410,9 @@ const SyncManager = {
     this._sendSize = 0;
     this._sendSent = 0;
     this._sending = false;
+    this._preparing = false;
     this._flowStarted = false;
+    if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
     this._completed = false;
   },
 
@@ -53456,18 +53461,20 @@ const SyncManager = {
       this._peer.on('error', (err) => {
         const msg = String((err && err.type) || (err && err.message) || err);
         if (msg.includes('unavailable-id')) {
-          this.close();
-          this.startHost(opts);
+          this._fail('This room code is already in use. Close this window and start a new sync.');
+          settle(null);
           return;
         }
         this._fail('Sync error: ' + msg);
         settle(null);
       });
 
-      setTimeout(() => {
-        if (!this._conn && !settled) {
-          this._fail('No device joined within 3 minutes. Code expired.');
-          this.close();
+      // The old check incorrectly depended on `!settled`, but `settled` becomes
+      // true as soon as the host obtains its room code. Keep the host alive only
+      // while waiting for a connection, and always resolve the startup promise.
+      this._connectTimer = setTimeout(() => {
+        if (!this._conn && !this._completed) {
+          this._fail('No device joined within 3 minutes. The room code has expired.');
           settle(null);
         }
       }, 180000);
@@ -53513,12 +53520,11 @@ const SyncManager = {
       this._peer.on('open', () => {
         const conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
         this._conn = conn;
-        this._wireConnection();
+        this._wireConnection(() => settle(true));
 
-        setTimeout(() => {
-          if (!conn.open && !settled) {
-            this._fail('Could not reach the other device. Double-check the code and that both devices are on the same network.');
-            this.close();
+        this._connectTimer = setTimeout(() => {
+          if (!this._flowStarted && !this._completed) {
+            this._fail('Could not reach the other device. Check the code, internet access, and network restrictions.');
             settle(false);
           }
         }, 30000);
@@ -53532,12 +53538,17 @@ const SyncManager = {
     });
   },
 
-  _wireConnection() {
+  _wireConnection(onConnected) {
     const conn = this._conn;
     if (!conn) return;
 
     // Attach handlers BEFORE checking conn.open so we never miss a message.
-    conn.on('data', (data) => this._handleMessage(data));
+    conn.on('data', (data) => {
+      Promise.resolve(this._handleMessage(data)).catch((err) => {
+        console.error('[Sync] Message processing failed:', err);
+        this._fail('A synchronization message could not be processed safely.');
+      });
+    });
     conn.on('error', (err) => {
       this._fail('Connection error: ' + ((err && err.message) || 'unknown'));
     });
@@ -53553,6 +53564,8 @@ const SyncManager = {
       if (flowStarted) return;
       flowStarted = true;
       this._flowStarted = true;
+      if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
+      if (typeof onConnected === 'function') onConnected();
       this._progress({ phase: 'connected', message: 'Devices connected.' });
       if (this._role === 'host') this._hostFlow();
       else this._guestFlow();
@@ -53608,8 +53621,9 @@ const SyncManager = {
   },
 
   _sendMessage(msg) {
-    if (!this._conn || !this._conn.open) return;
-    try { this._conn.send(msg); } catch (e) { console.warn('[Sync] send failed:', e); }
+    if (!this._conn || !this._conn.open || this._completed) return false;
+    try { this._conn.send(msg); return true; }
+    catch (e) { console.warn('[Sync] send failed:', e); return false; }
   },
 
   _sendChunkedSnapshot(snapshot) {
@@ -53622,13 +53636,18 @@ const SyncManager = {
     this._sendSize = json.length;
     this._sendSent = 0;
 
-    this._sendMessage({
-      type: 'snapshot-meta',
-      totalChunks,
-      totalSize: json.length,
-      exportDate: snapshot.exportDate,
-      appVersion: snapshot.version
-    });
+    if (!Number.isSafeInteger(totalChunks) || totalChunks < 1 || json.length > 100 * 1024 * 1024) {
+      this._sending = false;
+      this._fail('The snapshot is empty or exceeds the 100 MB transfer limit.');
+      return;
+    }
+    if (!this._sendMessage({
+      type: 'snapshot-meta', totalChunks, totalSize: json.length,
+      exportDate: snapshot.exportDate, appVersion: snapshot.version
+    })) {
+      this._fail('Connection was lost before the transfer could start.');
+      return;
+    }
 
     let i = 0;
     const pump = () => {
@@ -53638,13 +53657,20 @@ const SyncManager = {
       if (buffered > 512 * 1024) { setTimeout(pump, 40); return; }
 
       if (i >= totalChunks) {
-        this._sendMessage({ type: 'snapshot-done' });
+        if (!this._sendMessage({ type: 'snapshot-done' })) {
+          this._fail('Connection was lost before transfer confirmation.');
+          return;
+        }
         this._progress({ phase: 'sent', message: 'Transfer complete. Waiting for confirmation…', percent: 100 });
         return;
       }
 
+      if (!this._conn || !this._conn.open || this._completed) return;
       const chunk = json.slice(i * CHUNK, (i + 1) * CHUNK);
-      this._sendMessage({ type: 'snapshot-chunk', index: i, chunk });
+      if (!this._sendMessage({ type: 'snapshot-chunk', index: i, chunk })) {
+        this._fail('Connection was lost while sending data.');
+        return;
+      }
       this._sendSent += chunk.length;
       i++;
 
@@ -53663,14 +53689,18 @@ const SyncManager = {
 
       case 'ready-to-receive':
         // Other side is ready — if we're the sender and haven't started, begin.
-        if (this._mode === 'send' && !this._sending && !this._completed) {
+        if (this._mode === 'send' && !this._sending && !this._preparing && !this._completed) {
+          this._preparing = true;
           this._progress({ phase: 'preparing', message: 'Building snapshot…' });
           try {
             this._snapshot = await this._buildSnapshot();
           } catch (e) {
+            this._preparing = false;
             this._fail('Could not read local data: ' + (e.message || ''));
             return;
           }
+          this._preparing = false;
+          if (this._completed || !this._conn || !this._conn.open) return;
           this._progress({ phase: 'sending', message: 'Sending data…', percent: 0 });
           this._sendChunkedSnapshot(this._snapshot);
         }
@@ -53680,6 +53710,13 @@ const SyncManager = {
         break;   // legacy no-op
 
       case 'snapshot-meta':
+        if (this._recvChunks.length || !Number.isSafeInteger(data.totalChunks) ||
+            data.totalChunks < 1 || data.totalChunks > 65536 ||
+            !Number.isSafeInteger(data.totalSize) || data.totalSize < 1 ||
+            data.totalSize > 100 * 1024 * 1024) {
+          this._fail('The sender provided invalid transfer metadata.');
+          return;
+        }
         this._recvChunks = new Array(data.totalChunks);
         this._recvTotal = data.totalChunks;
         this._recvSize = data.totalSize;
@@ -53687,9 +53724,18 @@ const SyncManager = {
         break;
 
       case 'snapshot-chunk': {
-        if (!Array.isArray(this._recvChunks)) return;
-        this._recvChunks[data.index] = data.chunk;
-        const got = this._recvChunks.reduce((n, c) => n + (c ? c.length : 0), 0);
+        if (!Array.isArray(this._recvChunks) || !Number.isSafeInteger(data.index) ||
+            data.index < 0 || data.index >= this._recvTotal ||
+            typeof data.chunk !== 'string' || data.chunk.length > 16 * 1024) {
+          this._fail('The sender provided an invalid data chunk.');
+          return;
+        }
+        if (this._recvChunks[data.index] === undefined) this._recvChunks[data.index] = data.chunk;
+        else if (this._recvChunks[data.index] !== data.chunk) {
+          this._fail('Conflicting duplicate data chunk received.');
+          return;
+        }
+        const got = this._recvChunks.reduce((n, c) => n + (typeof c === 'string' ? c.length : 0), 0);
         const pct = this._recvSize ? Math.round((got / this._recvSize) * 100) : 0;
         this._progress({ phase: 'receiving', message: 'Receiving data…', percent: pct });
         break;
@@ -53698,6 +53744,11 @@ const SyncManager = {
       case 'snapshot-done': {
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
         try {
+          if (!Array.isArray(this._recvChunks) || this._recvChunks.length !== this._recvTotal ||
+              this._recvChunks.filter(c => typeof c === 'string').length !== this._recvTotal ||
+              this._recvChunks.reduce((n, c) => n + c.length, 0) !== this._recvSize) {
+            throw new Error('Transfer is incomplete or corrupted. No data was applied.');
+          }
           const json = this._recvChunks.join('');
           const snapshot = JSON.parse(json);
           await this._applySnapshot(snapshot);
@@ -53724,7 +53775,28 @@ const SyncManager = {
   },
 
   async _applySnapshot(snapshot) {
-    if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
+    if (!snapshot || snapshot.application !== CONFIG.APP_NAME ||
+        !snapshot.data || typeof snapshot.data !== 'object' ||
+        !snapshot.database || !Array.isArray(snapshot.database.stores)) {
+      throw new Error('Invalid KlazAssist snapshot. No data was applied.');
+    }
+    // restoreSnapshot treats absent stores as empty arrays and clears them in
+    // replace mode. Require every current store to be present before allowing
+    // that destructive operation, so a partial/old payload cannot wipe data.
+    for (const store of CONFIG.STORES) {
+      if (!Array.isArray(snapshot.data[store])) {
+        throw new Error('Snapshot is missing or has invalid data for "' + store + '". No data was applied.');
+      }
+      const seen = new Set();
+      for (const row of snapshot.data[store]) {
+        if (!row || typeof row !== 'object' || row.id === undefined || row.id === null || row.id === '') {
+          throw new Error('Snapshot contains an invalid record in "' + store + '". No data was applied.');
+        }
+        const key = String(row.id);
+        if (seen.has(key)) throw new Error('Snapshot contains duplicate record IDs in "' + store + '". No data was applied.');
+        seen.add(key);
+      }
+    }
     const written = await DB.restoreSnapshot(snapshot, { replace: true });
     await App.loadState();
     App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
@@ -53754,6 +53826,7 @@ const SyncManager = {
   },
 
   close() {
+    if (this._connectTimer) { clearTimeout(this._connectTimer); this._connectTimer = null; }
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
     this._peer = null;
