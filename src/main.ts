@@ -3007,26 +3007,48 @@ const DB = {
 
       let written = 0;
       let failed = null;
+      let settled = false;
+
+      const done = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        fn(arg);
+      };
+
+      // Hard ceiling — a restore that writes 2 MB should finish in seconds.
+      // 30 s means the tab is blocked or a write is genuinely stuck.
+      const timeoutId = setTimeout(() => {
+        try { tx.abort(); } catch (_) {}
+        done(reject, new Error(
+          'Restore timed out. Another KlazAssist tab may be holding the ' +
+          'database open. Close other tabs on this device, then try again.'
+        ));
+      }, 30000);
 
       tx.oncomplete = () => {
         this._invalidate();
-        resolve(written);
+        done(resolve, written);
       };
+
+      // FIXED: reject the promise instead of silently recording `failed`.
+      // Without this, a transaction error left the promise pending forever,
+      // which is exactly the "Applying received data… 100%" hang in Sync.
       tx.onerror = () => {
         failed = tx.error || new Error('Restore transaction failed.');
+        done(reject, failed);
       };
+
       tx.onabort = () => {
         this._invalidate();
-        reject(failed || tx.error || new Error('Restore was aborted. No changes were applied.'));
+        done(reject, failed || tx.error || new Error('Restore was aborted. No changes were applied.'));
       };
 
       try {
         for (const store of stores) {
           const os = tx.objectStore(store);
-          // A true restore reproduces the backup instead of silently merging
-          // stale records that are no longer present in the backup.
           if (replace) os.clear();
-          for (const item of normalized[store]) {   // ← was: data[store]
+          for (const item of normalized[store]) {
             os.put(item);
             written++;
           }
@@ -52298,6 +52320,33 @@ Pages._syncOpenReceiverModal = async function (code) {
       <div class="sync-progress-pct" id="sync-progress-pct">0%</div>
     </div>`;
 
+  // NEW: force an error if "Applying received data…" stays on screen too long.
+  let applyWatchdog = null;
+  const armApplyWatchdog = () => {
+    if (applyWatchdog) clearTimeout(applyWatchdog);
+    applyWatchdog = setTimeout(() => {
+      const label = bodyEl.querySelector('#sync-progress-label');
+      if (label && /applying/i.test(label.textContent)) {
+        bodyEl.innerHTML = `
+          <div class="sync-result err">
+            ${icon('alert')}
+            <div>
+              <div class="sync-result-title">Sync timed out while saving</div>
+              <div class="sync-result-sub">
+                The data arrived but could not be written to the database in time.
+                This usually means another KlazAssist tab is holding the database
+                open. Close any other KlazAssist tabs on this device, then try again.
+              </div>
+            </div>
+          </div>`;
+        SyncManager.close();
+      }
+    }, 35000);
+  };
+  const disarmApplyWatchdog = () => {
+    if (applyWatchdog) { clearTimeout(applyWatchdog); applyWatchdog = null; }
+  };
+
   const connected = await SyncManager.joinAsGuest({
     code,
     mode: 'receive',
@@ -52308,8 +52357,12 @@ Pages._syncOpenReceiverModal = async function (code) {
       if (label) label.textContent = p.message || 'Working…';
       if (fill && typeof p.percent === 'number') fill.style.width = p.percent + '%';
       if (pctEl && typeof p.percent === 'number') pctEl.textContent = p.percent + '%';
+
+      if (p.phase === 'applying') armApplyWatchdog();
+      else disarmApplyWatchdog();
     },
     onComplete: () => {
+      disarmApplyWatchdog();
       bodyEl.innerHTML = `
         <div class="sync-result ok">
           ${icon('check')}
@@ -52322,6 +52375,7 @@ Pages._syncOpenReceiverModal = async function (code) {
       setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1400);
     },
     onError: (msg) => {
+      disarmApplyWatchdog();
       bodyEl.innerHTML = `
         <div class="sync-result err">
           ${icon('alert')}
@@ -52334,12 +52388,13 @@ Pages._syncOpenReceiverModal = async function (code) {
   });
 
   if (!connected && !bodyEl.querySelector('.sync-result')) {
+    disarmApplyWatchdog();
     bodyEl.innerHTML = `
       <div class="sync-result err">
         ${icon('alert')}
         <div>
           <div class="sync-result-title">Could not connect</div>
-          <div class="sync-result-sub">Check that the code matches and both devices are on the same network.</div>
+          <div class="sync-result-sub">Check that the code matches and that both devices have internet access.</div>
         </div>
       </div>`;
   }
