@@ -4100,6 +4100,7 @@ const ICONS = {
   history: '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 106 5.3L3 8"/><path d="M12 7v5l4 2"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   camera: '<path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/>',
+  scan: '<path d="M3 7V5a2 2 0 012-2h2"/><path d="M17 3h2a2 2 0 012 2v2"/><path d="M21 17v2a2 2 0 01-2 2h-2"/><path d="M7 21H5a2 2 0 01-2-2v-2"/><path d="M8 7v10"/><path d="M12 7v10"/><path d="M16 7v10"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>',
   key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
@@ -14650,7 +14651,7 @@ _showClassMismatchDialog(comparison, classInfo) {
               </label>` : ''}
             <button class="btn btn-sm btn-primary" id="att-scan-qr-btn"
                     onclick="Pages.openAttendanceScanner()">
-              ${icon('camera')} Scan QR
+              ${icon('scan')} Scan QR
             </button>
             <button class="btn btn-sm btn-success" onclick="Pages.markAll('Present')">Mark All Present</button>
             <button class="btn btn-sm btn-danger" onclick="Pages.markAll('Absent')">Mark All Absent</button>
@@ -15812,7 +15813,7 @@ async assessmentBuilder(root) {
                   <button class="icon-btn" title="Edit" data-assess-edit="${Utils.attr(a.id)}">${icon('edit')}</button>
                   <button class="icon-btn" title="Assign to classes" data-assess-assign="${Utils.attr(a.id)}">${icon('users')}</button>
                   <button class="icon-btn" title="Print answer sheets" data-assess-sheets="${Utils.attr(a.id)}">${icon('grid')}</button>
-                  <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('camera')}</button>
+                  <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('scan')}</button>
                   <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
                   <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
                   <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
@@ -20000,59 +20001,109 @@ _tosUpdateDaysSummary(container) {
 _tosRenderLivePreview(container) {
   const panel = container.querySelector('#tos-live-preview');
   if (!panel) return;
+
   const s = State.tos;
-  const comps = s.competencies;
+  const comps = Array.isArray(s.competencies) ? s.competencies : [];
   const filled = comps.filter(c => (c.text || '').trim());
   const totalDays = filled.reduce((sum, c) => sum + (Number(c.days) || 0), 0);
+  const totalItems = Number(s.totalItems) || 30;
 
+  /* ---------- Empty state --------------------------------------------- */
   if (!filled.length || totalDays === 0) {
     panel.innerHTML = `
-      <div style="text-align:center;padding:24px 12px;color:var(--text-muted);font-size:12px;">
-        ${icon('chart')}
-        <p style="margin:8px 0 0;">Fill in at least one competency and set days taught to see the live TOS preview.</p>
+      <div class="tos-preview-empty">
+        <div class="tos-preview-empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 3v18h18"/>
+            <path d="M7 16v-4"/>
+            <path d="M12 16V8"/>
+            <path d="M17 16v-6"/>
+          </svg>
+        </div>
+        <div class="tos-preview-empty-title">Nothing to preview yet</div>
+        <p class="tos-preview-empty-text">
+          Fill in at least one competency and set its days taught.
+          The preview updates as you type.
+        </p>
+        <div class="tos-preview-empty-hints">
+          <span><i style="background:var(--deped-blue);"></i>Rem</span>
+          <span><i style="background:var(--accent-cyan);"></i>Und</span>
+          <span><i style="background:var(--success);"></i>App</span>
+          <span><i style="background:var(--accent-gold);"></i>Ana</span>
+          <span><i style="background:var(--accent-purple);"></i>Eva</span>
+          <span><i style="background:var(--danger);"></i>Cre</span>
+        </div>
       </div>`;
     return;
   }
 
-  const totalItems = Number(s.totalItems) || 30;
-  let cumulative = 0;
-  const rows = filled.map((c, i) => {
+  /* ---------- Compute the per-competency item distribution ----------- */
+  const itemsPerComp = filled.map((c, i) => {
     const isLast = i === filled.length - 1;
-    const items = isLast
-      ? totalItems - cumulative
-      : Math.round(((Number(c.days) || 0) / totalDays) * totalItems);
-    const safeItems = Math.max(0, items);
-    const start = safeItems > 0 ? cumulative + 1 : 0;
-    const end = cumulative + safeItems;
-    cumulative += safeItems;
-    return { text: c.text, items: safeItems, range: start === end ? `${start}` : `${start}–${end}` };
+    const days = Number(c.days) || 0;
+    const raw = isLast
+      ? totalItems - filled.slice(0, i).reduce((sum, x) => {
+          const dx = Number(x.days) || 0;
+          return sum + Math.round((dx / totalDays) * totalItems);
+        }, 0)
+      : Math.round((days / totalDays) * totalItems);
+    return Math.max(0, raw);
   });
 
-  const frameworkLabels = s.framework === 'traditional' ? ['R','U','Ap','An','E','C']
-    : s.framework === 'pisa' ? ['L1-2','L3-4','L5-6'] : ['Pre','Uni','Mul','Rel','Ext'];
+  let cumulative = 0;
+  const rows = filled.map((c, i) => {
+    const items = itemsPerComp[i];
+    const start = items > 0 ? cumulative + 1 : 0;
+    const end = cumulative + items;
+    cumulative += items;
+    const range = items > 0 ? (start === end ? `${start}` : `${start}–${end}`) : '—';
+    return {
+      text: (c.text || '').trim(),
+      days: Number(c.days) || 0,
+      items,
+      range
+    };
+  });
 
+  const totalAllocated = rows.reduce((sum, r) => sum + r.items, 0);
+  const allocationPct = totalItems ? Math.round((totalAllocated / totalItems) * 100) : 0;
+  const remaining = Math.max(0, totalItems - totalAllocated);
+
+  /* ---------- Populated state ---------------------------------------- */
   panel.innerHTML = `
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
-      ${filled.length} competencies · ${totalItems} items total
+    <div class="tos-preview-summary">
+      <span><strong>${filled.length}</strong> competenc${filled.length === 1 ? 'y' : 'ies'}</span>
+      <span class="tos-preview-dot">·</span>
+      <span><strong>${totalDays}</strong> day${totalDays === 1 ? '' : 's'}</span>
+      <span class="tos-preview-dot">·</span>
+      <span><strong>${totalAllocated}</strong> / ${totalItems} items</span>
     </div>
-    <div style="display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;">
+
+    <div class="tos-preview-alloc-bar" title="${allocationPct}% allocated">
+      <div style="width:${allocationPct}%;${remaining ? 'background:linear-gradient(90deg,var(--deped-blue),var(--accent-cyan));' : ''}"></div>
+    </div>
+
+    <div class="tos-preview-list">
       ${rows.map((r, i) => `
-        <div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);">
-          <div style="font-size:11.5px;font-weight:600;margin-bottom:4px;line-height:1.35;word-break:break-word;color:var(--text);">
-            ${Utils.esc((r.text || '').slice(0, 70))}${(r.text || '').length > 70 ? '…' : ''}
+        <div class="tos-preview-row">
+          <div class="tos-preview-row-index">${i + 1}</div>
+          <div class="tos-preview-row-body">
+            <div class="tos-preview-row-text" title="${Utils.attr(r.text)}">
+              ${Utils.esc(r.text.length > 90 ? r.text.slice(0, 88) + '…' : r.text)}
+            </div>
+            <div class="tos-preview-row-meta">
+              <span>${r.days} day${r.days === 1 ? '' : 's'}</span>
+              <span class="tos-preview-dot">·</span>
+              <span><strong>${r.items}</strong> item${r.items === 1 ? '' : 's'}</span>
+              <span class="tos-preview-dot">·</span>
+              <span class="tos-preview-row-range">${Utils.esc(r.range)}</span>
+            </div>
           </div>
-          <div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--text-muted);">
-            <span>Items: <strong style="color:var(--deped-blue);">${r.items}</strong></span>
-            <span style="font-family:monospace;">${r.range}</span>
-          </div>
-        </div>`).join('')}
+        </div>
+      `).join('')}
     </div>
-    <button class="btn btn-sm btn-outline btn-block mt-12" id="tos-preview-calc">
-      ${icon('chart')} Recalculate
-    </button>
   `;
-  const recalc = panel.querySelector('#tos-preview-calc');
-  if (recalc) recalc.onclick = () => { Pages._tosCalculate(container); Pages._tosRenderLivePreview(container); };
 },
 
 /* ============================================================================
@@ -53503,6 +53554,7 @@ const SyncManager = {
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
+    this._finished = false;  
 
     const ok = await this._ensureLib();
     if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
@@ -53580,6 +53632,7 @@ const SyncManager = {
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
+    this._finished = false;
 
     const ok = await this._ensureLib();
     if (!ok) { this._fail('Could not load the sync library.'); return false; }
@@ -53876,7 +53929,18 @@ const SyncManager = {
           const json = this._recvChunks.join('');
           const snapshot = JSON.parse(json);
           await this._applySnapshot(snapshot);
+
+          // Best-effort courtesy notification to the sender. We do NOT wait
+          // for a reply — the sender is the *receiver* of this message, so it
+          // will never echo it back.
           this._sendMessage({ type: 'applied' });
+
+          // ── THE FIX ──
+          // We are the receiver; we own our own completion. Give the outgoing
+          // 'applied' message ~400 ms to flush, then close this side too.
+          // (Belt and suspenders: `_finish` now has a `_finished` guard, so a
+          // late 'applied' from the sender can't double-fire the callback.)
+          setTimeout(() => this._finish({ success: true }), 400);
         } catch (e) {
           console.error('[Sync] apply failed:', e);
           this._sendMessage({ type: 'apply-failed', error: String(e.message || e) });
@@ -53919,6 +53983,8 @@ const SyncManager = {
     }
   },
   _finish(result) {
+    if (this._finished) return;          // ← ADD THIS: one-shot guard
+    this._finished = true;               // ← ADD THIS
     const cb = this._onComplete;
     this.close();
     if (typeof cb === 'function') { try { cb(result); } catch (e) {} }
@@ -53949,6 +54015,7 @@ const SyncManager = {
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
+    this._finished = false; 
   }
 };
 
