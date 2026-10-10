@@ -154,6 +154,38 @@ const GROUPING_COLORS = [
 const DEPED_SEAL_PATH = './icon/deped.webp';
 
 /* ============================================================================
+   SF1 PREVIEW — column model
+   ----------------------------------------------------------------------------
+   The DepEd School Form 1 has exactly these 20 columns. Each one carries a
+   default pixel width and a "single" flag. `single: true` cells render on
+   one line with ellipsis truncation; `single: false` cells wrap inside the
+   fixed width. Widths are persisted under the `sf1ColWidths` setting so
+   dragging a column sticks across sessions.
+   ============================================================================ */
+const SF1_COLUMNS = [
+  { id: 'idx',          label: '#',                                width: 40,  single: true  },
+  { id: 'lrn',          label: 'LRN',                              width: 120, single: true  },
+  { id: 'name',         label: 'NAME\n(Last Name, First Name, M.I.)', width: 230, single: false },
+  { id: 'sex',          label: 'Sex\n(M/F)',                       width: 50,  single: true  },
+  { id: 'birthDate',    label: 'BIRTH DATE\n(mm-dd-yyyy)',         width: 105, single: true  },
+  { id: 'age',          label: 'Age\n(1st Fri Jun)',               width: 60,  single: true  },
+  { id: 'motherTongue', label: 'MOTHER\nTONGUE',                   width: 120, single: false },
+  { id: 'ethnic',       label: 'IP\n(Ethnic Group)',               width: 120, single: false },
+  { id: 'religion',     label: 'RELIGION',                         width: 120, single: false },
+  { id: 'houseNo',      label: 'House #/Street/\nSitio/Purok',     width: 140, single: false },
+  { id: 'barangay',     label: 'Barangay',                         width: 120, single: false },
+  { id: 'municipality', label: 'Municipality/\nCity',              width: 130, single: false },
+  { id: 'province',     label: 'Province',                         width: 130, single: false },
+  { id: 'father',       label: "Father's Name",                    width: 180, single: false },
+  { id: 'mother',       label: "Mother's Maiden Name",             width: 180, single: false },
+  { id: 'guardian',     label: 'Guardian Name',                    width: 170, single: false },
+  { id: 'relationship', label: 'Relationship',                     width: 110, single: false },
+  { id: 'contact',      label: 'Contact Number\nof Parent/Guardian', width: 140, single: true  },
+  { id: 'modality',     label: 'Learning Modality',                width: 120, single: false },
+  { id: 'remarks',      label: 'REMARKS',                          width: 150, single: false }
+];
+
+/* ============================================================================
    SF9 LEARNING AREAS — the official subject list per grade band.
    Used by the SF9 tab to render the correct rows for the active class.
    ============================================================================ */
@@ -4120,66 +4152,54 @@ function icon(name, cls = '') {
    NAV STRUCTURE
    ============================================================================ */
 const NAV = [
-  { section: 'DASHBOARD', items: [{ id: 'dashboard', label: 'Dashboard', icon: 'home' }] },
+  { section: 'DASHBOARD', items: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'home' }
+  ]},
+
   { section: 'MY CLASS', items: [
-    { id: 'classprofile', label: 'Class Profile', icon: 'book' },
-    { id: 'learners', label: 'Learners', icon: 'users' },
-    { id: 'seating', label: 'Seating Arrangement', icon: 'grid' },
-    { id: 'groups', label: 'Groups', icon: 'group' }
+    { id: 'classprofile',       label: 'Class Overview',      icon: 'book'   },
+    { id: 'learners',           label: 'Learners',            icon: 'users'  },
+    { id: 'seating-and-groups', label: 'Seating & Groups',    icon: 'grid'   }
   ]},
+
   { section: 'ATTENDANCE', items: [
-    { id: 'attendance', label: 'Daily Attendance', icon: 'check' },
-    { id: 'attendance-history', label: 'Attendance History', icon: 'calendar' },
-    { id: 'attendance-analytics', label: 'Attendance Analytics', icon: 'chart' },
-    { id: 'attendance-reports', label: 'Attendance Reports', icon: 'file' }
+    { id: 'attendance', label: 'Attendance', icon: 'check' }
   ]},
+
   { section: 'CLASS MANAGEMENT', items: [
-    { id: 'schedule', label: 'Class Schedule', icon: 'calendar' },
-    { id: 'assignments', label: 'Homework / Assignments', icon: 'file' },
-    { id: 'behavior', label: 'Behavior / Discipline Log', icon: 'shield' },
-    { id: 'parent-notes', label: 'Parent/Guardian Notes', icon: 'message' },
-    { id: 'parent-digest', label: 'Parent Digest', icon: 'message' },
+    { id: 'schedule',             label: 'Class Schedule',       icon: 'calendar' },
+    { id: 'assignments',          label: 'Assignments',          icon: 'file'     },
+    { id: 'behavior',             label: 'Behavior Log',         icon: 'shield'   },
+    { id: 'parent-communication', label: 'Parent Communication', icon: 'message'  },
+    { id: 'teaching-load',        label: 'Teaching Load',        icon: 'timer'    }
   ]},
+
   { section: 'GRADING & ASSESSMENT', items: [
-    { id: 'gradebook', label: 'Gradebook', icon: 'chart' },
-    { id: 'assessment-builder', label: 'Assessment Builder', icon: 'edit' },
-    { id: 'quiz-manager', label: 'Quiz Manager', icon: 'play' },
-    { id: 'item-analysis', label: 'Item Analysis', icon: 'analysis' },
-    { id: 'class-performance', label: 'Class Performance', icon: 'trending' },
-    { id: 'learner-performance', label: 'Learner Performance', icon: 'user-check' },
-    { id: 'phil-iri', label: 'Phil-IRI Reading Assessment', icon: 'book' },
+    { id: 'gradebook',   label: 'Gradebook',   icon: 'chart'    },
+    { id: 'assessments', label: 'Assessments', icon: 'edit'     },
+    { id: 'performance', label: 'Performance', icon: 'trending' },
+    { id: 'phil-iri',    label: 'Phil-IRI',    icon: 'book'     }
   ]},
-  { section: 'TEACHING TOOLS', items: [
-    { id: 'teaching-tools', label: 'Teaching Tools', icon: 'shuffle' }
-  ]},
+
   { section: 'LESSON & PLANNING', items: [
-    { id: 'planning', label: 'Lesson & Planning', icon: 'book-open' }
+    { id: 'teaching-tools', label: 'Teaching Tools',    icon: 'shuffle'   },
+    { id: 'planning',       label: 'Lesson & Planning', icon: 'book-open' },
+    { id: 'notes',          label: 'Notes',             icon: 'note'      }
   ]},
+
   { section: 'SCHOOL FORMS', items: [
-    { id: 'sf1', label: 'SF1 — School Register', icon: 'file' },
-    { id: 'sf2', label: 'SF2 — Daily Attendance', icon: 'calendar' },
-    { id: 'sf9', label: 'SF9 — Learner\u2019s Report', icon: 'file' }
+    { id: 'school-forms', label: 'School Forms', icon: 'file' }
   ]},
+
   { section: 'DOCUMENTS & REPORTS', items: [
-    { id: 'class-list', label: 'Class List', icon: 'list' },
-    { id: 'masterlist', label: 'Masterlist', icon: 'list' },
-    { id: 'grade-summary', label: 'Grade Summary', icon: 'chart' },
-    { id: 'learner-profile', label: 'Learner Profile', icon: 'user' },
-    { id: 'printable-reports', label: 'Printable Reports', icon: 'printer' },
-    { id: 'export-center', label: 'Export Center', icon: 'download' }
+    { id: 'rosters',            label: 'Rosters',           icon: 'list'    },
+    { id: 'grade-summary',      label: 'Grade Summary',     icon: 'chart'   },
+    { id: 'reports-and-export', label: 'Reports & Export',  icon: 'printer' }
   ]},
-{ section: 'RESOURCES', items: [
-    { id: 'notes', label: 'Notes', icon: 'note' },
-    { id: 'teaching-load', label: 'Teaching Load', icon: 'calendar' }
-]},
-  { section: 'SECURITY & SETTINGS', items: [
-    { id: 'settings', label: 'Settings', icon: 'settings' },
-    { id: 'sync', label: 'Sync Over WiFi', icon: 'signal' },
-    { id: 'security-settings', label: 'Security', icon: 'shield' },
-    { id: 'teacher-profile', label: 'Teacher Profile', icon: 'user' },
-    { id: 'school-profile', label: 'School Profile', icon: 'building' },
-    { id: 'activity-log', label: 'Activity Log', icon: 'history' },
-    { id: 'about', label: 'About', icon: 'info' }
+
+  { section: 'SETTINGS', items: [
+    { id: 'settings', label: 'Settings',       icon: 'settings' },
+    { id: 'sync',     label: 'Sync Over WiFi', icon: 'signal'   }
   ]}
 ];
 
@@ -4242,8 +4262,17 @@ const State = {
 
 /* Which nav item should appear "active" when a hub's sub-page is open? */
 const HUB_CHILDREN = {
-  'teaching-tools': ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
-  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator','rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library'],
+  'seating-and-groups':   ['seating', 'groups'],
+  'attendance':           ['attendance-history', 'attendance-analytics'],
+  'parent-communication': ['parent-notes', 'parent-digest'],
+  'assessments':          ['assessment-builder', 'quiz-manager'],
+  'performance':          ['class-performance', 'learner-performance', 'item-analysis'],
+  'school-forms':         ['sf1', 'sf2', 'sf9'],
+  'rosters':              ['class-list', 'masterlist'],
+  'reports-and-export':   ['printable-reports', 'export-center'],
+  'settings':             ['security-settings', 'teacher-profile', 'school-profile', 'activity-log', 'about'],
+  'teaching-tools':       ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
+  'planning':             ['lesson-planner', 'tos-generator', 'powerpoint-generator', 'rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library']
 };
 /* ============================================================================
    AUTH UI
@@ -14611,7 +14640,7 @@ _showClassMismatchDialog(comparison, classInfo) {
       }
     };
   },
-  async attendance(root) {
+  async _attendanceRecord(root) {
     if (!State.activeClass) {
       root.innerHTML = `<div class="card">${UI.emptyState({icon:'check', title:'No class selected', message:'Create or select a class first.', actionLabel:'+ Create Class', actionFn:'App.openClassForm()'})}</div>`;
       return;
@@ -16030,16 +16059,22 @@ async assessmentBuilder(root) {
         <select class="form-control" id="af-term">${policy.terms.map(t => `<option value="${Utils.attr(t)}" ${(existing && existing.term===t) || (!existing && t===State.gbTerm) ? 'selected':''}>${Utils.esc(t)}</option>`).join('')}</select></div>`}
       <div class="form-group"><label>Instructions</label><textarea class="form-control" id="af-instr" rows="2">${existing ? Utils.esc(existing.instructions||'') : ''}</textarea></div>
       <div class="divider"></div>
-      <div class="flex-between" style="margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;">
-        <h4 style="font-size:14px;margin:0;">
-          Questions
-          <span id="af-qcount" class="text-muted" style="font-weight:400;font-size:12px;margin-left:4px;"></span>
-        </h4>
-        <button class="btn btn-sm btn-outline" id="af-shuffle" type="button"
-                title="Randomly reorder all questions">
-          ${icon('shuffle')} Shuffle Questions
-        </button>
-      </div>
+        <div class="flex-between" style="margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap;">
+          <h4 style="font-size:14px;margin:0;">
+            Questions
+            <span id="af-qcount" class="text-muted" style="font-weight:400;font-size:12px;margin-left:4px;"></span>
+          </h4>
+          <div class="flex gap-8" style="flex-wrap:wrap;">
+            <button class="btn btn-sm btn-outline" id="af-shuffle" type="button"
+                    title="Randomly reorder all questions">
+              ${icon('shuffle')} Shuffle Questions
+            </button>
+            <button class="btn btn-sm btn-outline" id="af-shuffle-answers" type="button"
+                    title="Randomly reorder the choices inside every multiple-choice question, so the correct answer isn't always A or B">
+              ${icon('shuffle')} Shuffle Choices
+            </button>
+          </div>
+        </div>
       <div id="af-questions"></div>
       <div class="card" style="background:var(--bg);padding:12px;margin-top:10px;">
         <strong class="text-sm">Add Question</strong>
@@ -16079,6 +16114,108 @@ async assessmentBuilder(root) {
       expandedIdx = -1;           // close any card that was being edited
       renderQuestions(qList);
       UI.toast(`Shuffled ${qDraft.length} questions.`, 'success', 2000);
+    };
+
+    m.overlay.querySelector('#af-shuffle-answers').onclick = () => {
+      // ── 1. Find every MC question we can actually shuffle ──
+      const candidates = qDraft.filter(q =>
+        q.type === 'Multiple Choice' &&
+        Array.isArray(q.choices) &&
+        q.choices.length >= 2
+      );
+      if (!candidates.length) {
+        UI.toast('No multiple-choice questions to shuffle.', 'warning', 2500);
+        return;
+      }
+
+      // ── 2. Helpers ──
+      // "All of the above" / "None of the above" / "Both A and B" must stay
+      // at the end; moving them changes the question's meaning.
+      const isAnchoredChoice = (text) =>
+        /^\s*(all|none|both)\s+of\s+the\s+above\s*$/i.test(String(text || '').trim());
+
+      // Fisher–Yates shuffle, in place, uniform distribution.
+      const shuffleInPlace = (arr) => {
+        for (let i = arr.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+      };
+
+      // ── 3. Walk every MC question and shuffle its choices ──
+      let shuffled = 0;
+      qDraft.forEach(q => {
+        if (q.type !== 'Multiple Choice') return;
+        if (!Array.isArray(q.choices) || q.choices.length < 2) return;
+
+        // 3a. Strip any leading letter prefix ("A. Manila" → "Manila").
+        //     This guarantees that after shuffling, the choices read as
+        //     plain text and the renderer adds fresh A/B/C/D labels.
+        const cleaned = q.choices.map((c, i) => Utils.stripChoiceLetter(c, i));
+
+        // 3b. Resolve the stored answer to an exact stripped-choice string.
+        //     We must do this BEFORE shuffling so the answer continues to
+        //     point at the same text after the array is reordered.
+        const rawAnswer = String(q.answer || '').trim();
+        let resolvedAnswer = rawAnswer;
+
+        // Direct match against a stripped choice?
+        const strippedIdx = cleaned.findIndex(c => c.toLowerCase() === rawAnswer.toLowerCase());
+        if (strippedIdx >= 0) {
+          resolvedAnswer = cleaned[strippedIdx];
+        } else {
+          // Match against a raw (unstripped) choice?
+          const rawIdx = q.choices.findIndex(c =>
+            String(c || '').trim().toLowerCase() === rawAnswer.toLowerCase()
+          );
+          if (rawIdx >= 0) {
+            resolvedAnswer = cleaned[rawIdx];
+          } else {
+            // Bare letter ("A", "B.", "(C)", "d)")? Resolve by position.
+            const letterMatch = rawAnswer.match(/^[\(\[]?\s*([A-Za-z])\s*[\)\]\.\:\-]?$/);
+            if (letterMatch) {
+              const idx = letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+              if (idx >= 0 && idx < cleaned.length) resolvedAnswer = cleaned[idx];
+            }
+          }
+        }
+
+        // 3c. Split off any anchored choices so they keep their position.
+        const movable = [];
+        const anchored = [];
+        cleaned.forEach(c => (isAnchoredChoice(c) ? anchored : movable).push(c));
+
+        // 3d. Shuffle only the movable choices.
+        shuffleInPlace(movable);
+
+        // 3e. If the correct answer is currently first among the movable
+        //     choices AND there are three or more movable choices, nudge it
+        //     away from position 0 so a rerun of this button visibly changes
+        //     something. With four real choices this is just a rotation,
+        //     not an extra shuffle, so the distribution stays uniform.
+        if (
+          resolvedAnswer &&
+          movable.length >= 3 &&
+          movable[0].toLowerCase() === resolvedAnswer.toLowerCase()
+        ) {
+          movable.push(movable.shift());
+        }
+
+        // 3f. Recombine: movable choices first, anchored choices last.
+        q.choices = movable.concat(anchored);
+        q.answer  = resolvedAnswer;
+        shuffled++;
+      });
+
+      // ── 4. Close any open editor card and repaint ──
+      expandedIdx = -1;
+      renderQuestions(qList);
+      UI.toast(
+        `Shuffled choices for ${shuffled} question${shuffled === 1 ? '' : 's'}.`,
+        'success',
+        2500
+      );
     };
 
     const typeSel = m.overlay.querySelector('#af-q-type');
@@ -16866,57 +17003,807 @@ _formatQuizTime(sec) {
   return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 },
 
-  async itemAnalysis(root) {
-    const cls0 = State.activeClass;
-    const assessments = (await DB.getAll('assessments'))
-      .filter(a => Pages._assessmentAppliesToClass(a, cls0 ? cls0.id : null));
-    const sel = State.itemAnalysisAssessment || (assessments[0] ? assessments[0].id : null);
-    State.itemAnalysisAssessment = sel;
-    const results = await DB.getAll('assessmentResults');
-    const myResults = sel ? results.filter(r => r.assessmentId === sel) : [];
-    const a = sel ? assessments.find(x => x.id === sel) : null;
-    let itemRows = [];
-    if (a && a.questions) {
-      a.questions.forEach((q, i) => {
-        const correct = myResults.filter(r => (r.score||0) >= (q.points || 1)).length;
-        const total = myResults.length;
-        const pct = total ? Utils.round((correct/total)*100, 1) : 0;
-        let diff = '—';
-        if (total) {
-          if (pct >= 85) diff = 'Very Easy';
-          else if (pct >= 70) diff = 'Easy';
-          else if (pct >= 40) diff = 'Average';
-          else if (pct >= 20) diff = 'Difficult';
-          else diff = 'Very Difficult';
-        }
-        itemRows.push({ q: i+1, text: q.text, correct, total, pct, diff });
+async itemAnalysis(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'analysis', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+
+  const allAssessments = await DB.getAll('assessments');
+  const assessments = allAssessments.filter(a => Pages._assessmentAppliesToClass(a, cls.id));
+
+  if (!assessments.length) {
+    root.innerHTML = `
+      <div class="page-head">
+        <div><h2>Item Analysis</h2><p>Item-level performance and reliability analytics</p></div>
+      </div>
+      <div class="card">${UI.emptyState({
+        icon: 'analysis',
+        title: 'No assessments yet',
+        message: 'Create an assessment and record learner scores to unlock item-level analysis.',
+        actionLabel: '+ New Assessment',
+        actionFn: 'Pages.openAssessmentModal()'
+      })}</div>`;
+    return;
+  }
+
+  // ---- Persistent selection ----
+  if (!State.itemAnalysisAssessment || !assessments.find(a => a.id === State.itemAnalysisAssessment)) {
+    State.itemAnalysisAssessment = assessments[0].id;
+  }
+  const selId = State.itemAnalysisAssessment;
+  const assessment = assessments.find(a => a.id === selId);
+
+  const allResults = await DB.getAll('assessmentResults');
+  const results = allResults.filter(r => r.assessmentId === selId);
+
+  const data = Pages._itemAnalysisCompute(assessment, results, cls);
+  root.innerHTML = Pages._itemAnalysisRenderHTML(assessment, assessments, data, cls);
+  Pages._itemAnalysisBind(root, data, assessment, cls);
+},
+
+_itemAnalysisCompute(assessment, results) {
+  const questions = (assessment && assessment.questions) || [];
+  const k = questions.length;
+  const n = results.length;
+
+  // ── Per-item response data available? ──
+  const withDetails = results.filter(r =>
+    Array.isArray(r.omrDetails) && r.omrDetails.length === k
+  );
+  const hasPerItem = withDetails.length > 0;
+
+  // ── Aggregate scores for the distribution ──
+  const percentages = results
+    .map(r => {
+      const s = Number(r.score) || 0;
+      const m = Number(r.maxScore) || 0;
+      if (m > 0) return (s / m) * 100;
+      const p = Number(r.percentage);
+      return isNaN(p) ? null : p;
+    })
+    .filter(p => p !== null && p > 0);
+
+  const avg     = percentages.length ? Utils.round(Utils.avg(percentages), 1) : 0;
+  const median  = percentages.length ? Utils.round(Utils.median(percentages), 1) : 0;
+  const stddev  = percentages.length ? Utils.round(Pages._perfStdDev(percentages), 1) : 0;
+  const highest = percentages.length ? Utils.round(Math.max(...percentages), 1) : 0;
+  const lowest  = percentages.length ? Utils.round(Math.min(...percentages), 1) : 0;
+  const passing = (GRADING_POLICIES[assessment.gradingPolicyVersion]?.passingGrade) || 75;
+  const passed  = percentages.filter(p => p >= passing).length;
+  const passRate = percentages.length ? Utils.round((passed / percentages.length) * 100, 1) : 0;
+
+  // ── Score distribution buckets ──
+  const buckets = [
+    { label: '90–100',   range: 'Advancing',    min: 90, max: 100.01, count: 0, tone: 'green' },
+    { label: '80–89',    range: 'Benchmarking', min: 80, max: 90,     count: 0, tone: 'blue'  },
+    { label: '70–79',    range: 'Connecting',   min: 70, max: 80,     count: 0, tone: 'blue'  },
+    { label: '60–69',    range: 'Developing',   min: 60, max: 70,     count: 0, tone: 'amber' },
+    { label: 'Below 60', range: 'Emerging',     min: 0,  max: 60,     count: 0, tone: 'red'   }
+  ];
+  percentages.forEach(p => {
+    const b = buckets.find(x => p >= x.min && p < x.max);
+    if (b) b.count++;
+  });
+
+  // ── Per-item analysis ──
+  let itemStats = [];
+  let kr20 = null;
+
+  if (hasPerItem) {
+    // Sort learners by total correct count, then split 27 / 27.
+    const learnerData = withDetails.map(r => {
+      let totalCorrect = 0;
+      r.omrDetails.forEach(d => { if (d.correct) totalCorrect++; });
+      return { learnerId: r.learnerId, totalCorrect, details: r.omrDetails };
+    });
+    learnerData.sort((a, b) => b.totalCorrect - a.totalCorrect);
+
+    const groupSize = Math.max(1, Math.round(learnerData.length * 0.27));
+    const upperGroup = learnerData.slice(0, groupSize);
+    const lowerGroup = learnerData.slice(-groupSize);
+
+    itemStats = questions.map((q, i) => {
+      const total = learnerData.length;
+      const correct = learnerData.filter(ld => ld.details[i] && ld.details[i].correct).length;
+      const pct = total ? Utils.round((correct / total) * 100, 1) : 0;
+
+      // Difficulty band
+      let diffLabel, diffTone;
+      if (!total)         { diffLabel = 'No data';         diffTone = 'muted'; }
+      else if (pct >= 85) { diffLabel = 'Very Easy';       diffTone = 'green'; }
+      else if (pct >= 70) { diffLabel = 'Easy';            diffTone = 'blue';  }
+      else if (pct >= 40) { diffLabel = 'Average';         diffTone = 'blue';  }
+      else if (pct >= 20) { diffLabel = 'Difficult';       diffTone = 'amber'; }
+      else                { diffLabel = 'Very Difficult';  diffTone = 'red';   }
+
+      // Discrimination index (upper 27% minus lower 27%)
+      const upperCorrect = upperGroup.filter(ld => ld.details[i] && ld.details[i].correct).length;
+      const lowerCorrect = lowerGroup.filter(ld => ld.details[i] && ld.details[i].correct).length;
+      const D = groupSize > 0 ? (upperCorrect - lowerCorrect) / groupSize : 0;
+      const dRound = Utils.round(D, 2);
+
+      let discQuality, discTone;
+      if (total < 5)           { discQuality = 'Insufficient'; discTone = 'muted'; }
+      else if (dRound >= 0.40) { discQuality = 'Excellent';    discTone = 'green'; }
+      else if (dRound >= 0.30) { discQuality = 'Good';         discTone = 'blue';  }
+      else if (dRound >= 0.20) { discQuality = 'Acceptable';   discTone = 'blue';  }
+      else if (dRound >= 0.10) { discQuality = 'Marginal';     discTone = 'amber'; }
+      else if (dRound >= 0)    { discQuality = 'Poor';         discTone = 'red';   }
+      else                     { discQuality = 'Faulty';       discTone = 'red';   }
+
+      // Verdict
+      let verdict, verdictTone;
+      if (total < 5)                             { verdict = 'Insufficient data'; verdictTone = 'muted'; }
+      else if (dRound < 0.10)                    { verdict = 'Review or revise';  verdictTone = 'red';   }
+      else if (pct >= 90)                        { verdict = 'Too easy';          verdictTone = 'amber'; }
+      else if (pct <= 20)                        { verdict = 'Too hard';          verdictTone = 'amber'; }
+      else if (dRound >= 0.30 && pct <= 85)      { verdict = 'Keep as is';        verdictTone = 'green'; }
+      else                                       { verdict = 'Acceptable';        verdictTone = 'blue';  }
+
+      // Distractor analysis (Multiple Choice only)
+      let distractors = [];
+      if ((q.type || '').toLowerCase() === 'multiple choice' && Array.isArray(q.choices)) {
+        const keyText = String(q.answer || '').trim().toLowerCase();
+        const counts = new Array(q.choices.length).fill(0);
+        let responded = 0;
+        learnerData.forEach(ld => {
+          const d = ld.details[i];
+          if (!d) return;
+          if (d.detected === null || d.detected === undefined) return;
+          if (d.detected < 0 || d.detected >= counts.length) return;
+          counts[d.detected]++;
+          responded++;
+        });
+        q.choices.forEach((c, ci) => {
+          const clean = Utils.stripChoiceLetter(String(c || ''), ci);
+          const isKey = clean.trim().toLowerCase() === keyText;
+          distractors.push({
+            letter: String.fromCharCode(65 + ci),
+            text: clean,
+            count: counts[ci],
+            pct: responded ? Utils.round((counts[ci] / responded) * 100, 1) : 0,
+            isKey
+          });
+        });
+      }
+
+      return {
+        index: i, number: i + 1,
+        text: q.text || '',
+        type: q.type || '',
+        points: Number(q.points) || 1,
+        correct, total, pct,
+        diffLabel, diffTone,
+        discrimination: dRound, discQuality, discTone,
+        upperCorrect, lowerCorrect,
+        verdict, verdictTone,
+        distractors
+      };
+    });
+
+    // ── KR-20 (Kuder–Richardson Formula 20) ──
+    // Valid only when every item is dichotomous (1 point each) and
+    // the class has enough learners for a stable variance estimate.
+    const allDichotomous = questions.every(q => (Number(q.points) || 1) === 1);
+    if (allDichotomous && k >= 2 && learnerData.length >= 5) {
+      const pValues = itemStats.map(s => s.correct / Math.max(1, s.total));
+      const sumPQ = pValues.reduce((acc, p) => acc + p * (1 - p), 0);
+      const totals = learnerData.map(ld => ld.totalCorrect);
+      const meanTotal = Utils.avg(totals);
+      const variance = totals.reduce((acc, t) => acc + Math.pow(t - meanTotal, 2), 0) / totals.length;
+      if (variance > 0.01) {
+        const raw = (k / (k - 1)) * (1 - sumPQ / variance);
+        kr20 = Utils.round(Utils.clamp(raw, 0, 1), 3);
+      }
+    }
+  }
+
+  // ── Auto-generated insights ──
+  const insights = [];
+  if (hasPerItem && itemStats.length) {
+    const negative      = itemStats.filter(s => s.discrimination < 0 && s.total >= 5);
+    const tooEasy       = itemStats.filter(s => s.pct >= 90 && s.total > 0);
+    const tooHard       = itemStats.filter(s => s.pct <= 20 && s.total > 0);
+    const lowDisc       = itemStats.filter(s =>
+      s.discrimination >= 0 && s.discrimination < 0.20 && s.total >= 5 && !negative.includes(s)
+    );
+    const weakDistract  = itemStats.filter(s =>
+      s.distractors.length >= 3 &&
+      s.distractors.filter(d => !d.isKey && d.count === 0).length >= 2
+    );
+
+    if (negative.length) {
+      insights.push({
+        tone: 'danger', icon: 'alert',
+        title: `${negative.length} item${negative.length === 1 ? '' : 's'} with negative discrimination`,
+        text: `Items ${negative.map(x => x.number).join(', ')} were answered correctly more often by the LOWER-performing group than the upper group. This almost always means the answer key is wrong or the question is confusing. Check these first.`
       });
     }
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Item Analysis</h2><p>Analyze assessment items</p></div></div>
-      <div class="card mb-16">
-        <div class="form-group"><label>Select Assessment</label>
-          <select class="form-control" id="item-assess-select">
-            ${assessments.length === 0 ? '<option>No assessments</option>' : assessments.map(x => `<option value="${Utils.attr(x.id)}" ${x.id===sel?'selected':''}>${Utils.esc(x.title)}</option>`).join('')}
-          </select></div>
+    if (tooEasy.length) {
+      insights.push({
+        tone: 'warning', icon: 'trending',
+        title: `${tooEasy.length} item${tooEasy.length === 1 ? '' : 's'} too easy`,
+        text: `Items ${tooEasy.map(x => x.number).join(', ')} had 90% or higher correct response. Consider replacing them with more challenging items — they contribute little to distinguishing learners.`
+      });
+    }
+    if (tooHard.length) {
+      insights.push({
+        tone: 'warning', icon: 'alert',
+        title: `${tooHard.length} item${tooHard.length === 1 ? '' : 's'} too difficult`,
+        text: `Items ${tooHard.map(x => x.number).join(', ')} were answered correctly by 20% or fewer learners. Verify the item was taught and that the wording is unambiguous.`
+      });
+    }
+    if (lowDisc.length) {
+      insights.push({
+        tone: 'info', icon: 'analysis',
+        title: `${lowDisc.length} item${lowDisc.length === 1 ? '' : 's'} with low discrimination`,
+        text: `Items ${lowDisc.map(x => x.number).join(', ')} were answered similarly by high and low performers — they aren't differentiating learners well.`
+      });
+    }
+    if (weakDistract.length) {
+      insights.push({
+        tone: 'info', icon: 'list',
+        title: `${weakDistract.length} item${weakDistract.length === 1 ? '' : 's'} with unused distractors`,
+        text: `Items ${weakDistract.map(x => x.number).join(', ')} have at least two answer options that no learner selected. Replace them with plausible alternatives so they earn their place.`
+      });
+    }
+    if (!insights.length) {
+      insights.push({
+        tone: 'success', icon: 'checkCircle',
+        title: 'Assessment is well-balanced',
+        text: 'Difficulty is spread across the range, discrimination is acceptable on every item, and the distractors are earning their keep. No revisions needed.'
+      });
+    }
+  } else if (results.length > 0) {
+    insights.push({
+      tone: 'info', icon: 'camera',
+      title: 'Scan answer sheets for the full breakdown',
+      text: 'This assessment has aggregate scores only. To unlock per-item difficulty, discrimination, and distractor analysis, scan learner answer sheets with the OMR scanner. Open the Assessment Builder → click the scanner icon on this assessment.'
+    });
+  }
+
+  return {
+    hasPerItem,
+    questions, results,
+    n, k,
+    avg, median, stddev, highest, lowest,
+    passing, passed, passRate,
+    buckets, itemStats, kr20,
+    insights
+  };
+},
+_itemAnalysisRenderHTML(assessment, assessments, data, cls) {
+  const esc = Utils.esc;
+
+  // Interpret KR-20 against the conventional reliability bands.
+  const kr20Band = (() => {
+    if (data.kr20 === null) return { label: 'Not available', tone: 'muted' };
+    if (data.kr20 >= 0.90) return { label: 'Excellent',  tone: 'green' };
+    if (data.kr20 >= 0.80) return { label: 'Good',       tone: 'blue'  };
+    if (data.kr20 >= 0.70) return { label: 'Acceptable', tone: 'blue'  };
+    if (data.kr20 >= 0.60) return { label: 'Questionable', tone: 'amber' };
+    return { label: 'Poor', tone: 'red' };
+  })();
+
+  const hasResults = data.results.length > 0;
+
+  return `
+    <div class="page-head">
+      <div>
+        <h2>Item Analysis</h2>
+        <p>Psychometric breakdown — difficulty, discrimination, reliability, and distractor quality</p>
       </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="ia-export" ${hasResults ? '' : 'disabled'}>
+          ${icon('download')} Export CSV
+        </button>
+        <button class="btn btn-outline" id="ia-print" ${hasResults ? '' : 'disabled'}>
+          ${icon('printer')} Print Report
+        </button>
+      </div>
+    </div>
+
+    <!-- ════════════ HERO ════════════ -->
+    <div class="item-hero">
+      <div class="item-hero-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"/>
+          <rect x="7"  y="11" width="3" height="6" rx="1"/>
+          <rect x="12" y="7"  width="3" height="10" rx="1"/>
+          <rect x="17" y="13" width="3" height="4" rx="1"/>
+        </svg>
+      </div>
+      <div class="item-hero-body">
+        <div class="item-hero-eyebrow">${data.k} items · ${data.n} submission${data.n === 1 ? '' : 's'}</div>
+        <div class="item-hero-title">${esc(assessment.title || 'Assessment')}</div>
+        <div class="item-hero-meta">
+          ${esc(cls.gradeLevel)} – ${esc(cls.section)}
+          <span class="dot">·</span>
+          ${data.hasPerItem
+            ? '<span style="color:#86EFAC;font-weight:700;">Per-item data</span>'
+            : '<span style="color:#FDE68A;font-weight:700;">Aggregate scores only</span>'}
+        </div>
+      </div>
+      <select class="form-control" id="ia-assessment-select" aria-label="Select assessment">
+        ${assessments.map(a => `
+          <option value="${Utils.attr(a.id)}" ${a.id === assessment.id ? 'selected' : ''}>
+            ${esc(a.title || 'Untitled')}
+          </option>`).join('')}
+      </select>
+    </div>
+
+    ${!hasResults ? `
+      <div class="card">${UI.emptyState({
+        icon: 'chart',
+        title: 'No submissions yet',
+        message: 'Record learner scores in the Gradebook (or scan answer sheets via the Assessment Builder) to unlock analysis.',
+        actionLabel: 'Open Gradebook',
+        actionFn: "App.navigate('gradebook')"
+      })}</div>
+    ` : `
+
+    <!-- ════════════ KPI ROW ════════════ -->
+    <div class="grid grid-4 mb-16">
+      <div class="item-kpi" data-kpi-tone="blue">
+        <div class="item-kpi-icon">${icon('users')}</div>
+        <div class="item-kpi-value">${data.n}</div>
+        <div class="item-kpi-label">Submissions</div>
+        <div class="item-kpi-hint">of ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'}</div>
+      </div>
+
+      <div class="item-kpi" data-kpi-tone="${data.avg >= 80 ? 'green' : data.avg >= 70 ? 'blue' : 'amber'}">
+        <div class="item-kpi-icon">${icon('trending')}</div>
+        <div class="item-kpi-value">${data.avg}<span class="unit">%</span></div>
+        <div class="item-kpi-label">Class Average</div>
+        <div class="item-kpi-hint">Median ${data.median}% · σ ${data.stddev}</div>
+      </div>
+
+      <div class="item-kpi" data-kpi-tone="${data.passRate >= 85 ? 'green' : data.passRate >= 70 ? 'amber' : 'red'}">
+        <div class="item-kpi-icon">${icon('checkCircle')}</div>
+        <div class="item-kpi-value">${data.passRate}<span class="unit">%</span></div>
+        <div class="item-kpi-label">Passing Rate</div>
+        <div class="item-kpi-hint">${data.passed} of ${data.n} ≥ ${data.passing}</div>
+      </div>
+
+      <div class="item-kpi" data-kpi-tone="${kr20Band.tone}">
+        <div class="item-kpi-icon">${icon('shield')}</div>
+        <div class="item-kpi-value">${data.kr20 !== null ? data.kr20.toFixed(3) : '—'}</div>
+        <div class="item-kpi-label">Reliability (KR-20)</div>
+        <div class="item-kpi-hint">${kr20Band.label}${data.kr20 === null && data.hasPerItem ? ' · needs 1-pt items' : ''}</div>
+      </div>
+    </div>
+
+    <!-- ════════════ DISTRIBUTION + SPREAD ════════════ -->
+    <div class="grid grid-2 mb-16" style="align-items:start;">
       <div class="card">
-        ${!a ? UI.emptyState({icon:'analysis', title:'No assessment selected', message:'Create an assessment to analyze items.'}) :
-          itemRows.length === 0 ? '<p class="text-muted text-sm">No questions in this assessment.</p>' :
-          `<div class="table-wrap"><table class="data-table">
-            <thead><tr><th>#</th><th>Question</th><th>Correct</th><th>Total</th><th>% Correct</th><th>Difficulty</th></tr></thead>
-            <tbody>${itemRows.map(r => `<tr>
-              <td>${r.q}</td><td>${Utils.esc(r.text)}</td><td>${r.correct}</td><td>${r.total}</td><td>${r.pct}%</td>
-              <td><span class="badge ${r.diff.includes('Easy') ? 'badge-success' : r.diff.includes('Difficult') ? 'badge-danger' : 'badge-warning'}">${r.diff}</span></td>
-            </tr>`).join('')}</tbody>
-          </table></div>`}
-        <div class="alert alert-info mt-16">${icon('info')}<div>
-          <strong>Difficulty Index</strong> is the percentage of learners who answered correctly. Interpretation: ≥85% Very Easy · 70-84% Easy · 40-69% Average · 20-39% Difficult · &lt;20% Very Difficult.
-        </div></div>
-      </div>`;
-    const selEl = root.querySelector('#item-assess-select');
-    if (selEl) selEl.addEventListener('change', () => { State.itemAnalysisAssessment = selEl.value; App.navigate('item-analysis'); });
-  },
+        <div class="card-head">
+          <h3>Score Distribution</h3>
+          <span class="text-xs text-muted">${data.n} learner${data.n === 1 ? '' : 's'}</span>
+        </div>
+        <div class="item-dist-list">
+          ${data.buckets.map(b => {
+            const pct = data.n ? Math.round((b.count / data.n) * 100) : 0;
+            return `
+              <div class="item-dist-row" data-tone="${b.tone}">
+                <div class="item-dist-info">
+                  <span class="item-dist-label">${esc(b.range)}</span>
+                  <span class="item-dist-range">${esc(b.label)}</span>
+                </div>
+                <div class="item-dist-bar"><div style="width:${pct}%"></div></div>
+                <div class="item-dist-count">${b.count} <span class="item-dist-pct">(${pct}%)</span></div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Score Spread</h3>
+          <span class="text-xs text-muted">Range and central tendency</span>
+        </div>
+        ${(() => {
+          // Visual spread bar between lowest and highest, with markers
+          // for the mean and median.
+          const lo = Math.max(0, Math.floor(data.lowest) - 5);
+          const hi = Math.min(100, Math.ceil(data.highest) + 5);
+          const span = Math.max(1, hi - lo);
+          const xFor = (v) => Math.round(((v - lo) / span) * 100);
+          return `
+            <div class="item-spread">
+              <div class="item-spread-bar">
+                <div class="item-spread-track"></div>
+                <div class="item-spread-fill"
+                     style="left:${xFor(data.lowest)}%;width:${xFor(data.highest) - xFor(data.lowest)}%"></div>
+                <div class="item-spread-marker item-spread-median"
+                     style="left:${xFor(data.median)}%"
+                     title="Median: ${data.median}%"></div>
+                <div class="item-spread-marker item-spread-mean"
+                     style="left:${xFor(data.avg)}%"
+                     title="Mean: ${data.avg}%"></div>
+                <div class="item-spread-passing"
+                     style="left:${xFor(data.passing)}%"
+                     title="Passing: ${data.passing}%"></div>
+              </div>
+              <div class="item-spread-axis">
+                <span>${lo}</span>
+                <span>${hi}</span>
+              </div>
+              <div class="item-spread-legend">
+                <span><i style="background:var(--deped-blue);border-radius:50%;"></i> Mean <strong>${data.avg}%</strong></span>
+                <span><i style="background:var(--accent-gold);border-radius:50%;"></i> Median <strong>${data.median}%</strong></span>
+                <span><i style="background:var(--danger);border-radius:50%;"></i> Passing <strong>${data.passing}%</strong></span>
+              </div>
+              <div class="item-spread-stats">
+                <div><span class="lbl">Lowest</span><span class="val">${data.lowest}%</span></div>
+                <div><span class="lbl">Highest</span><span class="val">${data.highest}%</span></div>
+                <div><span class="lbl">Std Dev</span><span class="val">${data.stddev}</span></div>
+              </div>
+            </div>`;
+        })()}
+      </div>
+    </div>
+
+    <!-- ════════════ ITEM BREAKDOWN ════════════ -->
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>Item Breakdown</h3>
+        <div class="flex gap-8" style="align-items:center;flex-wrap:wrap;">
+          <span class="text-xs text-muted">
+            ${data.hasPerItem ? 'Click a row for distractor analysis' : 'Aggregate scores only'}
+          </span>
+        </div>
+      </div>
+
+      ${!data.hasPerItem ? `
+        <div class="item-no-detail">
+          ${icon('camera')}
+          <div>
+            <div class="item-no-detail-title">Per-item data not yet available</div>
+            <p class="item-no-detail-text">
+              This assessment has been graded with aggregate scores only.
+              To see difficulty, discrimination, and distractor analysis for each item,
+              scan learner answer sheets with the OMR scanner.
+            </p>
+            <button class="btn btn-primary btn-sm" id="ia-goto-omr">
+              ${icon('scan')} Open Assessment Builder
+            </button>
+          </div>
+        </div>
+      ` : `
+        <div class="table-wrap">
+          <table class="item-table">
+            <thead>
+              <tr>
+                <th style="width:40px;">#</th>
+                <th>Question</th>
+                <th style="width:90px;text-align:center;">Correct</th>
+                <th style="width:150px;">Difficulty</th>
+                <th style="width:150px;">Discrimination</th>
+                <th style="width:130px;">Verdict</th>
+                <th style="width:30px;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.itemStats.map(s => `
+                <tr class="item-row" data-item-toggle="${s.index}">
+                  <td class="item-num">${s.number}</td>
+                  <td class="item-stem" title="${Utils.attr(s.text)}">
+                    ${esc(s.text.length > 110 ? s.text.slice(0, 108) + '…' : s.text)}
+                  </td>
+                  <td class="item-correct">
+                    <strong>${s.correct}</strong><span class="of">/</span>${s.total}
+                  </td>
+                  <td class="item-diff">
+                    <div class="item-diff-bar" data-tone="${s.diffTone}">
+                      <div style="width:${s.pct}%"></div>
+                    </div>
+                    <div class="item-diff-label" data-tone="${s.diffTone}">
+                      ${esc(s.diffLabel)} · <strong>${s.pct}%</strong>
+                    </div>
+                  </td>
+                  <td class="item-disc">
+                    <span class="item-disc-value" data-tone="${s.discTone}">
+                      ${s.total >= 5 ? s.discrimination.toFixed(2) : '—'}
+                    </span>
+                    <span class="item-disc-label" data-tone="${s.discTone}">${esc(s.discQuality)}</span>
+                  </td>
+                  <td class="item-verdict">
+                    <span class="item-verdict-badge" data-tone="${s.verdictTone}">
+                      ${esc(s.verdict)}
+                    </span>
+                  </td>
+                  <td class="item-chev">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M6 9l6 6 6-6"/>
+                    </svg>
+                  </td>
+                </tr>
+                <tr class="item-detail-row" data-item-detail="${s.index}" hidden>
+                  <td colspan="7">
+                    <div class="item-detail-grid">
+                      ${s.distractors.length ? `
+                        <div class="item-detail-col">
+                          <div class="item-detail-label">Response Distribution</div>
+                          <div class="item-distractors">
+                            ${s.distractors.map(d => `
+                              <div class="item-distractor ${d.isKey ? 'is-key' : ''}">
+                                <span class="item-distractor-letter">${esc(d.letter)}</span>
+                                <div class="item-distractor-body">
+                                  <div class="item-distractor-text" title="${Utils.attr(d.text)}">
+                                    ${esc(d.text.length > 90 ? d.text.slice(0, 88) + '…' : d.text)}
+                                    ${d.isKey ? '<span class="item-distractor-key">✓ key</span>' : ''}
+                                  </div>
+                                  <div class="item-distractor-bar">
+                                    <div style="width:${d.pct}%"></div>
+                                  </div>
+                                </div>
+                                <span class="item-distractor-count">
+                                  ${d.count}<span class="of">/</span>${s.total}
+                                </span>
+                              </div>`).join('')}
+                          </div>
+                          ${s.distractors.filter(d => !d.isKey && d.count === 0).length >= 2
+                            ? `<div class="item-warning">
+                                 ${icon('alert')}
+                                 <span>${s.distractors.filter(d => !d.isKey && d.count === 0).length} distractors unused — consider replacing them.</span>
+                               </div>`
+                            : ''}
+                        </div>
+                        <div class="item-detail-col item-detail-side">
+                          <div class="item-detail-row">
+                            <span class="lbl">Points</span>
+                            <span class="val">${s.points}</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Difficulty Index (p)</span>
+                            <span class="val">${s.pct}%</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Upper 27% correct</span>
+                            <span class="val">${s.upperCorrect}</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Lower 27% correct</span>
+                            <span class="val">${s.lowerCorrect}</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Discrimination (D)</span>
+                            <span class="val" data-tone="${s.discTone}">${s.discrimination.toFixed(2)}</span>
+                          </div>
+                          <div class="item-detail-hint">
+                            <strong>Difficulty bands:</strong> ≥85 very easy · 70–84 easy · 40–69 average · 20–39 difficult · &lt;20 very difficult.<br>
+                            <strong>Discrimination:</strong> ≥0.40 excellent · 0.30–0.39 good · 0.20–0.29 acceptable · 0.10–0.19 marginal · &lt;0.10 review.
+                          </div>
+                        </div>
+                      ` : `
+                        <div class="item-detail-col">
+                          <div class="item-detail-label">Response Distribution</div>
+                          <p class="text-sm text-muted" style="margin:8px 0 0;">
+                            Not available for ${esc(s.type || 'this item type')}. Distractor analysis requires a multiple-choice item.
+                          </p>
+                        </div>
+                        <div class="item-detail-col item-detail-side">
+                          <div class="item-detail-row">
+                            <span class="lbl">Points</span>
+                            <span class="val">${s.points}</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Difficulty Index (p)</span>
+                            <span class="val">${s.pct}%</span>
+                          </div>
+                          <div class="item-detail-row">
+                            <span class="lbl">Discrimination (D)</span>
+                            <span class="val" data-tone="${s.discTone}">${s.discrimination.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      `}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <!-- ════════════ INSIGHTS ════════════ -->
+    ${data.insights.length ? `
+      <div class="card">
+        <div class="card-head">
+          <h3>Insights</h3>
+          <span class="text-xs text-muted">Auto-generated from this assessment's data</span>
+        </div>
+        <div class="item-insights">
+          ${data.insights.map(i => `
+            <div class="item-insight" data-tone="${i.tone}">
+              <div class="item-insight-icon">${icon(i.icon)}</div>
+              <div class="item-insight-body">
+                <div class="item-insight-title">${esc(i.title)}</div>
+                <div class="item-insight-text">${esc(i.text)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    `}
+  `;
+},
+
+_itemAnalysisBind(root, data, assessment, cls) {
+  // Assessment switcher
+  const sel = root.querySelector('#ia-assessment-select');
+  if (sel) sel.onchange = () => {
+    State.itemAnalysisAssessment = sel.value;
+    App.navigate('item-analysis');
+  };
+
+  // Row expander
+  root.querySelectorAll('[data-item-toggle]').forEach(row => {
+    row.onclick = () => {
+      const idx = row.dataset.itemToggle;
+      const detail = root.querySelector(`[data-item-detail="${idx}"]`);
+      if (!detail) return;
+      const isOpen = !detail.hasAttribute('hidden');
+      detail.toggleAttribute('hidden', isOpen);
+      row.classList.toggle('is-open', !isOpen);
+    };
+  });
+
+  // CSV export
+  const exportBtn = root.querySelector('#ia-export');
+  if (exportBtn) exportBtn.onclick = () => Pages._itemAnalysisExportCSV(assessment, data);
+
+  // Print
+  const printBtn = root.querySelector('#ia-print');
+  if (printBtn) printBtn.onclick = () => Pages._itemAnalysisPrint(assessment, data, cls);
+
+  // "Open Assessment Builder" for the no-detail state
+  const gotoOmr = root.querySelector('#ia-goto-omr');
+  if (gotoOmr) gotoOmr.onclick = () => App.navigate('assessment-builder');
+},
+_itemAnalysisExportCSV(assessment, data) {
+  if (!data.results.length) { UI.toast('Nothing to export.', 'warning'); return; }
+
+  const rows = data.hasPerItem
+    ? data.itemStats.map(s => ({
+        '#':          s.number,
+        'Question':   s.text,
+        'Type':       s.type,
+        'Points':     s.points,
+        'Correct':    s.correct,
+        'Total':      s.total,
+        'Difficulty %': s.pct,
+        'Difficulty': s.diffLabel,
+        'Discrimination (D)': s.total >= 5 ? s.discrimination : '',
+        'Discrimination Quality': s.total >= 5 ? s.discQuality : '',
+        'Verdict':    s.verdict
+      }))
+    : data.results.map((r, i) => {
+        const l = State.learners.find(x => x.id === r.learnerId);
+        return {
+          '#': i + 1,
+          'Learner': l ? Utils.fullName(l) : '—',
+          'Score': r.score || 0,
+          'Max': r.maxScore || 0,
+          'Percentage': Utils.round(Number(r.percentage) || 0, 1)
+        };
+      });
+
+  const safe = (assessment.title || 'assessment').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 60);
+  Utils.download(
+    `item-analysis-${safe}-${Utils.timestamp()}.csv`,
+    Utils.toCSV(rows),
+    'text/csv;charset=utf-8'
+  );
+  App.logActivity('Item analysis exported: ' + assessment.title, 'Reports');
+  UI.toast('CSV exported', 'success');
+},
+
+_itemAnalysisPrint(assessment, data, cls) {
+  if (!data.results.length) { UI.toast('Nothing to print.', 'warning'); return; }
+
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const esc = Utils.esc;
+
+  const itemRowsHTML = data.hasPerItem
+    ? data.itemStats.map(s => `
+        <tr>
+          <td style="text-align:center;">${s.number}</td>
+          <td>${esc(s.text)}</td>
+          <td style="text-align:center;">${s.correct}/${s.total}</td>
+          <td style="text-align:center;">${s.pct}%</td>
+          <td style="text-align:center;font-weight:700;color:${s.diffTone === 'green' ? '#198754' : s.diffTone === 'red' ? '#DC3545' : s.diffTone === 'amber' ? '#B45309' : '#0038A8'};">
+            ${esc(s.diffLabel)}
+          </td>
+          <td style="text-align:center;">${s.total >= 5 ? s.discrimination.toFixed(2) : '—'}</td>
+          <td style="text-align:center;">${esc(s.total >= 5 ? s.discQuality : '—')}</td>
+          <td style="text-align:center;">${esc(s.verdict)}</td>
+        </tr>`).join('')
+    : '';
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-header">
+      <h1>${esc(school.name || '')}</h1>
+      <p>${esc(school.address || '')} · SY ${esc(cls.schoolYear || State.schoolYear)}</p>
+      <div class="print-line"></div>
+      <h2 style="font-size:13pt;">Item Analysis Report</h2>
+      <p style="font-size:10pt;">${esc(assessment.title || '')} · ${esc(cls.gradeLevel)} – ${esc(cls.section)}</p>
+    </div>
+
+    <div class="print-meta">
+      <span>Teacher: ${esc(teacher.fullName || '—')}</span>
+      <span>Submissions: ${data.n}</span>
+      <span>Items: ${data.k}</span>
+      <span>${Utils.formatDate(Utils.todayISO())}</span>
+    </div>
+
+    <table style="margin-bottom:14px;">
+      <tr><th style="width:180px;">Class Average</th><td>${data.avg}%</td>
+          <th style="width:180px;">Median</th><td>${data.median}%</td>
+          <th style="width:180px;">Std Dev</th><td>${data.stddev}</td></tr>
+      <tr><th>Passing Rate</th><td>${data.passRate}%</td>
+          <th>Range</th><td>${data.lowest}% – ${data.highest}%</td>
+          <th>KR-20 Reliability</th><td>${data.kr20 !== null ? data.kr20 : 'Not available'}</td></tr>
+    </table>
+
+    ${data.hasPerItem ? `
+      <h3 style="font-size:11pt;margin:14px 0 6px;">Item Breakdown</h3>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:36px;">#</th>
+            <th>Question</th>
+            <th style="width:60px;">Correct</th>
+            <th style="width:60px;">Diff %</th>
+            <th style="width:90px;">Difficulty</th>
+            <th style="width:60px;">D</th>
+            <th style="width:90px;">Discrimination</th>
+            <th style="width:90px;">Verdict</th>
+          </tr>
+        </thead>
+        <tbody>${itemRowsHTML}</tbody>
+      </table>
+    ` : `
+      <h3 style="font-size:11pt;margin:14px 0 6px;">Score Distribution</h3>
+      <table>
+        <thead><tr><th>Band</th><th>Descriptor</th><th style="width:90px;">Count</th><th style="width:90px;">%</th></tr></thead>
+        <tbody>
+          ${data.buckets.map(b => `
+            <tr>
+              <td>${esc(b.label)}</td>
+              <td>${esc(b.range)}</td>
+              <td style="text-align:center;">${b.count}</td>
+              <td style="text-align:center;">${data.n ? Math.round((b.count / data.n) * 100) : 0}%</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    `}
+
+    <div class="print-footer">
+      <span>Generated by KlazAssist · Not an official DepEd system</span>
+      <span>${esc(Licensing.getReportSignatory(cls) || teacher.fullName || '')}</span>
+    </div>
+  `;
+
+  App.logActivity('Item analysis printed: ' + assessment.title, 'Reports');
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
+  });
+},
+
   async classPerformance(root) {
   const cls = State.activeClass;
   if (!cls) {
@@ -30696,7 +31583,7 @@ async quizManager(root) {
                     </h3>
                     ${isLive ? '<span class="badge badge-blue" style="font-size:10px;flex-shrink:0;">Live</span>' : ''}
                   </div>
-                    <p class="text-sm text-muted">
+                    <p class="quiz-card-meta text-sm text-muted">
                       ${qCount} question${qCount === 1 ? '' : 's'} · ${a.maxScore || 100} pts
                       ${hasTime ? ` · ${a.timeLimit} min limit` : ''}
                       ${(() => {
@@ -31561,21 +32448,26 @@ async masterlist(root) {
     </div>
 
     <!-- ==== Data quality banners ==== -->
-    ${duplicateLrnGroups.length ? `
-      <div class="alert alert-danger mb-16">
-        ${icon('alert')}
-        <div>
-          <strong>Duplicate LRNs detected.</strong> These LRNs appear more than once, often because a learner was
-          enrolled in more than one class or imported twice. Fixing them avoids SF1/SF2 rejection.
-          <div style="margin-top:8px;font-size:12px;line-height:1.8;">
-            ${duplicateLrnGroups.slice(0, 5).map(([lrn, arr]) => {
-              const names = arr.map(l => Utils.esc(Utils.fullName(l))).join(', ');
-              return `LRN <code style="font-family:monospace;">${Utils.esc(lrn)}</code> → ${names}`;
-            }).join('<br>')}
-            ${duplicateLrnGroups.length > 5 ? `<br>…and ${duplicateLrnGroups.length - 5} more` : ''}
-          </div>
+  ${duplicateLrnGroups.length ? `
+    <div class="alert alert-danger mb-16">
+      ${icon('alert')}
+      <div style="flex:1;min-width:0;">
+        <strong>Duplicate LRNs detected.</strong> These LRNs appear more than once, often because a learner was
+        enrolled in more than one class or imported twice. Fixing them avoids SF1/SF2 rejection.
+        <div style="margin-top:8px;font-size:12px;line-height:1.8;">
+          ${duplicateLrnGroups.slice(0, 5).map(([lrn, arr]) => {
+            const names = arr.map(l => Utils.esc(Utils.fullName(l))).join(', ');
+            return `LRN <code style="font-family:monospace;">${Utils.esc(lrn)}</code> → ${names}`;
+          }).join('<br>')}
+          ${duplicateLrnGroups.length > 5 ? `<br>…and ${duplicateLrnGroups.length - 5} more` : ''}
         </div>
-      </div>` : ''}
+        <div style="margin-top:14px;">
+          <button class="btn btn-danger btn-sm" id="ml-cleanup-dupes">
+            ${icon('trash')} Clean up ${duplicateLrnGroups.length} duplicate LRN${duplicateLrnGroups.length === 1 ? '' : 's'}
+          </button>
+        </div>
+      </div>
+    </div>` : ''}
 
     <!-- ==== Filters ==== -->
     <div class="card mb-16">
@@ -31730,6 +32622,8 @@ async masterlist(root) {
   // ---- Top actions ----
   root.querySelector('#ml-export-csv').onclick = () => Pages.exportMasterlistCSV(sorted);
   root.querySelector('#ml-print').onclick = () => Pages._printMasterlist(sorted, classById);
+  const cleanBtn = root.querySelector('#ml-cleanup-dupes');
+  if (cleanBtn) cleanBtn.onclick = () => Pages.openDuplicateLRNCleaner();
 },
 
 _clearMasterlistFilters() {
@@ -31807,6 +32701,396 @@ _printMasterlist(learners, classById) {
     // Clear only after the print dialog closes AND the DOM has settled.
     setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
   });
+},
+/* ============================================================================
+   DUPLICATE LRN CLEANER
+   ----------------------------------------------------------------------------
+   Finds every LRN with 2+ learner records, lets the teacher pick which one
+   survives, reassigns all foreign-key references (attendance, grades, SF9,
+   behavior, parent notes, Phil-IRI records) to the survivor, and deletes
+   the losers — all in a single review modal before any write happens.
+   ============================================================================ */
+openDuplicateLRNCleaner() {
+  (async () => {
+    const allLearners = await DB.getAll('learners');
+
+    // Group by LRN (case-insensitive, trimmed)
+    const groupsMap = new Map();
+    allLearners.forEach(l => {
+      const key = String(l.lrn || '').trim();
+      if (!key) return;
+      if (!groupsMap.has(key)) groupsMap.set(key, []);
+      groupsMap.get(key).push(l);
+    });
+
+    const groups = Array.from(groupsMap.entries())
+      .filter(([, arr]) => arr.length >= 2)
+      .map(([lrn, arr]) => ({ lrn, records: arr }))
+      .sort((a, b) => a.lrn.localeCompare(b.lrn));
+
+    if (!groups.length) {
+      UI.toast('No duplicate LRNs found.', 'success');
+      return;
+    }
+
+    // ── Helpers ──
+    // Score a record by how "rich" it is. Higher = better survivor.
+    const richnessOf = (l) => {
+      let score = 0;
+      if (l.photo) score += 20;
+      if (l.birthDate) score += 5;
+      if (l.sex) score += 5;
+      if (l.parentContact) score += 5;
+      if (l.guardian || l.parent) score += 5;
+      if (l.address || l.barangay) score += 5;
+      if (l.motherTongue) score += 2;
+      if (l.religion) score += 2;
+      if (l.medicalNotes) score += 2;
+      if (l.learnerEmail) score += 3;
+      return score;
+    };
+
+    // Default survivor = the richest, or the oldest on a tie.
+    const pickSurvivor = (arr) => {
+      const ranked = arr.slice().sort((a, b) => {
+        const sd = richnessOf(b) - richnessOf(a);
+        if (sd !== 0) return sd;
+        return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+      });
+      return ranked[0].id;
+    };
+
+    // Teacher's choice per group: { lrn: survivorId }
+    const choices = new Map();
+    groups.forEach(g => choices.set(g.lrn, pickSurvivor(g.records)));
+
+    // Which groups to actually process
+    const selected = new Set(groups.map(g => g.lrn));
+
+    // ── Render the review modal ──
+    const m = UI.modal({
+      title: `Duplicate LRN Cleanup · ${groups.length} group${groups.length === 1 ? '' : 's'}`,
+      size: 'modal-xl',
+      body: `
+        <div class="alert alert-info mb-16">
+          ${icon('info')}
+          <div>
+            For each LRN, choose which learner record to <strong>keep</strong>.
+            All attendance, grades, term grades, SF9 records, behavior logs,
+            and parent notes linked to the other copies will be reassigned to
+            the kept record before those copies are deleted.
+            <br><br>
+            <strong>This cannot be undone.</strong> Export a backup first if you're unsure.
+          </div>
+        </div>
+
+        <div class="flex gap-8 mb-12" style="flex-wrap:wrap;">
+          <button type="button" class="btn btn-sm btn-outline" id="dup-select-all">Select all groups</button>
+          <button type="button" class="btn btn-sm btn-outline" id="dup-select-none">Clear selection</button>
+          <button type="button" class="btn btn-sm btn-outline" id="dup-auto-pick">Auto-pick richest record</button>
+        </div>
+
+        <div id="dup-groups">
+          ${groups.map((g, gi) => `
+            <div class="dup-group" data-dup-lrn="${Utils.attr(g.lrn)}">
+              <label class="dup-group-head">
+                <input type="checkbox" class="dup-group-cb" data-lrn="${Utils.attr(g.lrn)}" checked>
+                <span class="dup-lrn">LRN ${Utils.esc(g.lrn)}</span>
+                <span class="dup-count">${g.records.length} records</span>
+              </label>
+              <div class="dup-records">
+                ${g.records.map(r => {
+                  const cls = State.classes.find(c => c.id === r.classId);
+                  const isSelected = choices.get(g.lrn) === r.id;
+                  const created = r.createdAt ? Utils.formatDate(r.createdAt) : '—';
+                  return `
+                    <label class="dup-record ${isSelected ? 'is-selected' : ''}">
+                      <input type="radio" name="dup-${Utils.attr(g.lrn)}" value="${Utils.attr(r.id)}"
+                             ${isSelected ? 'checked' : ''}
+                             data-lrn="${Utils.attr(g.lrn)}">
+                      <div class="dup-record-body">
+                        <div class="dup-record-name">${Utils.esc(Utils.fullName(r))}</div>
+                        <div class="dup-record-meta">
+                          Class: <strong>${cls ? Utils.esc(cls.gradeLevel + ' - ' + cls.section) : '(no class)'}</strong>
+                          · Created ${Utils.esc(created)}
+                          · ID <code style="font-family:monospace;font-size:10px;">${Utils.esc(r.id.slice(0, 14))}</code>
+                        </div>
+                        <div class="dup-record-tags">
+                          ${r.photo ? '<span class="dup-tag has">Photo</span>' : '<span class="dup-tag">No photo</span>'}
+                          ${r.birthDate ? '<span class="dup-tag has">DOB</span>' : ''}
+                          ${r.sex ? '<span class="dup-tag has">Sex</span>' : ''}
+                          ${(r.guardian || r.parent) ? '<span class="dup-tag has">Guardian</span>' : ''}
+                          ${r.parentContact ? '<span class="dup-tag has">Contact</span>' : ''}
+                          ${r.learnerEmail ? '<span class="dup-tag has">Email</span>' : ''}
+                        </div>
+                      </div>
+                      <span class="dup-record-badge">${richnessOf(r)}</span>
+                    </label>`;
+                }).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div id="dup-summary" class="dup-summary mt-16"></div>
+      `,
+      footer: `
+        <button class="btn btn-outline" data-close>Cancel</button>
+        <button class="btn btn-danger" id="dup-run">${icon('trash')} Merge &amp; Delete Duplicates</button>
+      `
+    });
+
+    const overlay = m.overlay;
+    const summaryEl = overlay.querySelector('#dup-summary');
+
+    // ── Summary line ──
+    const refreshSummary = () => {
+      const active = groups.filter(g => selected.has(g.lrn));
+      const toDelete = active.reduce((n, g) => n + (g.records.length - 1), 0);
+      summaryEl.innerHTML = active.length
+        ? `<strong>${active.length}</strong> group${active.length === 1 ? '' : 's'} selected ·
+           <strong>${toDelete}</strong> record${toDelete === 1 ? '' : 's'} will be deleted.`
+        : 'No groups selected.';
+    };
+
+    // ── Group checkbox ──
+    overlay.querySelectorAll('.dup-group-cb').forEach(cb => {
+      cb.onchange = () => {
+        if (cb.checked) selected.add(cb.dataset.lrn);
+        else selected.delete(cb.dataset.lrn);
+        overlay.querySelector(`[data-dup-lrn="${CSS.escape(cb.dataset.lrn)}"]`)
+          .classList.toggle('is-disabled', !cb.checked);
+        refreshSummary();
+      };
+    });
+
+    // ── Radio selection ──
+    overlay.querySelectorAll('input[type="radio"][data-lrn]').forEach(r => {
+      r.onchange = () => {
+        const lrn = r.dataset.lrn;
+        choices.set(lrn, r.value);
+        const groupEl = overlay.querySelector(`[data-dup-lrn="${CSS.escape(lrn)}"]`);
+        groupEl.querySelectorAll('.dup-record').forEach(el => {
+          el.classList.toggle('is-selected', el.contains(r));
+        });
+      };
+    });
+
+    // ── Bulk buttons ──
+    overlay.querySelector('#dup-select-all').onclick = () => {
+      groups.forEach(g => selected.add(g.lrn));
+      overlay.querySelectorAll('.dup-group-cb').forEach(cb => {
+        cb.checked = true;
+        overlay.querySelector(`[data-dup-lrn="${CSS.escape(cb.dataset.lrn)}"]`)
+          .classList.remove('is-disabled');
+      });
+      refreshSummary();
+    };
+    overlay.querySelector('#dup-select-none').onclick = () => {
+      selected.clear();
+      overlay.querySelectorAll('.dup-group-cb').forEach(cb => {
+        cb.checked = false;
+        overlay.querySelector(`[data-dup-lrn="${CSS.escape(cb.dataset.lrn)}"]`)
+          .classList.add('is-disabled');
+      });
+      refreshSummary();
+    };
+    overlay.querySelector('#dup-auto-pick').onclick = () => {
+      groups.forEach(g => {
+        const best = pickSurvivor(g.records);
+        choices.set(g.lrn, best);
+        const groupEl = overlay.querySelector(`[data-dup-lrn="${CSS.escape(g.lrn)}"]`);
+        groupEl.querySelectorAll('.dup-record').forEach(el => {
+          const r = el.querySelector('input[type="radio"]');
+          const on = r.value === best;
+          r.checked = on;
+          el.classList.toggle('is-selected', on);
+        });
+      });
+      UI.toast('Richest record picked for each group', 'info', 2000);
+    };
+
+    overlay.querySelector('[data-close]').onclick = m.close;
+
+    refreshSummary();
+
+    // ── Run ──
+    overlay.querySelector('#dup-run').onclick = async () => {
+      const active = groups.filter(g => selected.has(g.lrn));
+      if (!active.length) { UI.toast('Select at least one group.', 'warning'); return; }
+
+      const totalDelete = active.reduce((n, g) => n + (g.records.length - 1), 0);
+      const confirmed = await new Promise(resolve => {
+        UI.confirm({
+          title: 'Merge and delete duplicates?',
+          message: `
+            You are about to delete <strong>${totalDelete}</strong> record${totalDelete === 1 ? '' : 's'}
+            across <strong>${active.length}</strong> LRN group${active.length === 1 ? '' : 's'}.
+            Related attendance, grades, SF9 records, behavior logs, and parent notes
+            will be reassigned to the survivor in each group.
+            <br><br>
+            <strong>This cannot be undone.</strong>
+          `,
+          confirmText: 'Merge & delete',
+          confirmClass: 'btn-danger',
+          onConfirm: () => resolve(true)
+        });
+        setTimeout(() => { if (!document.querySelector('.modal-overlay.show')) resolve(false); }, 0);
+      });
+      if (!confirmed) return;
+
+      const btn = overlay.querySelector('#dup-run');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-sm" aria-hidden="true"></span> Working…';
+
+      try {
+        const result = await Pages._mergeDuplicateLRNs(active, choices);
+
+        m.close();
+        App.logActivity(
+          `Duplicate LRN cleanup: ${result.deleted} deleted, ${result.reassigned} related records reassigned`,
+          'Learners'
+        );
+        UI.toast(
+          `Cleanup complete — ${result.deleted} duplicate${result.deleted === 1 ? '' : 's'} removed, ${result.reassigned} records reassigned.`,
+          'success', 5000
+        );
+
+        await App.loadLearners();
+        App.navigate('masterlist');
+
+      } catch (e) {
+        console.error('[Dedupe] failed:', e);
+        btn.disabled = false;
+        btn.innerHTML = icon('trash') + ' Merge &amp; Delete Duplicates';
+        UI.toast('Cleanup failed: ' + (e.message || 'unknown error'), 'error', 7000);
+      }
+    };
+  })();
+},
+
+/* ---------------------------------------------------------------------------
+   Reassign foreign keys and delete duplicate learners.
+   `groups`   = [{ lrn, records: [learner, ...] }, ...]
+   `choices`  = Map(lrn -> survivorId)
+   --------------------------------------------------------------------------- */
+async _mergeDuplicateLRNs(groups, choices) {
+  // Stores that carry a learnerId foreign key. Those with `index: false`
+  // are scanned in full because they have no learnerId index.
+  const RELATED = [
+    { store: 'attendance',        field: 'learnerId', indexed: true  },
+    { store: 'assessmentResults', field: 'learnerId', indexed: true  },
+    { store: 'grades',            field: 'learnerId', indexed: true  },
+    { store: 'termGrades',        field: 'learnerId', indexed: true  },
+    { store: 'sf9Records',        field: 'learnerId', indexed: true  },
+    { store: 'behaviorLogs',      field: 'learnerId', indexed: true  },
+    { store: 'parentLogs',        field: 'learnerId', indexed: true  },
+    { store: 'notes',             field: 'learnerId', indexed: false },
+    { store: 'philIriRecords',    field: 'learnerId', indexed: false }
+  ];
+
+  // Collect every ID that will be deleted so we can scan in bulk.
+  const deleteIds = new Set();
+  const remap = new Map();   // loserId -> survivorId
+  groups.forEach(g => {
+    const survivorId = choices.get(g.lrn);
+    if (!survivorId) return;
+    g.records.forEach(r => {
+      if (r.id !== survivorId) {
+        deleteIds.add(r.id);
+        remap.set(r.id, survivorId);
+      }
+    });
+  });
+
+  if (!deleteIds.size) return { deleted: 0, reassigned: 0 };
+
+  // ── Reassign related records store by store ──
+  let reassigned = 0;
+
+  for (const { store, field, indexed } of RELATED) {
+    let rows;
+    try {
+      rows = indexed
+        ? await DB.getAll(store).catch(() => [])
+        : await DB.getAll(store).catch(() => []);
+    } catch (e) {
+      console.warn(`[Dedupe] Could not read ${store}:`, e);
+      continue;
+    }
+    if (!Array.isArray(rows) || !rows.length) continue;
+
+    const toWrite = [];
+    for (const row of rows) {
+      const oldId = row[field];
+      if (!oldId || !deleteIds.has(oldId)) continue;
+      const newId = remap.get(oldId);
+      if (!newId) continue;
+
+      // ── Term grades have a deterministic composite key.
+      //    If the survivor already has a term grade for the same
+      //    class/term/schoolYear, prefer the survivor and drop the loser.
+      if (store === 'termGrades') {
+        const collision = rows.find(other =>
+          other.id !== row.id &&
+          other[field] === newId &&
+          other.term === row.term &&
+          other.classId === row.classId &&
+          other.schoolYear === row.schoolYear
+        );
+        if (collision) continue;   // skip: survivor already has one
+      }
+
+      // ── Assessment results can also collide (learner + assessment).
+      if (store === 'assessmentResults') {
+        const collision = rows.find(other =>
+          other.id !== row.id &&
+          other[field] === newId &&
+          other.assessmentId === row.assessmentId
+        );
+        if (collision) continue;
+      }
+
+      // ── Attendance: same (learner, class, date).
+      if (store === 'attendance') {
+        const collision = rows.find(other =>
+          other.id !== row.id &&
+          other[field] === newId &&
+          other.date === row.date &&
+          other.classId === row.classId
+        );
+        if (collision) continue;
+      }
+
+      row[field] = newId;
+      row.updatedAt = new Date().toISOString();
+      toWrite.push(row);
+    }
+
+    if (toWrite.length) {
+      try {
+        await DB.bulkWrite(store, toWrite, 'put');
+        reassigned += toWrite.length;
+      } catch (e) {
+        console.warn(`[Dedupe] Could not reassign ${store}:`, e);
+      }
+    }
+  }
+
+  // ── Delete the duplicate learner records ──
+  let deleted = 0;
+  try {
+    await DB.bulkWrite('learners', [...deleteIds], 'delete');
+    deleted = deleteIds.size;
+  } catch (e) {
+    console.warn('[Dedupe] Bulk delete failed, falling back to per-row:', e);
+    for (const id of deleteIds) {
+      try { await DB.delete('learners', id); deleted++; } catch (e2) {}
+    }
+  }
+
+  DB._invalidate();
+  return { deleted, reassigned };
 },
 async exportMasterlistCSV(learners) {
   const all = learners && learners.length ? learners : (await DB.getAll('learners'));
@@ -34065,159 +35349,214 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
      template before submission, and treat this as a working aid, not a
      certified reproduction.
      ============================================================================ */
-  async sf1(root) {
-    if (!State.activeClass) {
-      root.innerHTML = `<div class="card">${UI.emptyState({icon:'users', title:'No class selected', message:'Create or select a class first.', actionLabel:'+ Create Class', actionFn:'App.openClassForm()'})}</div>`;
-      return;
-    }
-    const cls = State.activeClass;
-    const school = State.schools[0] || {};
-    const teacher = State.currentUser || {};
-    const sy = cls.schoolYear || State.schoolYear || '';
+async sf1(root) {
+  if (!State.activeClass) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
 
-    // Same buckets the SF1 exporter uses, via Utils.normalizeSex so
-    // both SF1-imported learners (M/F) and form-entered learners
-    // (Male/Female) land in the correct group.
-    const males = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
-    const females = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
-    const others = State.learners.filter(l => {
-      const n = Utils.normalizeSex(l.sex);
-      return n !== 'Male' && n !== 'Female';
-    });
-    const total = State.learners.length;
+  const cls     = State.activeClass;
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const sy      = cls.schoolYear || State.schoolYear || '';
 
-    // Validation — mirrors ValidationEngine.validateSF2/validateSF9 for
-    // consistency, but tailored to what SF1 actually needs.
-    const errors = [], warnings = [];
-    if (!school.name) errors.push('School Name is missing (Settings → School Profile).');
-    if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
-    if (!cls.gradeLevel || !cls.section) errors.push('Class grade level / section is incomplete.');
-    if (!total) warnings.push('This class has no learners.');
-    if (!school.region) warnings.push('Region is missing.');
-    if (!school.division) warnings.push('Division is missing.');
-    if (!school.schoolHead) warnings.push('School Head name is missing.');
-    if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing on this class.');
+  const males   = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+  const females = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+  const others  = State.learners.filter(l => {
+    const n = Utils.normalizeSex(l.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+  const total = State.learners.length;
 
-    // SF1 date format is mm-dd-yyyy, whereas our stored date is yyyy-mm-dd.
-    const birthForSF1 = (l) => {
-      if (!l.birthDate) return '';
-      const m = String(l.birthDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      return m ? `${m[2]}-${m[3]}-${m[1]}` : l.birthDate;
+  const errors = [], warnings = [];
+  if (!school.name)                      errors.push('School Name is missing (Settings → School Profile).');
+  if (!school.schoolId)                  errors.push('School ID is missing (Settings → School Profile).');
+  if (!cls.gradeLevel || !cls.section)   errors.push('Class grade level / section is incomplete.');
+  if (!total)                            warnings.push('This class has no learners.');
+  if (!school.region)                    warnings.push('Region is missing.');
+  if (!school.division)                  warnings.push('Division is missing.');
+  if (!school.schoolHead)                warnings.push('School Head name is missing.');
+  if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing on this class.');
+
+  /* ---- Formatters ---- */
+  const birthForSF1 = (l) => {
+    if (!l.birthDate) return '';
+    const m = String(l.birthDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[2]}-${m[3]}-${m[1]}` : l.birthDate;
+  };
+  const nameForSF1 = (l) => {
+    const last = (l.lastName || '').toUpperCase();
+    const given = [l.firstName, l.middleName].filter(Boolean).map(s => s.toUpperCase());
+    return given.length ? `${last}, ${given.join(', ')}` : last;
+  };
+  const sexLetter = (l) => {
+    const n = Utils.normalizeSex(l.sex);
+    return n === 'Male' ? 'M' : n === 'Female' ? 'F' : '';
+  };
+  const modalityForSF1 = (m) => {
+    if (!m) return '';
+    const map = {
+      'Face-to-Face': 'Face to Face',
+      'Blended Learning': 'Blended',
+      'Modular (Print)': 'Modular (Print)',
+      'Modular (Digital)': 'Modular (Digital)',
+      'Online Learning': 'Online',
+      'TV/Radio-Based Instruction': 'TV/Radio-Based',
+      'Homeschooling': 'Homeschooling',
+      'Alternative Learning System (ALS)': 'ALS'
     };
-    const nameForSF1 = (l) => {
-      const last = (l.lastName || '').toUpperCase();
-      const given = [l.firstName, l.middleName].filter(Boolean).map(s => s.toUpperCase());
-      return given.length ? `${last}, ${given.join(', ')}` : last;
-    };
-    const sexLetter = (l) => {
-      const n = Utils.normalizeSex(l.sex);
-      return n === 'Male' ? 'M' : n === 'Female' ? 'F' : '';
-    };
+    return map[m] || m;
+  };
 
-    let runningIdx = 0;
-    const learnerRowHTML = (l) => {
-      runningIdx++;
-      return `<tr>
-        <td style="text-align:center;">${runningIdx}</td>
-        <td style="font-family:ui-monospace,Consolas,monospace;font-size:11px;">${Utils.esc(l.lrn || '')}</td>
-        <td>${Utils.esc(nameForSF1(l))}</td>
-        <td style="text-align:center;">${sexLetter(l)}</td>
-        <td style="text-align:center;">${Utils.esc(birthForSF1(l))}</td>
-        <td style="text-align:center;">${Utils.esc(l.age || Utils.calcAge(l.birthDate) || '')}</td>
-        <td>${Utils.esc([l.barangay, l.municipality, l.province].filter(Boolean).join(', '))}</td>
-      </tr>`;
-    };
-    const totalRowHTML = (label, count) => `
-      <tr style="background:#eef3fa;">
-        <td style="text-align:center;font-weight:800;background:#dbe7fb;">${count}</td>
-        <td colspan="6" style="font-weight:700;letter-spacing:0.3px;">&lt;=== ${Utils.esc(label)} (${count})</td>
-      </tr>`;
-    const sectionRowHTML = (label, bg) => `
-      <tr>
-        <td colspan="7" style="background:${bg};font-weight:700;text-align:center;letter-spacing:1px;">${Utils.esc(label)}</td>
-      </tr>`;
+  /* ---- Row builders ---- */
+  let runningIdx = 0;
 
-    runningIdx = 0;
-    const maleRows = males.map(learnerRowHTML).join('');
-    const femaleRows = females.map(learnerRowHTML).join('');
-    const otherRows = others.map(learnerRowHTML).join('');
+  // Each <td> carries a class matching its column so the CSS can
+  // apply per-column rules (no-wrap vs wrap) without inline styles.
+  const learnerRowHTML = (l) => {
+    runningIdx++;
+    return `<tr>
+      <td class="sf1-c-idx" style="text-align:center;">${runningIdx}</td>
+      <td class="sf1-c-lrn">${Utils.esc(l.lrn || '')}</td>
+      <td class="sf1-c-name">${Utils.esc(nameForSF1(l))}</td>
+      <td class="sf1-c-sex" style="text-align:center;">${sexLetter(l)}</td>
+      <td class="sf1-c-birth" style="text-align:center;">${Utils.esc(birthForSF1(l))}</td>
+      <td class="sf1-c-age" style="text-align:center;">${Utils.esc(l.age || Utils.calcAge(l.birthDate) || '')}</td>
+      <td class="sf1-c-tongue">${Utils.esc(l.motherTongue || '')}</td>
+      <td class="sf1-c-ethnic">${Utils.esc(l.ethnicGroup || '')}</td>
+      <td class="sf1-c-religion">${Utils.esc(l.religion || '')}</td>
+      <td class="sf1-c-house">${Utils.esc(l.houseNo || '')}</td>
+      <td class="sf1-c-barangay">${Utils.esc(l.barangay || '')}</td>
+      <td class="sf1-c-municipality">${Utils.esc(l.municipality || '')}</td>
+      <td class="sf1-c-province">${Utils.esc(l.province || '')}</td>
+      <td class="sf1-c-father">${Utils.esc(l.father || '')}</td>
+      <td class="sf1-c-mother">${Utils.esc(l.mother || '')}</td>
+      <td class="sf1-c-guardian">${Utils.esc(l.guardian || '')}</td>
+      <td class="sf1-c-relationship">${Utils.esc(l.relationship || '')}</td>
+      <td class="sf1-c-contact">${Utils.esc(l.parentContact || '')}</td>
+      <td class="sf1-c-modality">${Utils.esc(modalityForSF1(l.learningModality))}</td>
+      <td class="sf1-c-remarks">${Utils.esc(l.remarks || '')}</td>
+    </tr>`;
+  };
+  const totalRowHTML = (label, count) => `
+    <tr class="sf1-total-row">
+      <td style="text-align:center;font-weight:800;">${count}</td>
+      <td colspan="19" style="font-weight:700;letter-spacing:0.3px;">&lt;=== ${Utils.esc(label)} (${count})</td>
+    </tr>`;
+  const sectionRowHTML = (label, bg) => `
+    <tr class="sf1-section-row">
+      <td colspan="20" style="background:${bg};font-weight:700;text-align:center;letter-spacing:1px;">${Utils.esc(label)}</td>
+    </tr>`;
 
-    root.innerHTML = `
-      <div class="page-head">
-        <div><h2>SF1 — School Register</h2><p>DepEd School Form 1 layout, generated from your learner records</p></div>
-        <div class="page-actions">
-          <button class="btn btn-outline" id="sf1-switch-class">${icon('users')} Switch Class</button>
-          <button class="btn btn-outline" id="sf1-export-xlsx" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
-          <button class="btn btn-primary" id="sf1-export-pdf" ${errors.length ? 'disabled' : ''}>${icon('printer')} Save as PDF</button>
-        </div>
+  runningIdx = 0;
+  const maleRows   = males.map(learnerRowHTML).join('');
+  const femaleRows = females.map(learnerRowHTML).join('');
+  const otherRows  = others.map(learnerRowHTML).join('');
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div><h2>SF1 — School Register</h2><p>DepEd School Form 1 layout, generated from your learner records</p></div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="sf1-switch-class">${icon('users')} Switch Class</button>
+        <button class="btn btn-outline" id="sf1-export-xlsx" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
+        <button class="btn btn-primary" id="sf1-export-pdf" ${errors.length ? 'disabled' : ''}>${icon('printer')} Save as PDF</button>
       </div>
+    </div>
 
-      <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this preview and the exported .xlsx are functional, DepEd-labeled renderings built from your data. KlazAssist could not verify exact official SF1 template geometry (page size, merged cells, column widths) against a live source. Verify against your school/division's current SF1 template before submission.</div></div>
+    <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this preview and the exported .xlsx are functional, DepEd-labeled renderings built from your data. KlazAssist could not verify exact official SF1 template geometry (page size, merged cells, column widths) against a live source. Verify against your school/division's current SF1 template before submission.</div></div>
 
-      ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-      ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
 
-      <div class="grid grid-4 mb-16">
-        <div class="stat-card"><div class="stat-label">Total Learners</div><div class="stat-value">${total}</div></div>
-        <div class="stat-card accent-success"><div class="stat-label">Male</div><div class="stat-value">${males.length}</div></div>
-        <div class="stat-card accent-danger"><div class="stat-label">Female</div><div class="stat-value">${females.length}</div></div>
-        <div class="stat-card ${others.length ? 'accent-warning' : ''}"><div class="stat-label">Unrecorded Sex</div><div class="stat-value">${others.length}</div></div>
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card"><div class="stat-label">Total Learners</div><div class="stat-value">${total}</div></div>
+      <div class="stat-card accent-success"><div class="stat-label">Male</div><div class="stat-value">${males.length}</div></div>
+      <div class="stat-card accent-danger"><div class="stat-label">Female</div><div class="stat-value">${females.length}</div></div>
+      <div class="stat-card ${others.length ? 'accent-warning' : ''}"><div class="stat-label">Unrecorded Sex</div><div class="stat-value">${others.length}</div></div>
+    </div>
+
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(sy)}</h3>
+        <span class="text-sm text-muted">${school.name ? Utils.esc(school.name) : 'Set school info in Settings → School Profile'}</span>
       </div>
+      <p class="text-sm text-muted" style="margin:0;">
+        All 20 SF1 columns are shown below. Column widths are fitted to the content automatically.
+        Scroll horizontally to see every column.
+      </p>
+    </div>
 
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(sy)}</h3>
-          <span class="text-sm text-muted">${school.name ? Utils.esc(school.name) : 'Set school info in Settings → School Profile'}</span>
-        </div>
-        <p class="text-sm text-muted">The exported file orders learners <strong>males first, then females</strong>, adds automatic <em>TOTAL MALE</em>, <em>TOTAL FEMALE</em>, and <em>COMBINED</em> rows, and includes the SF1 header, sign-off block, and indicator legend. Use <strong>Export .xlsx</strong> for a spreadsheet or <strong>Save as PDF</strong> for a print-ready file.</p>
+    <div class="card">
+      <div class="card-head">
+        <h3>Preview</h3>
+        <span class="text-sm text-muted">${total} learner${total === 1 ? '' : 's'} · 20 columns</span>
       </div>
+      ${total === 0
+        ? UI.emptyState({ icon: 'users', title: 'No learners in this class', message: 'Add learners first, then come back to export SF1.', actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()' })
+        : `<div class="sf1-preview-wrap">
+            <table class="sf1-preview-table">
+              <thead>
+                <tr>
+                  <th style="text-align:center;">#</th>
+                  <th>LRN</th>
+                  <th>NAME<br><span class="sf1-th-sub">(Last Name, First Name, M.I.)</span></th>
+                  <th style="text-align:center;">Sex<br><span class="sf1-th-sub">(M/F)</span></th>
+                  <th style="text-align:center;">BIRTH DATE<br><span class="sf1-th-sub">(mm-dd-yyyy)</span></th>
+                  <th style="text-align:center;">Age<br><span class="sf1-th-sub">(1st Fri Jun)</span></th>
+                  <th>MOTHER<br>TONGUE</th>
+                  <th>IP<br><span class="sf1-th-sub">(Ethnic Group)</span></th>
+                  <th>RELIGION</th>
+                  <th>House #/Street/<br>Sitio/Purok</th>
+                  <th>Barangay</th>
+                  <th>Municipality/<br>City</th>
+                  <th>Province</th>
+                  <th>Father's Name</th>
+                  <th>Mother's Maiden Name</th>
+                  <th>Guardian Name</th>
+                  <th>Relationship</th>
+                  <th>Contact Number<br>of Parent/Guardian</th>
+                  <th>Learning Modality</th>
+                  <th>REMARKS</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${males.length ? `
+                  ${sectionRowHTML('MALE', '#dbe7fb')}
+                  ${maleRows}
+                  ${totalRowHTML('TOTAL MALE', males.length)}
+                ` : ''}
+                ${females.length ? `
+                  ${sectionRowHTML('FEMALE', '#fce7f3')}
+                  ${femaleRows}
+                  ${totalRowHTML('TOTAL FEMALE', females.length)}
+                ` : ''}
+                ${others.length ? `
+                  ${sectionRowHTML('UNRECORDED SEX — appears after females, still counted in COMBINED', '#fef3c7')}
+                  ${otherRows}
+                ` : ''}
+                ${totalRowHTML('COMBINED', total)}
+              </tbody>
+            </table>
+          </div>`}
+    </div>`;
 
-      <div class="card">
-        <div class="card-head">
-          <h3>Preview</h3>
-          <span class="text-sm text-muted">Showing ${total} learner${total === 1 ? '' : 's'} · subset of SF1 columns for on-screen readability</span>
-        </div>
-        ${total === 0
-          ? UI.emptyState({icon:'users', title:'No learners in this class', message:'Add learners first, then come back to export SF1.', actionLabel:'+ Add Learner', actionFn:'App.openLearnerForm()'})
-          : `<div class="table-wrap" style="max-height:520px;overflow-y:auto;">
-              <table class="data-table" style="font-size:12px;min-width:720px;">
-                <thead><tr>
-                  <th style="width:36px;text-align:center;">#</th>
-                  <th style="width:130px;">LRN</th>
-                  <th>NAME (Last Name, First Name, Middle Name)</th>
-                  <th style="width:48px;text-align:center;">Sex</th>
-                  <th style="width:100px;text-align:center;">BIRTH DATE<br>(mm-dd-yyyy)</th>
-                  <th style="width:48px;text-align:center;">Age</th>
-                  <th style="width:180px;">Address (Brgy, Mun, Prov)</th>
-                </tr></thead>
-                <tbody>
-                  ${males.length ? `
-                    ${sectionRowHTML('MALE', '#dbe7fb')}
-                    ${maleRows}
-                    ${totalRowHTML('TOTAL MALE', males.length)}
-                  ` : ''}
-                  ${females.length ? `
-                    ${sectionRowHTML('FEMALE', '#fce7f3')}
-                    ${femaleRows}
-                    ${totalRowHTML('TOTAL FEMALE', females.length)}
-                  ` : ''}
-                  ${others.length ? `
-                    ${sectionRowHTML('UNRECORDED SEX (appears after females, still counted in COMBINED)', '#fef3c7')}
-                    ${otherRows}
-                  ` : ''}
-                  ${totalRowHTML('COMBINED', total)}
-                </tbody>
-              </table>
-            </div>`}
-      </div>`;
+  const xlsxBtn   = root.querySelector('#sf1-export-xlsx');
+  const pdfBtn    = root.querySelector('#sf1-export-pdf');
+  const switchBtn = root.querySelector('#sf1-switch-class');
+  if (xlsxBtn)   xlsxBtn.onclick   = () => Pages.exportLearnersSF1();
+  if (pdfBtn)    pdfBtn.onclick    = () => Pages.exportLearnersPDF();
+  if (switchBtn) switchBtn.onclick = () => App.openClassSelector();
+},
 
-    const xlsxBtn = root.querySelector('#sf1-export-xlsx');
-    const pdfBtn  = root.querySelector('#sf1-export-pdf');
-    const switchBtn = root.querySelector('#sf1-switch-class');
-    if (xlsxBtn) xlsxBtn.onclick = () => Pages.exportLearnersSF1();
-    if (pdfBtn)  pdfBtn.onclick  = () => Pages.exportLearnersPDF();
-    if (switchBtn) switchBtn.onclick = () => App.openClassSelector();
-  },
+/* ---------------------------------------------------------------------------
+   Load persisted SF1 column widths, filling in defaults for any missing
+   column. Never returns null — always a fully-populated object.
+   --------------------------------------------------------------------------- */
+
   async sf2(root) {
     const cls = State.activeClass;
     const now = new Date();
@@ -40642,13 +41981,17 @@ async settings(root) {
   // Persist active tab across navigations
   if (!State._settingsTab) State._settingsTab = 'general';
 
-  const tabs = [
-    { id: 'general',  label: 'General',         icon: 'settings', desc: 'School year, theme, profiles' },
-    { id: 'academic', label: 'Academics',        icon: 'chart',    desc: 'Grading policy and benchmarks' },
-    { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
-    { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' }
-  ];
-
+const tabs = [
+  { id: 'general',  label: 'General',          icon: 'settings', desc: 'School year, theme, profiles' },
+  { id: 'academic', label: 'Academics',        icon: 'chart',    desc: 'Grading policy and benchmarks' },
+  { id: 'security', label: 'Security',         icon: 'shield',   desc: 'Password, session, email sending' },
+  { id: 'teacher',  label: 'Teacher Profile',  icon: 'user',     desc: 'Your info on printed reports' },
+  { id: 'school',   label: 'School Profile',   icon: 'building', desc: 'School name, ID, seals' },
+  { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
+  { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' },
+  { id: 'activity', label: 'Activity Log',     icon: 'history',  desc: 'Recent actions in the app' },
+  { id: 'about',    label: 'About',            icon: 'info',     desc: 'Version, developer, privacy' }
+];
   root.innerHTML = `
     <div class="page-head">
       <div>
@@ -40671,16 +42014,7 @@ async settings(root) {
             </span>
           </button>`).join('')}
 
-        <button class="settings-nav-item settings-nav-item-subtle" onclick="App.navigate('about')">
-          <span class="sn-icon">${icon('info')}</span>
-          <span class="sn-body">
-            <span class="sn-label">About KlazAssist</span>
-            <span class="sn-desc">Version, developer, license text</span>
-          </span>
-          <span class="sn-chevron">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          </span>
-        </button>
+
       </aside>
 
       <section class="settings-panel" id="settings-content"></section>
@@ -41363,19 +42697,24 @@ async settings(root) {
   /* ══════════════════════════════════════════════════════════
      RENDER DISPATCHER
      ══════════════════════════════════════════════════════════ */
-  const renderTab = (tab) => {
-    State._settingsTab = tab;
-    root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
-      b.classList.toggle('active', b.dataset.st === tab);
-    });
-    switch (tab) {
-      case 'academic': renderAcademic(); break;
-      case 'license':  renderLicense();  break;
-      case 'data':     renderData();     break;
-      case 'general':
-      default:         renderGeneral();
-    }
-  };
+const renderTab = (tab) => {
+  State._settingsTab = tab;
+  root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
+    b.classList.toggle('active', b.dataset.st === tab);
+  });
+  switch (tab) {
+    case 'academic': renderAcademic(); break;
+    case 'security': Pages.securitySettings(content); break;
+    case 'teacher':  Pages.teacherProfile(content);   break;
+    case 'school':   Pages.schoolProfile(content);    break;
+    case 'license':  renderLicense(); break;
+    case 'data':     renderData();    break;
+    case 'activity': Pages.activityLog(content); break;
+    case 'about':    Pages.about(content);       break;
+    case 'general':
+    default:         renderGeneral();
+  }
+};
 
   root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
     b.onclick = () => renderTab(b.dataset.st);
@@ -51859,9 +53198,154 @@ Pages.mergeFromJSON = function () {
     }
   };
 };
+/* ============================================================================
+   HUB RENDERER
+   ----------------------------------------------------------------------------
+   A hub is a page that presents a horizontal tab strip and delegates the
+   body to one of several existing child pages. The child page's own
+   `page-head` is left intact — the tab strip sits above it as an extra
+   navigation band.
+   ============================================================================ */
+Pages._renderHub = function (root, opts) {
+  const active = State[opts.stateKey] || opts.defaultTab;
+  root.innerHTML = `
+    <div class="hub-tab-strip">
+      ${opts.tabs.map(t => `
+        <button type="button"
+                class="tab ${t.id === active ? 'active' : ''}"
+                data-hub-tab="${Utils.attr(t.id)}">
+          ${icon(t.icon || 'file')} ${Utils.esc(t.label)}
+        </button>`).join('')}
+    </div>
+    <div id="hub-child-content"></div>
+  `;
+  root.querySelectorAll('[data-hub-tab]').forEach(btn => {
+    btn.onclick = () => {
+      State[opts.stateKey] = btn.dataset.hubTab;
+      App.navigate(opts.moduleId);
+    };
+  });
+  const tab = opts.tabs.find(t => t.id === active) || opts.tabs[0];
+  return tab.render(root.querySelector('#hub-child-content'));
+};
+
+/* ------------------------- Attendance hub ------------------------- */
+Pages._attendanceHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'attendance',
+    stateKey: '_attendanceHubTab',
+    defaultTab: 'record',
+    tabs: [
+      { id: 'record',    label: 'Record',    icon: 'check',    render: (c) => Pages._attendanceRecord(c) },
+      { id: 'history',   label: 'History',   icon: 'calendar', render: (c) => Pages.attendanceHistory(c) },
+      { id: 'analytics', label: 'Analytics', icon: 'chart',    render: (c) => Pages.attendanceAnalytics(c) }
+    ]
+  });
+};
+
+/* ------------------------- Seating & Groups hub ------------------------- */
+Pages._seatingAndGroupsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'seating-and-groups',
+    stateKey: '_seatingGroupsHubTab',
+    defaultTab: 'seating',
+    tabs: [
+      { id: 'seating', label: 'Seating', icon: 'grid',  render: (c) => Pages.seating(c) },
+      { id: 'groups',  label: 'Groups',  icon: 'group', render: (c) => Pages.groups(c) }
+    ]
+  });
+};
+
+/* ------------------------- Parent Communication hub ------------------------- */
+Pages._parentCommunicationHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'parent-communication',
+    stateKey: '_parentCommHubTab',
+    defaultTab: 'notes',
+    tabs: [
+      { id: 'notes',  label: 'Notes Log', icon: 'message', render: (c) => Pages.parentNotes(c) },
+      { id: 'digest', label: 'Digest',    icon: 'file',    render: (c) => Pages.parentDigest(c) }
+    ]
+  });
+};
+
+/* ------------------------- Assessments hub ------------------------- */
+Pages._assessmentsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'assessments',
+    stateKey: '_assessmentsHubTab',
+    defaultTab: 'builder',
+    tabs: [
+      { id: 'builder', label: 'Assessment Builder', icon: 'edit', render: (c) => Pages.assessmentBuilder(c) },
+      { id: 'quiz',    label: 'Quiz Manager',       icon: 'play', render: (c) => Pages.quizManager(c) }
+    ]
+  });
+};
+
+/* ------------------------- Performance hub ------------------------- */
+Pages._performanceHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'performance',
+    stateKey: '_performanceHubTab',
+    defaultTab: 'class',
+    tabs: [
+      { id: 'class',    label: 'Class',         icon: 'trending',   render: (c) => Pages.classPerformance(c) },
+      { id: 'learners', label: 'Learners',      icon: 'user-check', render: (c) => Pages.learnerPerformance(c) },
+      { id: 'items',    label: 'Item Analysis', icon: 'analysis',   render: (c) => Pages.itemAnalysis(c) }
+    ]
+  });
+};
+
+/* ------------------------- School Forms hub ------------------------- */
+Pages._schoolFormsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'school-forms',
+    stateKey: '_schoolFormsHubTab',
+    defaultTab: 'sf1',
+    tabs: [
+      { id: 'sf1', label: 'SF1 — School Register',     icon: 'file',     render: (c) => Pages.sf1(c) },
+      { id: 'sf2', label: 'SF2 — Daily Attendance',    icon: 'calendar', render: (c) => Pages.sf2(c) },
+      { id: 'sf9', label: 'SF9 — Learner’s Report',    icon: 'file',     render: (c) => Pages.sf9(c) }
+    ]
+  });
+};
+
+/* ------------------------- Rosters hub ------------------------- */
+Pages._rostersHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'rosters',
+    stateKey: '_rostersHubTab',
+    defaultTab: 'class-list',
+    tabs: [
+      { id: 'class-list', label: 'Class List', icon: 'list', render: (c) => Pages.classList(c) },
+      { id: 'masterlist', label: 'Masterlist', icon: 'list', render: (c) => Pages.masterlist(c) }
+    ]
+  });
+};
+
+/* ------------------------- Reports & Export hub ------------------------- */
+Pages._reportsAndExportHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'reports-and-export',
+    stateKey: '_reportsExportHubTab',
+    defaultTab: 'printable',
+    tabs: [
+      { id: 'printable', label: 'Printable Reports', icon: 'printer',  render: (c) => Pages.printableReports(c) },
+      { id: 'export',    label: 'Export Center',     icon: 'download', render: (c) => Pages.exportCenter(c) }
+    ]
+  });
+};
 
 /* Aliases */
 const aliases = {
+  'attendance':            '_attendanceHub',
+  'seating-and-groups':    '_seatingAndGroupsHub',
+  'parent-communication':  '_parentCommunicationHub',
+  'assessments':           '_assessmentsHub',
+  'performance':           '_performanceHub',
+  'school-forms':          '_schoolFormsHub',
+  'rosters':               '_rostersHub',
+  'reports-and-export':    '_reportsAndExportHub',
   'attendance-history': 'attendanceHistory',
   'attendance-analytics': 'attendanceAnalytics',
   'attendance-reports': 'attendanceReports',
