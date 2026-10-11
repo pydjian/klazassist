@@ -52015,10 +52015,23 @@ function openScanner(assessmentId) {
       }
 
       const haveN = ['TL', 'TR', 'BL', 'BR'].filter(n => anchors[n]).length;
+      // ---- Reflect per-corner lock state on the viewfinder squares ----
+      const vf = {
+        TL: overlay.querySelector('.zg-viewfinder.tl'),
+        TR: overlay.querySelector('.zg-viewfinder.tr'),
+        BL: overlay.querySelector('.zg-viewfinder.bl'),
+        BR: overlay.querySelector('.zg-viewfinder.br')
+      };
+      ['TL','TR','BL','BR'].forEach(name => {
+        const el = vf[name];
+        if (!el) return;
+        el.classList.toggle('ready', !!anchors[name]);
+      });
       if (haveN < 4) {
         if (haveN === 0) { noSheet(); return; }
-        drawOverlay(null, '#f59e0b', ['TL', 'TR', 'BL', 'BR'].filter(n => anchors[n]).map(n => {
-          const c = qrCenter(anchors[n]); return { x: c[0], y: c[1], r: 14, color: '#f59e0b' };
+        drawOverlay(null, THEME.warning, ['TL','TR','BL','BR'].filter(n => anchors[n]).map(n => {
+          const c = qrCenter(anchors[n]);
+          return { x: c[0], y: c[1], r: 14, color: THEME.warning };
         }));
         setStatus(`Found ${haveN} of 4 corners — show every corner`, 'warn');
         return;
@@ -52037,7 +52050,7 @@ function openScanner(assessmentId) {
           .some(p => p.x < edge || p.y < edge || p.x > W - edge || p.y > Hh - edge);
       });
       if (clipped) {
-        drawOverlay(quad, '#f59e0b');
+        drawOverlay(quad, THEME.warning);
         setStatus('Move back — a corner is cut off', 'warn');
         return;
       }
@@ -52064,12 +52077,12 @@ function openScanner(assessmentId) {
         return;
       }
       if (payload.e !== session.assessment.id) {
-        drawOverlay(quad, '#ef4444');
+        drawOverlay(quad, THEME.danger);
         setStatus('Sheet is for a different exam', 'warn');
         return;
       }
       if (payload.n && payload.n !== session.answerKey.length) {
-        drawOverlay(quad, '#ef4444');
+        drawOverlay(quad, THEME.danger);
         setStatus(`Exam now has ${session.answerKey.length} items, sheet has ${payload.n} — reprint sheets`, 'err');
         return;
       }
@@ -52131,15 +52144,24 @@ function openScanner(assessmentId) {
         perQuestion.push(res);
         if (res.choice !== null) {
           const [bx, by] = applyH(H, pos.choices[res.choice][0], pos.choices[res.choice][1]);
-          marks.push({ x: bx, y: by, r: bubbleRwork * 1.15, color: res.confidence >= 0.6 ? '#22c55e' : '#f59e0b' });
+          marks.push({
+            x: bx, y: by,
+            r: bubbleRwork * 1.15,
+            color: res.confidence >= 0.6 ? THEME.success : THEME.warning
+          });
         } else if (res.multiple) {
           res.candidates.forEach(ci => {
             const [bx, by] = applyH(H, pos.choices[ci][0], pos.choices[ci][1]);
-            marks.push({ x: bx, y: by, r: bubbleRwork, kind: 'x', color: '#ef4444' });
+            marks.push({
+              x: bx, y: by,
+              r: bubbleRwork,
+              kind: 'x',
+              color: THEME.danger
+            });
           });
         }
       }
-      drawOverlay(quad, '#22c55e', marks);
+      drawOverlay(quad, THEME.success, marks);
 
       let learner = null;
       if (payload.l) {
@@ -53105,6 +53127,23 @@ function openScanner(assessmentId) {
     await startCamera();
   })();
 }
+
+/* ---- Resolve active theme colors for canvas drawing ----
+   CSS variables can't be passed to a canvas context; we read them
+   once when the scanner opens so the overlay matches whatever theme
+   is active (light / dark / navy / noir / sepia / deped-green). */
+const THEME = (() => {
+  const s = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
+  return {
+    success: v('--success',      '#198754'),
+    warning: v('--warning',      '#F59E0B'),
+    danger:  v('--danger',       '#DC3545'),
+    gold:    v('--accent-gold',  '#F7C948'),
+    blue:    v('--deped-blue',   '#0038A8'),
+    cyan:    v('--accent-cyan',  '#06B6D4')
+  };
+})();
 
   return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
 })();
