@@ -53703,7 +53703,8 @@ Pages.sync = async function (root) {
         ${icon('shield')} Safety reminders
       </h4>
       <ul style="font-size:12.5px;line-height:1.7;color:var(--text-muted);margin:0;padding-left:18px;">
-        <li>Both devices must be on the <strong>same WiFi network</strong> for the fastest transfer.</li>
+        <li>Both devices must be on the <strong>same WiFi network</strong> for the fastest transfer, and <strong>both need internet access</strong> for the initial handshake.</li>
+        <li>Guest / school WiFi that isolates devices can block the direct link — use a phone hotspot instead.</li>
         <li>Sync works with a phone hotspot too, if only one device has a cellular connection.</li>
         <li>The room code is <strong>only valid while the sending modal is open</strong>. Close it and the code dies.</li>
         <li>Only one device can join at a time.</li>
@@ -53984,7 +53985,7 @@ Pages._syncOpenReceiverModal = async function (code) {
         ${icon('alert')}
         <div>
           <div class="sync-result-title">Could not connect</div>
-          <div class="sync-result-sub">Check that the code matches and that both devices have internet access.</div>
+          <div class="sync-result-sub">Check that the code matches, that both devices have internet access, and that the WiFi is not a guest/isolated network (try a phone hotspot).</div>
         </div>
       </div>`;
   }
@@ -55038,6 +55039,8 @@ const SyncManager = {
   _onError: null,
   _libLoaded: false,
   _sessionToken: null,        // ← NEW: invalidates stale async callbacks
+  _guestConnecting: false,    // guest: peer.connect() already issued for this session
+  _stopHostIce: null,         // host: disposer for the ICE watcher
 
   // ── Handshake / guard state ──
   _guestReady: false,   // host: receiver signalled it's ready
@@ -55069,15 +55072,82 @@ const SyncManager = {
   ]),
 
   /* ---------- lib loader ---------- */
+_peerCtor() {
+  const w = window;
+  if (typeof w.Peer === 'function') return w.Peer;
+  if (w.peerjs && typeof w.peerjs.Peer === 'function') { w.Peer = w.peerjs.Peer; return w.Peer; }
+  return null;
+},
+
+/* ---------- connection options ----------
+   PeerJS's built-in defaults are a single public STUN list and NO TURN relay.
+   On school / guest WiFi (client isolation, blocked mDNS) the direct LAN path
+   cannot form and nothing else is available, so the channel never opens.
+   We pass an explicit ICE list and let a TURN relay be configured as a fallback:
+     localStorage['klaz.sync.iceServers'] = JSON array of RTCIceServer objects
+     localStorage['klaz.sync.peerServer'] = JSON {host,port,path,secure,key}   */
+_readJsonSetting(key) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
+  catch (e) { return null; }
+},
+_peerOptions() {
+  const extra = this._readJsonSetting('klaz.sync.iceServers');
+  const iceServers = [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302',
+             'stun:stun2.l.google.com:19302'] },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:global.stun.twilio.com:3478' }
+  ];
+  if (Array.isArray(extra)) iceServers.push(...extra);
+  const opts = { debug: 1, config: { iceServers, iceCandidatePoolSize: 4 } };
+  const srv = this._readJsonSetting('klaz.sync.peerServer');
+  if (srv && typeof srv === 'object' && srv.host) Object.assign(opts, srv);
+  return opts;
+},
+
+/* Watch ICE on a data connection so a dead path fails in seconds with a
+   useful message instead of a silent 60 s hang. Returns a disposer. */
+_watchIce(conn, onFailed) {
+  let pc = null, timer = null, stopped = false;
+  const handler = () => {
+    if (stopped || !pc) return;
+    const st = pc.iceConnectionState;
+    console.log('[Sync] ICE state:', st);
+    if (st === 'failed') { stopped = true; onFailed(); }
+  };
+  const attach = () => {
+    pc = conn && conn.peerConnection;
+    if (!pc) return false;
+    pc.addEventListener('iceconnectionstatechange', handler);
+    return true;
+  };
+  if (!attach()) {
+    let tries = 0;
+    timer = setInterval(() => {
+      if (stopped || attach() || ++tries > 50) { clearInterval(timer); timer = null; }
+    }, 100);
+  }
+  return () => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    try { if (pc) pc.removeEventListener('iceconnectionstatechange', handler); } catch (e) {}
+  };
+},
+_ICE_FAIL_MSG:
+  'The two devices found each other but could not open a direct link. ' +
+  'This usually means the WiFi blocks device-to-device traffic ("client/AP isolation", ' +
+  'common on school or guest WiFi). Try: a phone hotspot, the main (non-guest) WiFi, ' +
+  'or turn off any VPN/private DNS on both devices.',
+
 async _ensureLib() {
-  if (window.Peer) { this._libLoaded = true; return true; }
+  if (this._peerCtor()) { this._libLoaded = true; return true; }
 
   // Already injected? Wait for it, but don't cache a failed promise.
   const src = './vendor/peerjs.min.js';
   const existing = document.querySelector(`script[src="${src}"]`);
   if (existing) {
     for (let i = 0; i < 60; i++) {          // up to 6 s
-      if (window.Peer) { this._libLoaded = true; return true; }
+      if (this._peerCtor()) { this._libLoaded = true; return true; }
       await new Promise(r => setTimeout(r, 100));
     }
     console.warn('[Sync] peerjs.min.js present but window.Peer never appeared.');
@@ -55090,10 +55160,11 @@ async _ensureLib() {
     s.async = true;
     s.onload = () => {
       // onload can fire a tick before the global is visible in some browsers
-      setTimeout(() => { this._libLoaded = !!window.Peer; resolve(this._libLoaded); }, 0);
+      setTimeout(() => { this._libLoaded = !!this._peerCtor(); resolve(this._libLoaded); }, 0);
     };
     s.onerror = () => {
       console.error('[Sync] Failed to load ./vendor/peerjs.min.js');
+      try { s.remove(); } catch (e) {}   // allow a clean retry next time
       resolve(false);
     };
     document.head.appendChild(s);
@@ -55147,7 +55218,7 @@ async startHost(opts = {}) {
   console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
 
   try {
-    this._peer = new window.Peer(peerId, { debug: 1 });
+    this._peer = new (this._peerCtor())(peerId, this._peerOptions());
   } catch (e) {
     this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
     return null;
@@ -55181,6 +55252,14 @@ async startHost(opts = {}) {
       settle(this._code);
     });
 
+    // Signalling socket dropped (phone screen-off, WiFi blip). The room code is
+    // un-registered while disconnected, so re-register under the SAME id.
+    this._peer.on('disconnected', () => {
+      if (!alive() || this._finished || !this._peer || this._peer.destroyed) return;
+      console.warn('[Sync] Host lost the signalling server — reconnecting…');
+      try { this._peer.reconnect(); } catch (e) {}
+    });
+
     this._peer.on('connection', (conn) => {
       if (!alive()) { try { conn.close(); } catch (e) {} return; }   // ← ADD
       // (BUG #5 FIX)
@@ -55197,6 +55276,13 @@ async startHost(opts = {}) {
       }
       this._conn = conn;
       this._wireConnection();
+      if (this._stopHostIce) this._stopHostIce();
+      this._stopHostIce = this._watchIce(conn, () => {
+        if (!alive() || this._finished || conn.open) return;
+        this._fail(this._ICE_FAIL_MSG);
+        settle(null);
+      });
+      conn.on('open', () => { if (this._stopHostIce) { this._stopHostIce(); this._stopHostIce = null; } });
     });
 
     this._peer.on('error', (err) => {
@@ -55267,6 +55353,7 @@ async joinAsGuest(opts = {}) {
   const alive = () => this._sessionToken === sessionToken;   // ← NEW
 
   this._retryCount = 0;
+  this._guestConnecting = false;
   const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
@@ -55289,7 +55376,7 @@ async joinAsGuest(opts = {}) {
   try {
     // (BUG #6 FIX) Pass options as the SOLE argument so PeerJS assigns
     // a fresh guest ID from the server. This is the documented pattern.
-    this._peer = new window.Peer({ debug: 1 });
+    this._peer = new (this._peerCtor())(this._peerOptions());
   } catch (e) {
     this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
     return false;
@@ -55313,43 +55400,77 @@ async joinAsGuest(opts = {}) {
       if (openTimeout) { clearTimeout(openTimeout); openTimeout = null; }
     };
 
+    this._peer.on('disconnected', () => {
+      if (!alive() || this._finished || !this._peer || this._peer.destroyed) return;
+      console.warn('[Sync] Guest lost the signalling server — reconnecting…');
+      try { this._peer.reconnect(); } catch (e) {}
+    });
+
     this._peer.on('open', () => {
       if (!alive()) return; 
       if (!this._peer || this._finished) return;
+      if (this._guestConnecting) return;          // 'open' re-fires after reconnect()
+      this._guestConnecting = true;
       clearOpenTimeout();
       console.log('[Sync] Guest peer is open. Connecting to host…');
       this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
 
-      let conn;
-      try {
-        conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
-      } catch (e) {
-        if (!alive()) return; 
-        this._fail('Could not open a connection to that room code: ' + (e.message || 'unknown'));
-        settle(false);
-        return;
-      }
-      this._conn = conn;
-      this._wireConnection();
+      let attempt = 0;
+      const MAX_ATTEMPTS = 3, ATTEMPT_MS = 20000;
+      let stopIce = null, attemptTimer = null;
 
-      conn.on('open', () => {
-        if (!alive()) return; 
-        console.log('[Sync] Guest data channel is open.');
-        settle(true);
-      });
-
-      // (BUG #7 FIX) 60 s is a realistic ceiling on mobile networks.
-      setTimeout(() => {
-        if (!alive()) return; 
-        if (!settled && (!conn || !conn.open)) {
-          this._fail(
-            'Could not reach the other device. Double-check that the code matches ' +
-            'EXACTLY, and that the sender\'s modal is still open on the other device.'
-          );
-          this.close();
+      const tryConnect = () => {
+        if (!alive() || settled || this._finished || !this._peer) return;
+        attempt++;
+        let conn;
+        try {
+          conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
+        } catch (e) {
+          this._fail('Could not open a connection to that room code: ' + (e.message || 'unknown'));
           settle(false);
+          return;
         }
-      }, 60000);
+        this._conn = conn;
+        this._wireConnection();
+        console.log('[Sync] Guest connect attempt', attempt, 'of', MAX_ATTEMPTS);
+
+        const retryOrGiveUp = () => {
+          if (!alive() || settled || conn.open || this._conn !== conn) return;
+          if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null; }
+          if (stopIce) { stopIce(); stopIce = null; }
+          if (attempt < MAX_ATTEMPTS) {
+            console.warn('[Sync] Attempt', attempt, 'failed — retrying with a fresh negotiation.');
+            this._conn = null;
+            try { conn.close(); } catch (e) {}
+            tryConnect();
+          } else {
+            giveUp();
+          }
+        };
+
+        stopIce = this._watchIce(conn, retryOrGiveUp);
+
+        conn.on('open', () => {
+          if (!alive() || this._conn !== conn) return;
+          if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null; }
+          if (stopIce) { stopIce(); stopIce = null; }
+          console.log('[Sync] Guest data channel is open.');
+          settle(true);
+        });
+
+        attemptTimer = setTimeout(retryOrGiveUp, ATTEMPT_MS);
+      };
+
+      const giveUp = () => {
+        if (!alive() || settled) return;
+        if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null; }
+        if (stopIce) { stopIce(); stopIce = null; }
+        this._fail(this._ICE_FAIL_MSG + ' Also double-check the code and that the sender\'s ' +
+                   'window is still open.');
+        settle(false);
+      };
+
+      tryConnect();
     });
 
     this._peer.on('error', (err) => {
@@ -55426,18 +55547,18 @@ _wireConnection() {
   }
 
   conn.on('data', (data) => {                                  // ← CHANGED
-    if (!alive()) return;
+    if (!alive() || this._conn !== conn) return;
     this._handleMessage(data);
   });
 
   conn.on('error', (err) => {                                  // ← CHANGED
-    if (!alive()) return;
+    if (!alive() || this._conn !== conn) return;
     console.error('[Sync] Connection error:', err);
     this._fail('Connection error: ' + (err.message || 'unknown'));
   });
 
   conn.on('close', () => {                                     // ← CHANGED
-    if (!alive()) return;
+    if (!alive() || this._conn !== conn) return;
     console.log('[Sync] Data channel closed.');
     if (this._recvDone && !this._finished) {
       this._cancelSenderAckWait();
@@ -55897,6 +56018,8 @@ async _applySnapshot(snapshot) {
      TEARDOWN
      ======================================================================== */
   close() {
+    if (this._stopHostIce) { try { this._stopHostIce(); } catch (e) {} this._stopHostIce = null; }
+    this._guestConnecting = false;
     if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
     if (this._ackWatchdog)  { clearTimeout(this._ackWatchdog);  this._ackWatchdog  = null; }
     if (this._ackResolver)  { clearTimeout(this._ackResolver);  this._ackResolver  = null; }
