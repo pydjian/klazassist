@@ -53728,32 +53728,64 @@ Pages.sync = async function (root) {
    Sender modal — shows the code, waits, streams out
    ------------------------------------------------------------------------ */
 Pages._syncOpenSenderModal = async function () {
+  console.log('[SyncSender] Opening sender modal…');
+
   const m = UI.modal({
-    // …unchanged modal config…
+    title: 'Sending data from this device',
+    size: 'modal-lg',
+    body: `
+      <div id="sync-sender-body">
+        <div class="sync-waiting">
+          <div class="sync-spinner"></div>
+          <div class="sync-waiting-text">Starting the sync service…</div>
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-outline" id="sync-cancel">Cancel</button>`,
+    onClose: () => { try { SyncManager.close(); } catch (e) {} }
   });
 
-  const bodyEl   = m.overlay.querySelector('#sync-sender-body');
+  const bodyEl    = m.overlay.querySelector('#sync-sender-body');
   const cancelBtn = m.overlay.querySelector('#sync-cancel');
-  cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
 
-  // `onProgress` fires synchronously from inside `startHost` (when the peer
-  // reaches the signalling server), i.e. BEFORE the await resolves. Reading
-  // `code` directly would hit the temporal dead zone; a holder object is
-  // safe to read at any time.
+  if (!bodyEl) {
+    console.error('[SyncSender] #sync-sender-body missing. Modal HTML:');
+    console.error(m.overlay.outerHTML);
+    try { m.close(); } catch (e) {}
+    UI.toast('Could not open the sync dialog. See console for details.', 'error', 6000);
+    return;
+  }
+
+  if (cancelBtn) {
+    cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
+  } else {
+    console.warn('[SyncSender] #sync-cancel missing — the footer did not render.');
+  }
+
+  // Holder object so `code` is readable inside the onProgress closure
+  // even though the await has not resolved yet.
   const codeHolder = { value: null };
 
-  codeHolder.value = await SyncManager.startHost({
-    mode: 'send',
-    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value),
-    onComplete: (r) => {
-      Pages._syncRenderSenderDone(bodyEl, true);
-      setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
-      App.logActivity('Sync: sent data to another device', 'Sync');
-    },
-    onError: (msg) => {
-      Pages._syncRenderSenderError(bodyEl, msg);
-    }
-  });
+  try {
+    console.log('[SyncSender] Calling SyncManager.startHost…');
+    codeHolder.value = await SyncManager.startHost({
+      mode: 'send',
+      onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value),
+      onComplete: () => {
+        Pages._syncRenderSenderDone(bodyEl, true);
+        setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
+        App.logActivity('Sync: sent data to another device', 'Sync');
+      },
+      onError: (msg) => {
+        Pages._syncRenderSenderError(bodyEl, msg);
+      }
+    });
+    console.log('[SyncSender] startHost resolved. Code:', codeHolder.value);
+  } catch (e) {
+    console.error('[SyncSender] startHost threw:', e);
+    Pages._syncRenderSenderError(bodyEl, e.message || 'Could not start the sync service.');
+    return;
+  }
 
   if (codeHolder.value) {
     Pages._syncRenderSenderCode(bodyEl, codeHolder.value);
