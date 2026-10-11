@@ -12369,8 +12369,11 @@ body.zg-scanner-open {
    ============================================================================ */
 .zg-viewfinder {
   position: absolute;
-  width: 15%;
-  height: 11%;
+  /* Enlarged from 12.79% × 9.05% — the exact QR size left no tolerance.
+     20% × 14% gives roughly 10mm of slack around the printed QR on every
+     side, so teachers can aim comfortably instead of pixel-perfectly. */
+  width: 20%;
+  height: 14%;
   pointer-events: none;
   z-index: 3;
 
@@ -12379,7 +12382,7 @@ body.zg-scanner-open {
   -webkit-backdrop-filter: blur(2px);
 
   border: 2.5px solid var(--deped-blue);
-  border-radius: 8px;
+  border-radius: 10px;
 
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--deped-blue) 40%, transparent) inset,
@@ -12391,10 +12394,34 @@ body.zg-scanner-open {
               box-shadow  0.22s ease;
 }
 
-  .zg-viewfinder.tl { top:    4%; left:  4%; }
-  .zg-viewfinder.tr { top:    4%; right: 4%; }
-  .zg-viewfinder.bl { bottom: 4%; left:  4%; }
-  .zg-viewfinder.br { bottom: 4%; right: 4%; }
+  /* Outer corners pinned just inside the sheet edge. */
+  .zg-viewfinder.tl { top:    1%; left:  1.35%; }
+  .zg-viewfinder.tr { top:    1%; right: 1.35%; }
+  .zg-viewfinder.bl { bottom: 1%; left:  1.35%; }
+  .zg-viewfinder.br { bottom: 1%; right: 1.35%; }
+
+  /* A faint dashed inner square that shows where the QR code itself needs
+   to land. Purely a visual hint — the scanner accepts the QR anywhere
+   inside the outer viewfinder. */
+.zg-viewfinder::after {
+  content: '';
+  position: absolute;
+  /* Centered horizontally: (20 - 12.79) / 2 = 3.605% inset */
+  /* Centered vertically:   (14 - 9.05)  / 2 = 2.475% inset */
+  left: 18.0%;
+  top:  17.7%;
+  width: 64%;    /* 12.79 / 20 */
+  height: 64.6%; /* 9.05 / 14 */
+  border: 1.5px dashed color-mix(in srgb, var(--deped-blue) 60%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.zg-viewfinder.ready::after {
+  border-color: color-mix(in srgb, var(--success) 70%, transparent);
+  opacity: 0.9;
+}
 
   /* Confirmed — the matching anchor QR has been decoded inside this square. */
   .zg-viewfinder.ready {
@@ -12405,6 +12432,8 @@ body.zg-scanner-open {
       0 0 18px color-mix(in srgb, var(--success) 70%, transparent),
       0 0 36px color-mix(in srgb, var(--success) 32%, transparent);
   }
+
+
 
   @media (prefers-reduced-motion: reduce) {
     .zg-viewfinder { transition: none; }
@@ -14123,17 +14152,19 @@ body.zg-scanner-open #toast-container {
 }
 .qr-reticle-corner {
   position: absolute;
-  width: 12.79%;
-  height: 9.05%;
+  /* Matches the mobile viewfinder — 20% × 14% gives ~10mm of tolerance
+     around the printed QR instead of forcing a pixel-perfect fit. */
+  width: 20%;
+  height: 14%;
   border: 2px solid var(--accent-gold, #F7C948);
-  border-radius: 5px;
+  border-radius: 6px;
   background: rgba(15, 23, 42, .10);
   box-shadow: 0 0 0 1px rgba(0,0,0,.28);
 }
-.qr-reticle-corner.tl { top: 1.905%; left: 2.694%; right: auto; bottom: auto; }
-.qr-reticle-corner.tr { top: 1.905%; right: 2.694%; left: auto; bottom: auto; }
-.qr-reticle-corner.bl { bottom: 1.905%; left: 2.694%; right: auto; top: auto; }
-.qr-reticle-corner.br { bottom: 1.905%; right: 2.694%; left: auto; top: auto; }
+.qr-reticle-corner.tl { top: 1%; left: 1.35%; right: auto; bottom: auto; }
+.qr-reticle-corner.tr { top: 1%; right: 1.35%; left: auto; bottom: auto; }
+.qr-reticle-corner.bl { bottom: 1%; left: 1.35%; right: auto; top: auto; }
+.qr-reticle-corner.br { bottom: 1%; right: 1.35%; left: auto; top: auto; }
 
 @media (orientation: landscape) {
   .zg-sheet-guide {
