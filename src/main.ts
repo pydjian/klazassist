@@ -55068,26 +55068,36 @@ const SyncManager = {
   ]),
 
   /* ---------- lib loader ---------- */
-  async _ensureLib() {
-    if (window.Peer) { this._libLoaded = true; return true; }
-    return new Promise((resolve) => {
-      const src = './vendor/peerjs.min.js';
-      const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) {
-        const t = setInterval(() => {
-          if (window.Peer) { clearInterval(t); this._libLoaded = true; resolve(true); }
-        }, 50);
-        setTimeout(() => { clearInterval(t); resolve(!!window.Peer); }, 8000);
-        return;
-      }
-      const s = document.createElement('script');
-      s.src = src;
-      s.async = true;
-      s.onload = () => { this._libLoaded = !!window.Peer; resolve(this._libLoaded); };
-      s.onerror = () => resolve(false);
-      document.head.appendChild(s);
-    });
-  },
+async _ensureLib() {
+  if (window.Peer) { this._libLoaded = true; return true; }
+
+  // Already injected? Wait for it, but don't cache a failed promise.
+  const src = './vendor/peerjs.min.js';
+  const existing = document.querySelector(`script[src="${src}"]`);
+  if (existing) {
+    for (let i = 0; i < 60; i++) {          // up to 6 s
+      if (window.Peer) { this._libLoaded = true; return true; }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    console.warn('[Sync] peerjs.min.js present but window.Peer never appeared.');
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => {
+      // onload can fire a tick before the global is visible in some browsers
+      setTimeout(() => { this._libLoaded = !!window.Peer; resolve(this._libLoaded); }, 0);
+    };
+    s.onerror = () => {
+      console.error('[Sync] Failed to load ./vendor/peerjs.min.js');
+      resolve(false);
+    };
+    document.head.appendChild(s);
+  });
+},
 
   /* ---------- code generator ---------- */
   _generateCode() {
@@ -55118,13 +55128,13 @@ async startHost(opts = {}) {
   this._finished = false;
   this._timedOut = false;
   this._recvDone = false;
-
-  // Reset the collision budget for a fresh user-initiated session, but let
-  // an internal retry carry its count through so we still cap at 3.
   this._retryCount = opts._retryCount || 0;
 
   const ok = await this._ensureLib();
-  if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
+  if (!ok) {
+    this._fail('Could not load the sync library. Make sure ./vendor/peerjs.min.js exists.');
+    return null;
+  }
 
   this._code = this._generateCode();
   const peerId = this._peerIdForCode(this._code);
@@ -55141,13 +55151,35 @@ async startHost(opts = {}) {
     let settled = false;
     const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
+    // (BUG #1 FIX) Fail fast if the signalling server never confirms our ID.
+    let openTimeout = setTimeout(() => {
+      if (!settled) {
+        this._fail('Could not register with the sync server. Check your internet ' +
+                   'connection, then try again.');
+        settle(null);
+      }
+    }, 30000);
+
+    const clearOpenTimeout = () => {
+      if (openTimeout) { clearTimeout(openTimeout); openTimeout = null; }
+    };
+
     this._peer.on('open', () => {
+      // (BUG #5 FIX) Ignore if the peer was closed while we were waiting.
+      if (!this._peer || this._finished) return;
+      clearOpenTimeout();
       console.log('[Sync] Host peer is open on the signalling server.');
       this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
       settle(this._code);
     });
 
     this._peer.on('connection', (conn) => {
+      // (BUG #5 FIX)
+      if (!this._peer || this._finished) {
+        try { conn.close(); } catch (e) {}
+        return;
+      }
+      clearOpenTimeout();
       console.log('[Sync] Host received incoming connection:', conn.peer);
       if (this._conn) {
         console.warn('[Sync] Rejecting second connection from', conn.peer);
@@ -55159,16 +55191,16 @@ async startHost(opts = {}) {
     });
 
     this._peer.on('error', (err) => {
-      const msg = String(err && err.type || err && err.message || err);
-      console.error('[Sync] Host peer error:', msg);
+      const errType = (err && err.type) || '';
+      const errMsg  = (err && err.message) || String(err);
+      console.error('[Sync] Host peer error:', errType, errMsg);
 
-      if (msg.includes('unavailable-id')) {
-        // Collision budget is capped across recursive retries. `close()`
-        // resets _retryCount, so we carry it forward explicitly through
-        // opts on the recursive call.
+      if (errType === 'unavailable-id') {
+        clearOpenTimeout();
         const nextRetry = (this._retryCount || 0) + 1;
         if (nextRetry > 3) {
-          this._fail('Could not obtain a free room code after several attempts. Please wait a minute and try again.');
+          this._fail('Could not obtain a free room code after several attempts. ' +
+                     'Please wait a minute and try again.');
           settle(null);
           return;
         }
@@ -55179,15 +55211,37 @@ async startHost(opts = {}) {
         return;
       }
 
-      this._fail('Sync error: ' + msg);
+      clearOpenTimeout();
+      let friendly;
+      switch (errType) {
+        case 'network':
+          friendly = 'Lost connection to the sync server. Check your internet connection.';
+          break;
+        case 'server-error':
+          friendly = 'The sync server is having problems. Please try again in a moment.';
+          break;
+        case 'browser-incompatible':
+          friendly = 'This browser does not support the features needed for sync. ' +
+                     'Try Chrome, Edge, Firefox, or Safari 15+.';
+          break;
+        case 'socket-error':
+        case 'socket-closed':
+          friendly = 'The connection to the sync server was lost. Reload the app and try again.';
+          break;
+        default:
+          friendly = 'Sync error: ' + (errType || errMsg || 'unknown');
+      }
+      this._fail(friendly);
       settle(null);
     });
 
-    // Hard cap: if no guest joins within 3 minutes, notify the sender.
+    // Hard cap: no guest joined in 3 minutes.
     setTimeout(() => {
       if (!this._conn && !this._timedOut) {
         this._timedOut = true;
+        // (BUG #3 FIX) settle() must be called so the caller's await returns.
         this._fail('No device joined within 3 minutes. The room code has expired.');
+        settle(null);
       }
     }, 180000);
   });
@@ -55198,7 +55252,7 @@ async startHost(opts = {}) {
      ======================================================================== */
 async joinAsGuest(opts = {}) {
   if (this._peer || this._conn) this.close();
-  this._retryCount = 0;                // ← FIX: fresh session, fresh collision budget
+  this._retryCount = 0;
   const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
@@ -55219,7 +55273,9 @@ async joinAsGuest(opts = {}) {
   console.log('[Sync] Guest joining with code', code);
 
   try {
-    this._peer = new window.Peer(null, { debug: 1 });
+    // (BUG #6 FIX) Pass options as the SOLE argument so PeerJS assigns
+    // a fresh guest ID from the server. This is the documented pattern.
+    this._peer = new window.Peer({ debug: 1 });
   } catch (e) {
     this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
     return false;
@@ -55229,7 +55285,22 @@ async joinAsGuest(opts = {}) {
     let settled = false;
     const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
+    // (BUG #1 FIX for guest) Fail fast if we can't even reach the server.
+    let openTimeout = setTimeout(() => {
+      if (!settled) {
+        this._fail('Could not reach the sync server. Check your internet ' +
+                   'connection, then try again.');
+        settle(false);
+      }
+    }, 30000);
+
+    const clearOpenTimeout = () => {
+      if (openTimeout) { clearTimeout(openTimeout); openTimeout = null; }
+    };
+
     this._peer.on('open', () => {
+      if (!this._peer || this._finished) return;
+      clearOpenTimeout();
       console.log('[Sync] Guest peer is open. Connecting to host…');
       this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
 
@@ -55249,23 +55320,59 @@ async joinAsGuest(opts = {}) {
         settle(true);
       });
 
+      // (BUG #7 FIX) 60 s is a realistic ceiling on mobile networks.
       setTimeout(() => {
-        if (!conn.open && !settled) {
-          this._fail('Could not reach the other device. Double-check the code, and make sure both devices have internet access.');
+        if (!settled && (!conn || !conn.open)) {
+          this._fail(
+            'Could not reach the other device. Double-check that the code matches ' +
+            'EXACTLY, and that the sender\'s modal is still open on the other device.'
+          );
           this.close();
           settle(false);
         }
-      }, 30000);
+      }, 60000);
     });
 
     this._peer.on('error', (err) => {
-      const msg = String(err && err.type || err && err.message || err);
-      console.error('[Sync] Guest peer error:', msg);
-      if (msg.includes('peer-unavailable')) {
-        this._fail('The other device is not reachable. Check the code, and that the sender modal is still open.');
-      } else {
-        this._fail('Sync error: ' + msg);
+      const errType = (err && err.type) || '';
+      const errMsg  = (err && err.message) || String(err);
+      console.error('[Sync] Guest peer error:', errType, errMsg);
+      clearOpenTimeout();
+
+      // (BUG #4 FIX) Give the user a specific, actionable message.
+      let friendly;
+      switch (errType) {
+        case 'peer-unavailable':
+          friendly =
+            'The other device is not reachable. Common causes:\n' +
+            '• The room code was typed incorrectly (check every character).\n' +
+            '• The sender\'s "Sending data" modal was closed.\n' +
+            '• The sender\'s device lost its internet connection.';
+          break;
+        case 'network':
+          friendly = 'Lost connection to the sync server. Check your internet connection.';
+          break;
+        case 'server-error':
+          friendly = 'The sync server is having problems. Please try again in a moment.';
+          break;
+        case 'browser-incompatible':
+          friendly = 'This browser does not support the features needed for sync. ' +
+                     'Try Chrome, Edge, Firefox, or Safari 15+.';
+          break;
+        case 'unavailable-id':
+          // Should not normally happen on the guest because we don't
+          // specify an ID, but handle it defensively.
+          friendly = 'The server could not assign an ID for this device. ' +
+                     'Reload the app and try again.';
+          break;
+        case 'socket-error':
+        case 'socket-closed':
+          friendly = 'The connection to the sync server was lost. Reload the app and try again.';
+          break;
+        default:
+          friendly = 'Sync error: ' + (errType || errMsg || 'unknown');
       }
+      this._fail(friendly);
       settle(false);
     });
   });
@@ -55280,6 +55387,7 @@ async joinAsGuest(opts = {}) {
 
     const doHandshake = () => {
       if (this._handshakeDone) return;
+      if (!this._conn || this._finished) return;
       this._handshakeDone = true;
       console.log('[Sync] Handshake — role:', this._role, 'mode:', this._mode);
       this._progress({ phase: 'connected', message: 'Devices connected.' });
