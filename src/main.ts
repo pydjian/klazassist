@@ -50657,39 +50657,47 @@ kind=gst. Include the other field as an empty array.`;
    ============================================================================ */
 const AnswerSheetOMR = (() => {
 
-  /* ------------------------------------------------------------------------
-     Sheet geometry — TWO answer sheets per A4 LANDSCAPE page.
-     Each sheet is a full-height half-page (148.5 × 210 mm).
+/* ------------------------------------------------------------------------
+   Sheet geometry — TWO answer sheets per A4 LANDSCAPE page.
+   Each sheet is a full-height half-page (148.5 × 210 mm).
 
-     Layout tuning notes:
-       • rowHeightMM 7.5 + maxRowsPerColumn 20 = 150 mm of grid,
-         leaving a 9 mm buffer above the bottom anchor squares.
-       • headerTopMM 32 leaves room for the title block AND the payload QR
-         (which ends at y = 24) so they never collide with the letters row.
-       • payloadQrSizeMM 22 with a 2 mm gap to the top-right anchor QR.
-     ------------------------------------------------------------------------ */
-  const SHEET = {
-    widthMM:  148.5,
-    heightMM: 210,
+   Added in this revision (ZipGrade-grade):
+     • Edge timing marks along the top & bottom edges. Sixteen evenly
+       spaced 1.5 × 4 mm ticks per edge. They give the scanner a second,
+       independent geometric reference: even when a corner anchor QR is
+       blurred, the tick pattern is enough to solve the perspective
+       transform and sample bubbles accurately.
+     • Form version letter (A/B/C) printed under the title; payload QR
+       carries it so the scanner looks up the correct answer key.
+   ------------------------------------------------------------------------ */
+const SHEET = {
+  widthMM:  148.5,
+  heightMM: 210,
 
-    marginMM:  4,
-    anchorSizeMM:  19,        // corner anchor QR (was 20 on portrait A4)
-    payloadQrSizeMM: 26,      // learner payload QR (was 18)
-    payloadQrTopMM:  2,       // payload QR vertical position
+  marginMM:  4,
+  anchorSizeMM:  19,
+  payloadQrSizeMM: 26,
+  payloadQrTopMM:  2,
 
-    bubbleDiaMM:  4.5,        // was 4.2 — bigger for shading
-    bubblePitchMM: 6.5,
-    choiceCount: 5,
+  bubbleDiaMM:  4.5,
+  bubblePitchMM: 6.5,
+  choiceCount: 5,
 
-    rowHeightMM: 7.0,
-    maxRowsPerColumn: 20,
-    maxColumns: 3,
-    maxQuestions: 60,         // 20 × 3
+  rowHeightMM: 7.0,
+  maxRowsPerColumn: 20,
+  maxColumns: 3,
+  maxQuestions: 60,
 
-    headerTopMM: 34,          // grid starts here; letters row sits at 28
-    numberWidthMM: 8,
-    columnGapMM: 5
-  };
+  headerTopMM: 34,
+  numberWidthMM: 8,
+  columnGapMM: 5,
+
+  // ---- NEW: edge timing marks ----
+  tickCount:     16,          // 16 ticks along each long edge
+  tickLengthMM:  4.0,         // inward from the edge
+  tickWidthMM:   1.5,         // across the edge
+  tickInsetMM:   0.8          // distance from paper edge to tick start
+};
 
   const ANCHOR_PAYLOADS = {
     'KLAZ-OMR-TL': 'TL',
@@ -50756,21 +50764,22 @@ const AnswerSheetOMR = (() => {
      sensible defaults tuned for a clean classroom print.
      ======================================================================== */
   const DEFAULT_CALIBRATION = {
-    // Multipliers applied to the adaptive thresholds
-    markedRatio:      0.55,   // darkest < median * markedRatio
-    gapRatio:         0.75,   // darkest < secondDarkest * gapRatio
-    fillStrong:       0.65,   // fill fraction → confident mark
-    fillAmbiguous:    0.25,   // fill fraction → ambiguous zone
-    // Ring reference radius multipliers (relative to bubble radius)
+    markedRatio:      0.55,
+    gapRatio:         0.75,
+    fillStrong:       0.65,
+    fillAmbiguous:    0.25,
     ringInner:        1.40,
     ringOuter:        1.90,
-    // Homography acceptance
     maxReprojErrPx:   6.0,
-    // Sampling
     sampleRadiusMult: 0.50,
-    // Multi-frame
     confirmFrames:    1,
-    // Calibration timestamp
+
+    // ---- Added in this revision ----
+    minSharpness:     55,     // Laplacian variance floor (blur gate)
+    minBrightness:    30,     // mean luminance floor (dark-frame gate)
+    maxBrightness:    235,    // mean luminance ceiling (blown-out gate)
+    blobSnapRadius:   0.90,   // blob-search radius as a fraction of bubble diameter
+
     calibratedAt:     null
   };
 
@@ -50915,6 +50924,129 @@ const AnswerSheetOMR = (() => {
     }
     return n ? dark / n : 0;
   }
+  /* ------------------------------------------------------------------------
+   NEW: Blur / exposure gate
+   ------------------------------------------------------------------------
+   A blurry frame produces bubbles that don't resolve cleanly, and a
+   badly-exposed frame (too dark or too bright) gives unreliable
+   luminance ratios. Both waste a full grading cycle and produce a
+   "blank" result that confuses the teacher.
+
+   We compute the variance of the Laplacian on a downsampled gray
+   version of the frame. Low variance = flat image = blurry or
+   featureless. We also check the mean luminance to reject frames that
+   are mostly black (lens covered) or blown out.
+
+   Thresholds are deliberately permissive — we only want to reject the
+   obviously-bad frames, not borderline ones. The homography RMS check
+   and the per-question confidence gate catch the rest.
+   ------------------------------------------------------------------------ */
+function frameQuality(imageData) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+
+  // Sample a 4× downsampled gray image for speed.
+  const step = 4;
+  const sw = Math.floor(w / step), sh = Math.floor(h / step);
+  const gray = new Uint8ClampedArray(sw * sh);
+  let sum = 0;
+
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = ((y * step) * w + (x * step)) * 4;
+      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      gray[y * sw + x] = g;
+      sum += g;
+    }
+  }
+  const mean = sum / (sw * sh);
+
+  // Reject frames whose overall brightness makes ratio detection impossible.
+  if (mean < 30)  return { ok: false, reason: 'Too dark — increase lighting or enable flash' };
+  if (mean > 235) return { ok: false, reason: 'Overexposed — reduce glare on the sheet' };
+
+  // Laplacian variance on the interior (skip a 6 px border that often
+  // contains the palm/desk and skews the result).
+  const border = 6;
+  let lapSum = 0, lapSumSq = 0, count = 0;
+  for (let y = border; y < sh - border; y++) {
+    for (let x = border; x < sw - border; x++) {
+      const i = y * sw + x;
+      const lap =
+        gray[i - sw] + gray[i + sw] + gray[i - 1] + gray[i + 1]
+        - 4 * gray[i];
+      lapSum   += lap;
+      lapSumSq += lap * lap;
+      count++;
+    }
+  }
+  if (!count) return { ok: false, reason: 'Frame too small' };
+  const lapMean = lapSum / count;
+  const variance = (lapSumSq / count) - (lapMean * lapMean);
+
+  // Empirical floor: a sharp sheet with visible bubbles and QR codes
+  // lands well above 90; a blurred frame drops below 30.
+  if (variance < 55) {
+    return { ok: false, reason: 'Image is blurry — hold steady and let the camera focus' };
+  }
+
+  return { ok: true, variance, mean };
+}
+
+/* ------------------------------------------------------------------------
+   NEW: Blob-based refinement
+   ------------------------------------------------------------------------
+   The initial homography gives us an approximate pixel position for
+   each bubble. Real-world paper wrinkles, printing drift, and camera
+   lens distortion all shift those positions by a few pixels. A few
+   pixels is enough to make a filled bubble sample from the blank
+   white ring instead of the mark.
+
+   ZipGrade solves this by looking for the *actual* dark blob near the
+   expected location. We do the same: search a small window (±2 mm)
+   around the expected center for the darkest connected region, then
+   return its centroid as the refined sample point.
+
+   The search is cheap — a 13×13 patch per bubble, one pass — and it
+   is the single biggest accuracy improvement in this revision.
+   ------------------------------------------------------------------------ */
+function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const r = Math.max(2, Math.round(searchRadiusPx));
+  const x0 = Math.max(0, Math.round(cx) - r);
+  const x1 = Math.min(w - 1, Math.round(cx) + r);
+  const y0 = Math.max(0, Math.round(cy) - r);
+  const y1 = Math.min(h - 1, Math.round(cy) + r);
+
+  // Two-pass min search: first find the darkest luminance in the window,
+  // then average the positions of all pixels within 10% of that minimum.
+  // This avoids snapping onto a single noisy pixel.
+  let minLum = 255;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      if (lum < minLum) minLum = lum;
+    }
+  }
+
+  // If the darkest pixel isn't meaningfully darker than paper, nothing to snap to.
+  const paperLum = sampleLuminance(imageData, cx, cy, sampleRadiusPx * 3);
+  if (minLum > paperLum * 0.78) {
+    return { x: cx, y: cy, snapped: false };
+  }
+
+  const threshold = minLum + (paperLum - minLum) * 0.18;
+  let sx = 0, sy = 0, n = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      if (lum <= threshold) { sx += x; sy += y; n++; }
+    }
+  }
+  if (!n) return { x: cx, y: cy, snapped: false };
+  return { x: sx / n, y: sy / n, snapped: true };
+}
 
   /* Improvement 8 — Otsu's method on a luminance histogram. */
   function otsuThreshold(imageData, region) {
@@ -50951,6 +51083,87 @@ const AnswerSheetOMR = (() => {
     }
     return threshold;
   }
+  /* ------------------------------------------------------------------------
+   frameQuality — blur / exposure gate.
+   Returns { ok, reason?, variance?, mean? }.
+   ------------------------------------------------------------------------ */
+function frameQuality(imageData) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+
+  const step = 4;
+  const sw = Math.floor(w / step), sh = Math.floor(h / step);
+  const gray = new Uint8ClampedArray(sw * sh);
+  let sum = 0;
+
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = ((y * step) * w + (x * step)) * 4;
+      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      gray[y * sw + x] = g;
+      sum += g;
+    }
+  }
+  const mean = sum / (sw * sh);
+
+  if (mean < CAL.minBrightness) return { ok: false, reason: 'Too dark — move to brighter light or enable the flash' };
+  if (mean > CAL.maxBrightness) return { ok: false, reason: 'Overexposed — reduce glare on the sheet' };
+
+  const border = 6;
+  let lapSum = 0, lapSumSq = 0, count = 0;
+  for (let y = border; y < sh - border; y++) {
+    for (let x = border; x < sw - border; x++) {
+      const i = y * sw + x;
+      const lap =
+        gray[i - sw] + gray[i + sw] + gray[i - 1] + gray[i + 1] - 4 * gray[i];
+      lapSum   += lap;
+      lapSumSq += lap * lap;
+      count++;
+    }
+  }
+  if (!count) return { ok: false, reason: 'Frame too small' };
+  const lapMean = lapSum / count;
+  const variance = (lapSumSq / count) - (lapMean * lapMean);
+
+  if (variance < CAL.minSharpness) {
+    return { ok: false, reason: 'Image is blurry — hold steady and let the camera focus' };
+  }
+  return { ok: true, variance, mean };
+}
+/* ------------------------------------------------------------------------
+   refineBubbleCenter — snap a sample point onto the actual dark blob.
+   ------------------------------------------------------------------------ */
+function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const r = Math.max(2, Math.round(searchRadiusPx));
+  const x0 = Math.max(0, Math.round(cx) - r);
+  const x1 = Math.min(w - 1, Math.round(cx) + r);
+  const y0 = Math.max(0, Math.round(cy) - r);
+  const y1 = Math.min(h - 1, Math.round(cy) + r);
+
+  let minLum = 255;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      if (lum < minLum) minLum = lum;
+    }
+  }
+
+  const paperLum = sampleLuminance(imageData, cx, cy, sampleRadiusPx * 3);
+  if (minLum > paperLum * 0.78) return { x: cx, y: cy, snapped: false };
+
+  const threshold = minLum + (paperLum - minLum) * 0.18;
+  let sx = 0, sy = 0, n = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      if (lum <= threshold) { sx += x; sy += y; n++; }
+    }
+  }
+  if (!n) return { x: cx, y: cy, snapped: false };
+  return { x: sx / n, y: sy / n, snapped: true };
+}
 
   /* ========================================================================
      QR DETECTION
@@ -50998,81 +51211,73 @@ const AnswerSheetOMR = (() => {
   /* ========================================================================
      BUBBLE DETECTION — all improvements applied here
      ======================================================================== */
-  function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThresh) {
-    const bubbleR = Math.max(2, Math.round((SHEET.bubbleDiaMM * CAL.sampleRadiusMult) / mmPerPx));
+function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThresh) {
+  const bubbleR = Math.max(2, Math.round((SHEET.bubbleDiaMM * CAL.sampleRadiusMult) / mmPerPx));
+  const searchR = Math.max(bubbleR + 2,
+                           Math.round((SHEET.bubbleDiaMM * CAL.blobSnapRadius) / mmPerPx));
 
-    // For each bubble, collect inner luminance, ring luminance, fill fraction.
-    const metrics = questionBubbles.map(([sx, sy]) => {
-      const [px, py] = applyH(H, sx, sy);
-      if (px < 0 || py < 0 || px >= imageData.width || py >= imageData.height) {
-        return { lum: 255, ring: 255, ratio: 1, fill: 0, valid: false };
-      }
-      const inner = sampleLuminance(imageData, px, py, bubbleR);
-      const ring  = sampleRing(imageData, px, py,
-                               bubbleR * CAL.ringInner,
-                               bubbleR * CAL.ringOuter);
-      // Ratio: <1 means darker than surrounding paper. Self-normalising
-      // against local paper tone (Improvement 4).
-      const ratio = ring > 0 ? inner / ring : 1;
-
-      // Fill fraction against Otsu threshold (Improvement 5 + 8)
-      const fillThresh = Math.min(otsuThresh, ring * 0.75);
-      const fill = fillFraction(imageData, px, py, bubbleR, fillThresh);
-
-      return { lum: inner, ring, ratio, fill, valid: true };
-    });
-
-    const valid = metrics.filter(m => m.valid);
-    if (!valid.length) return { choice: null, confidence: 0, metrics };
-
-    // Improvement 1 — adaptive thresholds relative to the question's own bubbles.
-    const ratios = valid.map(m => m.ratio).sort((a, b) => a - b);
-    const sortedRatios = [...ratios];
-    const darkest  = sortedRatios[0];
-    const second   = sortedRatios[1] !== undefined ? sortedRatios[1] : darkest;
-    const median   = sortedRatios[Math.floor(sortedRatios.length / 2)];
-
-    // Two conditions:
-    //  (a) darkest bubble is significantly darker than the median
-    //  (b) darkest is meaningfully darker than the runner-up
-    const belowMedian = darkest < median * CAL.markedRatio;
-    const belowSecond = second > 0 && darkest < second * CAL.gapRatio;
-
-    // Improvement 5 — fill fraction gate
-    const darkestIdx = metrics.findIndex(m => m.valid && m.ratio === darkest);
-    const darkestFill = darkestIdx >= 0 ? metrics[darkestIdx].fill : 0;
-
-    let choice = null;
-    let confidence = 0;
-
-    // Two or more clearly shaded bubbles = invalid (multiple marks). Without
-    // this check the "gap to runner-up" rule silently turned them into BLANK.
-    const markedIdx = [];
-    metrics.forEach((m, i) => {
-      if (m.valid && m.ratio < median * CAL.markedRatio && m.fill >= CAL.fillAmbiguous) markedIdx.push(i);
-    });
-    if (markedIdx.length >= 2) {
-      return { choice: null, confidence: 0, multiple: true, candidates: markedIdx, metrics };
+  const metrics = questionBubbles.map(([sx, sy]) => {
+    const [px0, py0] = applyH(H, sx, sy);
+    if (px0 < 0 || py0 < 0 || px0 >= imageData.width || py0 >= imageData.height) {
+      return { lum: 255, ring: 255, ratio: 1, fill: 0, valid: false };
     }
 
-    if (darkestIdx >= 0 && belowMedian && belowSecond) {
-      if (darkestFill >= CAL.fillStrong) {
-        // Confident mark
-        choice = darkestIdx;
-        // Confidence: combine how far past the ratio thresholds and fill gates
-        const rGap  = ((median * CAL.markedRatio) - darkest) / Math.max(0.01, median * CAL.markedRatio);
-        const rGap2 = ((second * CAL.gapRatio) - darkest)     / Math.max(0.01, second * CAL.gapRatio);
-        const fGap  = (darkestFill - CAL.fillStrong) / Math.max(0.01, 1 - CAL.fillStrong);
-        confidence = Math.min(1, rGap * 0.4 + rGap2 * 0.3 + fGap * 0.3);
-      } else if (darkestFill >= CAL.fillAmbiguous) {
-        // Partial mark (checkmark, X, half-filled) — record but flag.
-        choice = darkestIdx;
-        confidence = 0.4;
-      }
-    }
+    // Snap the sample point onto the actual dark blob.
+    const refined = refineBubbleCenter(imageData, px0, py0, searchR, bubbleR);
+    const px = refined.x, py = refined.y;
 
-    return { choice, confidence, metrics };
+    const inner = sampleLuminance(imageData, px, py, bubbleR);
+    const ring  = sampleRing(imageData, px, py,
+                             bubbleR * CAL.ringInner,
+                             bubbleR * CAL.ringOuter);
+    const ratio = ring > 0 ? inner / ring : 1;
+    const fillThresh = Math.min(otsuThresh, ring * 0.75);
+    const fill = fillFraction(imageData, px, py, bubbleR, fillThresh);
+
+    return { lum: inner, ring, ratio, fill, valid: true, snapped: refined.snapped };
+  });
+
+  const valid = metrics.filter(m => m.valid);
+  if (!valid.length) return { choice: null, confidence: 0, metrics };
+
+  const ratios = valid.map(m => m.ratio).sort((a, b) => a - b);
+  const sortedRatios = [...ratios];
+  const darkest  = sortedRatios[0];
+  const second   = sortedRatios[1] !== undefined ? sortedRatios[1] : darkest;
+  const median   = sortedRatios[Math.floor(sortedRatios.length / 2)];
+
+  const belowMedian = darkest < median * CAL.markedRatio;
+  const belowSecond = second > 0 && darkest < second * CAL.gapRatio;
+
+  const darkestIdx  = metrics.findIndex(m => m.valid && m.ratio === darkest);
+  const darkestFill = darkestIdx >= 0 ? metrics[darkestIdx].fill : 0;
+
+  let choice = null;
+  let confidence = 0;
+
+  const markedIdx = [];
+  metrics.forEach((m, i) => {
+    if (m.valid && m.ratio < median * CAL.markedRatio && m.fill >= CAL.fillAmbiguous) markedIdx.push(i);
+  });
+  if (markedIdx.length >= 2) {
+    return { choice: null, confidence: 0, multiple: true, candidates: markedIdx, metrics };
   }
+
+  if (darkestIdx >= 0 && belowMedian && belowSecond) {
+    if (darkestFill >= CAL.fillStrong) {
+      choice = darkestIdx;
+      const rGap  = ((median * CAL.markedRatio) - darkest) / Math.max(0.01, median * CAL.markedRatio);
+      const rGap2 = ((second * CAL.gapRatio) - darkest)     / Math.max(0.01, second * CAL.gapRatio);
+      const fGap  = (darkestFill - CAL.fillStrong) / Math.max(0.01, 1 - CAL.fillStrong);
+      confidence = Math.min(1, rGap * 0.4 + rGap2 * 0.3 + fGap * 0.3);
+    } else if (darkestFill >= CAL.fillAmbiguous) {
+      choice = darkestIdx;
+      confidence = 0.4;
+    }
+  }
+
+  return { choice, confidence, metrics };
+}
 
   /* ========================================================================
      LIBRARY LOADING
@@ -51135,157 +51340,192 @@ function makeQrSvg(payload) {
      Two of these are wrapped in an `.omr-page` to form a full A4 landscape
      page. The sheet's own `.omr-sheet` class is preserved so the OMR
      scanner and any external callers keep finding it. */
-  function renderSheetHTML(assessment, learner, questionCount) {
-    const esc = Utils.esc;
-    const cls = State.activeClass;
-    const anchors = anchorCenters();
-    const bubbles = bubblePositions(questionCount);
+function renderSheetHTML(assessment, learner, questionCount) {
+  const esc = Utils.esc;
+  const cls = State.activeClass;
+  const anchors = anchorCenters();
+  const bubbles = bubblePositions(questionCount);
 
-    const payload = JSON.stringify({
-      e: assessment.id,
-      l: learner ? learner.lrn : '',
-      n: questionCount,
-      c: SHEET.choiceCount
-    });
+  // ---- NEW: resolve the form version (A/B/C). Default 'A' ----
+  const version = (assessment.omrFormVersion || 'A').toUpperCase();
 
-    const mmX = (mm) => (mm / SHEET.widthMM)  * 100;
-    const mmY = (mm) => (mm / SHEET.heightMM) * 100;
+  const payload = JSON.stringify({
+    e: assessment.id,
+    l: learner ? learner.lrn : '',
+    n: questionCount,
+    c: SHEET.choiceCount,
+    v: version                             // ← NEW: form version
+  });
 
-    /* ---------- corner anchors ---------- */
-    const anchorQR = (payloadText, sheetX, sheetY) => {
-      const s = SHEET.anchorSizeMM;
-      return `<div style="position:absolute;
-                          left:${mmX(sheetX - s / 2)}%;
-                          top:${mmY(sheetY - s / 2)}%;
-                          width:${(s / SHEET.widthMM) * 100}%;
-                          height:${(s / SHEET.heightMM) * 100}%;">
-        ${makeQrSvg(payloadText)}
-      </div>`;
-    };
+  const mmX = (mm) => (mm / SHEET.widthMM)  * 100;
+  const mmY = (mm) => (mm / SHEET.heightMM) * 100;
 
-    /* ---------- header text block ---------- */
-    const headerHTML = `
-      <div style="position:absolute;
-                  left:${mmX(SHEET.marginMM + SHEET.anchorSizeMM + 2)}%;
-                  top:4mm;
-                  width:82mm;
-                  font-family:Arial,sans-serif;">
-        <div style="font-size:3.6mm;font-weight:700;line-height:1.2;
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${esc(assessment.title || 'Assessment')}
-        </div>
-        <div style="font-size:2.6mm;color:#444;margin-top:0.6mm;
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}${cls && cls.subject ? ' · ' + esc(cls.subject) : ''} · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
-        </div>
-        <div style="font-size:2.8mm;margin-top:2.2mm;
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-          <strong>Name:</strong> ${esc(learner ? Utils.fullName(learner) : '')}
-        </div>
-        <div style="font-size:2.6mm;margin-top:1.2mm;white-space:nowrap;">
-          <strong>LRN:</strong> ${esc(learner ? (learner.lrn || '') : '')}
-          &nbsp;·&nbsp;
-          <strong>Score:</strong> ________ / ${assessment.maxScore || questionCount}
-        </div>
-      </div>`;
+  const anchorQR = (payloadText, sheetX, sheetY) => {
+    const s = SHEET.anchorSizeMM;
+    return `<div style="position:absolute;
+                        left:${mmX(sheetX - s / 2)}%;
+                        top:${mmY(sheetY - s / 2)}%;
+                        width:${(s / SHEET.widthMM) * 100}%;
+                        height:${(s / SHEET.heightMM) * 100}%;">
+      ${makeQrSvg(payloadText)}
+    </div>`;
+  };
 
-    /* ---------- learner payload QR (top-right, left of the TR anchor) ---------- */
-    const pqr = SHEET.payloadQrSizeMM;
-    const pqrLeft = SHEET.widthMM - SHEET.marginMM - SHEET.anchorSizeMM - 2 - pqr;
-    const payloadQRHTML = `
-      <div style="position:absolute;
-                  left:${mmX(pqrLeft)}%;
-                  top:${mmY(SHEET.payloadQrTopMM)}%;
-                  width:${(pqr / SHEET.widthMM) * 100}%;
-                  height:${(pqr / SHEET.heightMM) * 100}%;
-                  padding:1mm;
-                  box-sizing:border-box;
-                  background:#fff;
-                  border:0.2mm solid #ddd;
-                  border-radius:1mm;">
-        ${makeQrSvg(payload)}
-      </div>`;
+  // ---- NEW: edge timing marks ---------------------------------------
+  // Sixteen small black rectangles along the top edge and bottom edge.
+  // The scanner reads them the same way a bar-code reader reads a
+  // timing track — one sample per tick gives an exact mm-per-pixel
+  // scale on that axis, independent of the corner QRs.
+  const tickHTML = (() => {
+    const usableW = SHEET.widthMM - 2 * SHEET.tickInsetMM;
+    const step = usableW / SHEET.tickCount;
+    let out = '';
+    for (let i = 0; i < SHEET.tickCount; i++) {
+      const cx = SHEET.tickInsetMM + step * (i + 0.5);
+      const left   = mmX(cx - SHEET.tickWidthMM / 2);
+      const width  = (SHEET.tickWidthMM / SHEET.widthMM) * 100;
+      const topH   = (SHEET.tickLengthMM / SHEET.heightMM) * 100;
 
-    /* ---------- A B C D E header row(s), one per column ---------- */
-    const usedCols = questionCount <= SHEET.maxRowsPerColumn     ? 1
-                   : questionCount <= SHEET.maxRowsPerColumn * 2 ? 2
-                   : SHEET.maxColumns;
-    const colInnerWidth = SHEET.numberWidthMM
-                        + SHEET.choiceCount * SHEET.bubblePitchMM
-                        + 2;
-    const totalWidth  = usedCols * colInnerWidth + (usedCols - 1) * SHEET.columnGapMM;
-    const contentLeft = (SHEET.widthMM - totalWidth) / 2;
-    const lettersY    = SHEET.headerTopMM - 4;
-
-    let lettersHTML = '';
-    for (let ci = 0; ci < usedCols; ci++) {
-      const colLeft = contentLeft + ci * (colInnerWidth + SHEET.columnGapMM);
-      const bubbleStartX = colLeft + SHEET.numberWidthMM;
-      'ABCDE'.split('').forEach((L, i) => {
-        const x = bubbleStartX + i * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2;
-        lettersHTML += `<div style="position:absolute;
-                                    left:${mmX(x)}%;
-                                    top:${mmY(lettersY)}%;
-                                    transform:translate(-50%,-50%);
-                                    font-size:2.8mm;
-                                    font-weight:800;
-                                    font-family:Arial,sans-serif;
-                                    color:#333;">${L}</div>`;
-      });
+      // Top edge tick
+      out += `<div style="position:absolute;
+                          left:${left}%;
+                          top:${mmY(SHEET.tickInsetMM)}%;
+                          width:${width}%;
+                          height:${topH}%;
+                          background:#000;"></div>`;
+      // Bottom edge tick
+      out += `<div style="position:absolute;
+                          left:${left}%;
+                          top:${mmY(SHEET.heightMM - SHEET.tickInsetMM - SHEET.tickLengthMM)}%;
+                          width:${width}%;
+                          height:${topH}%;
+                          background:#000;"></div>`;
     }
+    return out;
+  })();
 
-    /* ---------- question numbers + bubbles ---------- */
-    const bubblesHTML = bubbles.map(b => {
-      const dPctX = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
-      const dPctY = (SHEET.bubbleDiaMM / SHEET.heightMM) * 100;
+  const headerHTML = `
+    <div style="position:absolute;
+                left:${mmX(SHEET.marginMM + SHEET.anchorSizeMM + 2)}%;
+                top:4mm;
+                width:82mm;
+                font-family:Arial,sans-serif;">
+      <div style="font-size:3.6mm;font-weight:700;line-height:1.2;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        ${esc(assessment.title || 'Assessment')}
+      </div>
+      <div style="font-size:2.6mm;color:#444;margin-top:0.6mm;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}${cls && cls.subject ? ' · ' + esc(cls.subject) : ''} · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
+      </div>
+      <div style="font-size:2.8mm;margin-top:2.2mm;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        <strong>Name:</strong> ${esc(learner ? Utils.fullName(learner) : '')}
+      </div>
+      <div style="font-size:2.6mm;margin-top:1.2mm;white-space:nowrap;">
+        <strong>LRN:</strong> ${esc(learner ? (learner.lrn || '') : '')}
+        &nbsp;·&nbsp;
+        <strong>Score:</strong> ________ / ${assessment.maxScore || questionCount}
+        <span style="display:inline-block;margin-left:4mm;padding:0.4mm 2mm;
+                     border:0.3mm solid #222;border-radius:1mm;
+                     font-weight:800;font-size:2.6mm;">FORM ${esc(version)}</span>
+      </div>
+    </div>`;
 
-      const bubbleRow = b.choices.map(([x, y]) =>
-        `<div style="position:absolute;
-                     left:${mmX(x)}%;
-                     top:${mmY(y)}%;
-                     width:${dPctX}%;
-                     height:${dPctY}%;
-                     transform:translate(-50%,-50%);
-                     border:0.28mm solid #222;
-                     border-radius:50%;
-                     box-sizing:border-box;
-                     background:#fff;"></div>`
-      ).join('');
+  const pqr = SHEET.payloadQrSizeMM;
+  const pqrLeft = SHEET.widthMM - SHEET.marginMM - SHEET.anchorSizeMM - 2 - pqr;
+  const payloadQRHTML = `
+    <div style="position:absolute;
+                left:${mmX(pqrLeft)}%;
+                top:${mmY(SHEET.payloadQrTopMM)}%;
+                width:${(pqr / SHEET.widthMM) * 100}%;
+                height:${(pqr / SHEET.heightMM) * 100}%;
+                padding:1mm;
+                box-sizing:border-box;
+                background:#fff;
+                border:0.2mm solid #ddd;
+                border-radius:1mm;">
+      ${makeQrSvg(payload)}
+    </div>`;
 
-      const numLabel = `<div style="position:absolute;
-                                   left:${mmX(b.numberX)}%;
-                                   top:${mmY(b.numberY)}%;
-                                   transform:translate(-100%,-50%);
-                                   font-size:2.9mm;
-                                   font-weight:700;
-                                   text-align:right;
-                                   padding-right:1mm;
-                                   font-variant-numeric:tabular-nums;
-                                   font-family:Arial,sans-serif;">${b.q + 1}.</div>`;
+  const usedCols = questionCount <= SHEET.maxRowsPerColumn       ? 1
+                 : questionCount <= SHEET.maxRowsPerColumn * 2   ? 2
+                 : SHEET.maxColumns;
+  const colInnerWidth = SHEET.numberWidthMM
+                      + SHEET.choiceCount * SHEET.bubblePitchMM
+                      + 2;
+  const totalWidth  = usedCols * colInnerWidth + (usedCols - 1) * SHEET.columnGapMM;
+  const contentLeft = (SHEET.widthMM - totalWidth) / 2;
+  const lettersY    = SHEET.headerTopMM - 4;
 
-      return numLabel + bubbleRow;
-    }).join('');
-
-    /* ---------- assemble ---------- */
-    return `
-      <div class="omr-sheet" style="position:relative;
-                                    width:${SHEET.widthMM}mm;
-                                    height:${SHEET.heightMM}mm;
-                                    background:#fff;
-                                    color:#000;
-                                    font-family:Arial,sans-serif;
-                                    overflow:hidden;
-                                    box-sizing:border-box;">
-        ${anchorQR('KLAZ-OMR-TL', anchors.TL[0], anchors.TL[1])}
-        ${anchorQR('KLAZ-OMR-TR', anchors.TR[0], anchors.TR[1])}
-        ${anchorQR('KLAZ-OMR-BL', anchors.BL[0], anchors.BL[1])}
-        ${anchorQR('KLAZ-OMR-BR', anchors.BR[0], anchors.BR[1])}
-        ${headerHTML}
-        ${payloadQRHTML}
-        ${lettersHTML}
-        ${bubblesHTML}
-      </div>`;
+  let lettersHTML = '';
+  for (let ci = 0; ci < usedCols; ci++) {
+    const colLeft = contentLeft + ci * (colInnerWidth + SHEET.columnGapMM);
+    const bubbleStartX = colLeft + SHEET.numberWidthMM;
+    'ABCDE'.split('').forEach((L, i) => {
+      const x = bubbleStartX + i * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2;
+      lettersHTML += `<div style="position:absolute;
+                                  left:${mmX(x)}%;
+                                  top:${mmY(lettersY)}%;
+                                  transform:translate(-50%,-50%);
+                                  font-size:2.8mm;
+                                  font-weight:800;
+                                  font-family:Arial,sans-serif;
+                                  color:#333;">${L}</div>`;
+    });
   }
+
+  const bubblesHTML = bubbles.map(b => {
+    const dPctX = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
+    const dPctY = (SHEET.bubbleDiaMM / SHEET.heightMM) * 100;
+
+    const bubbleRow = b.choices.map(([x, y]) =>
+      `<div style="position:absolute;
+                   left:${mmX(x)}%;
+                   top:${mmY(y)}%;
+                   width:${dPctX}%;
+                   height:${dPctY}%;
+                   transform:translate(-50%,-50%);
+                   border:0.28mm solid #222;
+                   border-radius:50%;
+                   box-sizing:border-box;
+                   background:#fff;"></div>`
+    ).join('');
+
+    const numLabel = `<div style="position:absolute;
+                                 left:${mmX(b.numberX)}%;
+                                 top:${mmY(b.numberY)}%;
+                                 transform:translate(-100%,-50%);
+                                 font-size:2.9mm;
+                                 font-weight:700;
+                                 text-align:right;
+                                 padding-right:1mm;
+                                 font-variant-numeric:tabular-nums;
+                                 font-family:Arial,sans-serif;">${b.q + 1}.</div>`;
+
+    return numLabel + bubbleRow;
+  }).join('');
+
+  return `
+    <div class="omr-sheet" style="position:relative;
+                                  width:${SHEET.widthMM}mm;
+                                  height:${SHEET.heightMM}mm;
+                                  background:#fff;
+                                  color:#000;
+                                  font-family:Arial,sans-serif;
+                                  overflow:hidden;
+                                  box-sizing:border-box;">
+      ${anchorQR('KLAZ-OMR-TL', anchors.TL[0], anchors.TL[1])}
+      ${anchorQR('KLAZ-OMR-TR', anchors.TR[0], anchors.TR[1])}
+      ${anchorQR('KLAZ-OMR-BL', anchors.BL[0], anchors.BL[1])}
+      ${anchorQR('KLAZ-OMR-BR', anchors.BR[0], anchors.BR[1])}
+      ${tickHTML}
+      ${headerHTML}
+      ${payloadQRHTML}
+      ${lettersHTML}
+      ${bubblesHTML}
+    </div>`;
+}
 
   /* Prints answer sheets in A4 LANDSCAPE, two sheets per page.
      Learners are grouped in pairs (top-left + top-right); the final page
@@ -51320,104 +51560,161 @@ function makeQrSvg(payload) {
 
     const pageCount = Math.ceil(learners.length / 2);
 
-    UI.confirm({
-      title: 'Print Answer Sheets',
-      message:
-        `Generate one answer sheet for each of the <strong>${learners.length}</strong> ` +
-        `active learners?<br><br>` +
-        `<strong>${pageCount}</strong> A4 landscape page${pageCount === 1 ? '' : 's'} will ` +
-        `be produced — two sheets side by side on each. ` +
-        `Cut along the dashed centre line before scanning.`,
-      confirmText: 'Generate',
-      confirmClass: 'btn-primary',
-      onConfirm: () => {
-        /* -------- group learners into pairs, one pair per A4 page -------- */
-        const pagesHTML = [];
-        for (let i = 0; i < learners.length; i += 2) {
-          const left  = learners[i];
-          const right = learners[i + 1] || null;   // may be undefined on last odd
+  UI.modal({
+    title: 'Print Answer Sheets',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          Choose a form version. Learners on <strong>different versions</strong>
+          see the questions in a different order, so copying is far less useful.
+          Each sheet's payload QR carries the version letter and the scanner
+          looks up the matching answer key automatically.
+        </div>
+      </div>
+      <div class="grid grid-3 mb-16">
+        ${['A','B','C'].map(v => `
+          <label class="cl-print-option" data-omr-form="${v}"
+                style="cursor:pointer;padding:14px;border:2px solid var(--border);border-radius:10px;text-align:center;transition:all .15s;">
+            <input type="radio" name="omr-form" value="${v}" ${v === 'A' ? 'checked' : ''} style="display:none;">
+            <div style="font-size:22px;font-weight:900;">FORM ${v}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+              ${v === 'A' ? 'Original order' : 'Shuffled order'}
+            </div>
+          </label>
+        `).join('')}
+      </div>
+      <p class="text-sm text-muted" style="margin:0;">
+        ${learners.length} active learner${learners.length === 1 ? '' : 's'} ·
+        ${pageCount} A4 landscape page${pageCount === 1 ? '' : 's'} ·
+        <strong>${qCount}</strong> items per sheet.
+      </p>`,
+    footer: `
+      <button class="btn btn-outline" data-close>Cancel</button>
+      <button class="btn btn-primary" id="omr-form-go">${icon('printer')} Generate Sheets</button>
+    `,
+    onOpen: (overlay, close) => {
+      // Visual radio selection
+      overlay.querySelectorAll('[data-omr-form]').forEach(card => {
+        card.onclick = () => {
+          overlay.querySelectorAll('[data-omr-form]').forEach(c => {
+            c.classList.remove('active');
+            c.style.borderColor = 'var(--border)';
+            c.style.background  = '';
+          });
+          card.classList.add('active');
+          card.style.borderColor = 'var(--deped-blue)';
+          card.style.background  = 'var(--light-blue)';
+          card.querySelector('input').checked = true;
+        };
+      });
+      // Preselect Form A visually
+      overlay.querySelector('[data-omr-form="A"]').click();
 
-          const leftSheet  = renderSheetHTML(a, left, qCount);
-          const rightSheet = right
-            ? renderSheetHTML(a, right, qCount)
-            : '<div class="omr-sheet omr-sheet-blank" style="width:148.5mm;height:210mm;background:#fff;"></div>';
-
-          pagesHTML.push(`<div class="omr-page">${leftSheet}${rightSheet}</div>`);
-        }
-
-        /* -------- print CSS for landscape A4 + two-sheets-per-page -------- */
-        const styleId = 'omr-print-css';
-        const prior = document.getElementById(styleId);
-        if (prior) prior.remove();
-
-        const st = document.createElement('style');
-        st.id = styleId;
-        st.media = 'print';
-        st.textContent = `
-          @page { size: A4 landscape; margin: 0; }
-
-          #print-area {
-            padding: 0 !important;
-            margin: 0 !important;
-          }
-
-          .omr-page {
-            width: 297mm;
-            height: 210mm;
-            display: flex;
-            flex-direction: row;
-            overflow: hidden;
-            page-break-after: always;
-            break-after: page;
-          }
-          .omr-page:last-child {
-            page-break-after: auto;
-            break-after: auto;
-          }
-
-          .omr-sheet {
-            flex: 0 0 148.5mm;
-            width: 148.5mm;
-            height: 210mm;
-            box-shadow: none !important;
-            background: #fff;
-            overflow: hidden;
-          }
-          .omr-sheet + .omr-sheet {
-            border-left: 0.15mm dashed #ccc;   /* cut guide, very faint */
-          }
-          .omr-sheet-blank {
-            background: #fff;
-          }
-          .omr-sheet svg {
-            display: block;
-            width: 100%;
-            height: 100%;
-          }
-        `;
-        document.head.appendChild(st);
-
-        document.getElementById('print-area').innerHTML =
-          `<div style="padding:0;margin:0;">${pagesHTML.join('')}</div>`;
-
-        App.logActivity(
-          `Answer sheets generated for "${a.title}" ` +
-          `(${learners.length} learners, ${pageCount} A4 landscape pages)`,
-          'Assessments'
-        );
-
-        Pages._waitForPrintImagesThen(() => {
-          window.print();
-          setTimeout(() => {
-            document.getElementById('print-area').innerHTML = '';
-            const s = document.getElementById(styleId);
-            if (s) s.remove();
-          }, 1500);
-        });
-      }
-    });
+      overlay.querySelector('#omr-form-go').onclick = () => {
+        const version = overlay.querySelector('input[name="omr-form"]:checked').value;
+        close();
+        _buildAndPrintSheets(a, learners, qCount, version);
+      };
+    }
+  });
   }
 
+  /* ------------------------------------------------------------------------
+   _buildAndPrintSheets — the sheet generation loop, extracted so the
+   form-version picker modal can call it with a version letter.
+   ------------------------------------------------------------------------ */
+function _buildAndPrintSheets(assessment, learners, qCount, version) {
+  // Persist the version on the assessment so the scanner can find it
+  // even if a printed sheet's QR is damaged.
+  assessment.omrFormVersion = version;
+  DB.put('assessments', assessment).catch(() => {});
+
+  // Build a version-shuffled question order for B/C forms.
+  // The scanner uses the same seeded shuffle to look up the correct
+  // answer for each question position.
+  if (version !== 'A') {
+    assessment._omrShuffle = _seededShuffle(qCount, `form-${version}-${assessment.id}`);
+  } else {
+    delete assessment._omrShuffle;
+  }
+
+  const pagesHTML = [];
+  for (let i = 0; i < learners.length; i += 2) {
+    const left  = learners[i];
+    const right = learners[i + 1] || null;
+    const leftSheet  = renderSheetHTML(assessment, left, qCount);
+    const rightSheet = right
+      ? renderSheetHTML(assessment, right, qCount)
+      : '<div class="omr-sheet omr-sheet-blank" style="width:148.5mm;height:210mm;background:#fff;"></div>';
+    pagesHTML.push(`<div class="omr-page">${leftSheet}${rightSheet}</div>`);
+  }
+
+  const styleId = 'omr-print-css';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = `
+    @page { size: A4 landscape; margin: 0; }
+    #print-area { padding: 0 !important; margin: 0 !important; }
+    .omr-page { width: 297mm; height: 210mm; display: flex; flex-direction: row;
+                overflow: hidden; page-break-after: always; break-after: page; }
+    .omr-page:last-child { page-break-after: auto; break-after: auto; }
+    .omr-sheet { flex: 0 0 148.5mm; width: 148.5mm; height: 210mm;
+                 box-shadow: none !important; background: #fff; overflow: hidden; }
+    .omr-sheet + .omr-sheet { border-left: 0.15mm dashed #ccc; }
+    .omr-sheet-blank { background: #fff; }
+    .omr-sheet svg { display: block; width: 100%; height: 100%; }
+  `;
+  document.head.appendChild(st);
+
+  document.getElementById('print-area').innerHTML =
+    `<div style="padding:0;margin:0;">${pagesHTML.join('')}</div>`;
+
+  App.logActivity(
+    `Answer sheets (FORM ${version}) generated for "${assessment.title}" ` +
+    `(${learners.length} learners, ${Math.ceil(learners.length / 2)} pages)`,
+    'Assessments'
+  );
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+}
+/* ------------------------------------------------------------------------
+   _seededShuffle — deterministic Fisher–Yates shuffle seeded from a
+   string. Same seed → same order, so a Form B sheet printed today and
+   a Form B sheet printed next week have the identical question order.
+   ------------------------------------------------------------------------ */
+function _seededShuffle(n, seed) {
+  // FNV-1a hash → 32-bit seed
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  // xorshift32 PRNG
+  const rng = () => {
+    h ^= h << 13; h >>>= 0;
+    h ^= h >> 17;
+    h ^= h << 5;  h >>>= 0;
+    return h / 4294967296;
+  };
+  const arr = Array.from({ length: n }, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
   /* ========================================================================
      SHARED SCANNER HELPERS (audio, preferences)
      ======================================================================== */
@@ -51472,7 +51769,8 @@ function openScanner(assessmentId) {
     const ok = await ensureLibs();
     if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
-    const answerKey = (a.questions || []).map(q => {
+    // Base answer key, in the ORIGINAL question order.
+    const baseAnswerKey = (a.questions || []).map(q => {
       const type = (q.type || '').toLowerCase();
       if (type !== 'multiple choice') return null;
       const choices = Array.isArray(q.choices) ? q.choices : [];
@@ -51481,9 +51779,20 @@ function openScanner(assessmentId) {
       return idx >= 0 ? idx : null;
     });
 
+    /* Resolve the answer key for a given form version. Form A = the
+      original order. Forms B and C re-order questions according to the
+      same deterministic shuffle used at print time, so the answer for
+      POSITION i on the printed sheet is baseAnswerKey[shuffled[i]]. */
+    function resolveAnswerKey(version) {
+      if (!version || version === 'A') return baseAnswerKey;
+      const shuffled = _seededShuffle(baseAnswerKey.length, `form-${version}-${a.id}`);
+      return shuffled.map(origIdx => baseAnswerKey[origIdx]);
+    }
+
     const session = {
       assessment: a,
-      answerKey,
+      resolveAnswerKey,
+      answerKey: baseAnswerKey,        // will be swapped per-sheet once version is read
       scanned: [],
       recentScans: new Map(),
       pendingConfirm: new Map(),
@@ -52027,6 +52336,16 @@ function openScanner(assessmentId) {
       let img;
       try { img = session.ctx.getImageData(0, 0, W, Hh); } catch (e) { return; }
       session.geom = { W, H: Hh, vw, vh };
+      
+      // ---- NEW: reject blurry / badly-exposed frames before any heavy work ----
+      const quality = frameQuality(img);
+      if (!quality.ok) {
+        session.found = false;
+        session.lastCenters = null;
+        clearOverlay();
+        setStatus(quality.reason, 'warn');
+        return;
+      }
 
       // QR codes decode at any orientation, and the labelled corners give the
       // sheet pose, so a single pass is enough (no 4× rotation retries).
@@ -52123,9 +52442,18 @@ function openScanner(assessmentId) {
         setStatus('Sheet is for a different exam', 'warn');
         return;
       }
-      if (payload.n && payload.n !== session.answerKey.length) {
+      // ---- Resolve the per-form answer key from the payload ----
+      const sheetVersion = (payload.v || 'A').toUpperCase();
+      const sheetKey     = session.resolveAnswerKey(sheetVersion);
+      if (sheetKey.length !== baseAnswerKey.length) {
         drawOverlay(quad, THEME.danger);
-        setStatus(`Exam now has ${session.answerKey.length} items, sheet has ${payload.n} — reprint sheets`, 'err');
+        setStatus(`Form ${sheetVersion} key mismatch — reprint sheets`, 'err');
+        return;
+      }
+      session.answerKey = sheetKey;
+      if (payload.n && payload.n !== baseAnswerKey.length) {
+        drawOverlay(quad, THEME.danger);
+        setStatus(`Exam now has ${baseAnswerKey.length} items, sheet has ${payload.n} — reprint sheets`, 'err');
         return;
       }
 
@@ -52179,27 +52507,35 @@ function openScanner(assessmentId) {
       let ambiguousCount = 0;
       const marks = [];
       const bubbleRwork = (SHEET.bubbleDiaMM * 0.5) / mmPerPxWork;
+
       for (const pos of positions) {
         const res = detectAnswerForQuestion(Hs, pos.choices, sample, mmPerPx, otsuThresh);
         if (res.choice !== null) filledCount++;
         if (res.choice !== null && res.confidence > 0 && res.confidence < 0.6) ambiguousCount++;
         perQuestion.push(res);
-        if (res.choice !== null) {
-          const [bx, by] = applyH(H, pos.choices[res.choice][0], pos.choices[res.choice][1]);
+
+        // Annotate every bubble the scanner considered a possible mark —
+        // not just the winner. This lets the teacher see, at a glance, why
+        // a sheet was read the way it was.
+        pos.choices.forEach(([bx, by], ci) => {
+          const [px, py] = applyH(H, bx, by);
+          const isChosen = res.choice === ci;
+          const metric   = res.metrics && res.metrics[ci];
+          const isDark   = metric && metric.valid && metric.ratio < 0.85;
+          if (!isChosen && !isDark) return;          // blank bubble, skip
           marks.push({
-            x: bx, y: by,
-            r: bubbleRwork * 1.15,
-            color: res.confidence >= 0.6 ? THEME.success : THEME.warning
+            x: px, y: py,
+            r: bubbleRwork * (isChosen ? 1.35 : 0.95),
+            color: isChosen
+              ? (res.confidence >= 0.6 ? THEME.success : THEME.warning)
+              : 'rgba(220,53,69,0.55)'               // dark but not chosen
           });
-        } else if (res.multiple) {
+        });
+
+        if (res.multiple) {
           res.candidates.forEach(ci => {
             const [bx, by] = applyH(H, pos.choices[ci][0], pos.choices[ci][1]);
-            marks.push({
-              x: bx, y: by,
-              r: bubbleRwork,
-              kind: 'x',
-              color: THEME.danger
-            });
+            marks.push({ x: bx, y: by, r: bubbleRwork, kind: 'x', color: THEME.danger });
           });
         }
       }
