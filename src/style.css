@@ -12351,26 +12351,64 @@ body.zg-scanner-open {
     box-shadow   0.25s ease;
 }
 
-.zg-viewfinder.tl { top: 8%;    left: 6%;  }
-.zg-viewfinder.tr { top: 8%;    right: 6%; }
-.zg-viewfinder.bl { bottom: 8%; left: 6%;  }
-.zg-viewfinder.br { bottom: 8%; right: 6%; }
+/* ============================================================================
+   CORNER VIEWFINDERS
+   ----------------------------------------------------------------------------
+   The printed anchor QR codes sit 11.5 mm inside a 148.5 × 210 mm A5 sheet.
+   As a percentage of the sheet that is:
+        11.5 / 148.5 = 7.74 %  (horizontal)
+        11.5 / 210   = 5.48 %  (vertical)
+   With a ~5 % margin around the paper when the phone is held over it, the
+   QR centres land at roughly 12 % / 10 % from each camera-frame edge. The
+   boxes below sit slightly larger than the QR codes themselves so the user
+   has a visible target to aim at, not just a dot.
 
-/* Green confirmation state — added by JS when the matching anchor QR
-   code is detected inside this viewfinder. */
-.zg-viewfinder.ready {
-  border-color: var(--success, #198754);
-  background: rgba(25, 135, 84, 0.18);
+   Colors come from theme variables so the viewfinders match whatever
+   palette the user has chosen (light / dark / navy / noir / sepia /
+   deped-green).
+   ============================================================================ */
+.zg-viewfinder {
+  position: absolute;
+  width: 15%;
+  height: 11%;
+  pointer-events: none;
+  z-index: 3;
+
+  background: color-mix(in srgb, var(--deped-blue) 22%, rgba(0, 0, 0, 0.42));
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+
+  border: 2.5px solid var(--deped-blue);
+  border-radius: 8px;
+
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.15) inset,
-    0 0 16px rgba(25, 135, 84, 0.65),
-    0 0 32px rgba(25, 135, 84, 0.28);
+    0 0 0 1px color-mix(in srgb, var(--deped-blue) 40%, transparent) inset,
+    0 0 16px color-mix(in srgb, var(--deped-blue) 55%, transparent),
+    0 0 34px color-mix(in srgb, var(--deped-blue) 25%, transparent);
+
+  transition: border-color 0.22s ease,
+              background  0.22s ease,
+              box-shadow  0.22s ease;
 }
 
-/* Respect reduced-motion preferences. */
-@media (prefers-reduced-motion: reduce) {
-  .zg-viewfinder { transition: none; }
-}
+  .zg-viewfinder.tl { top:    4%; left:  4%; }
+  .zg-viewfinder.tr { top:    4%; right: 4%; }
+  .zg-viewfinder.bl { bottom: 4%; left:  4%; }
+  .zg-viewfinder.br { bottom: 4%; right: 4%; }
+
+  /* Confirmed — the matching anchor QR has been decoded inside this square. */
+  .zg-viewfinder.ready {
+    border-color: var(--success);
+    background: color-mix(in srgb, var(--success) 24%, rgba(0, 0, 0, 0.36));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--success) 50%, transparent) inset,
+      0 0 18px color-mix(in srgb, var(--success) 70%, transparent),
+      0 0 36px color-mix(in srgb, var(--success) 32%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .zg-viewfinder { transition: none; }
+  }
 
 /* ---- Small counter badge (top-right) ---- */
 .zg-counter {

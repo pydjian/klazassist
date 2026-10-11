@@ -50673,20 +50673,20 @@ const AnswerSheetOMR = (() => {
     heightMM: 210,
 
     marginMM:  4,
-    anchorSizeMM:  15,        // corner anchor QR (was 20 on portrait A4)
-    payloadQrSizeMM: 22,      // learner payload QR (was 18)
+    anchorSizeMM:  19,        // corner anchor QR (was 20 on portrait A4)
+    payloadQrSizeMM: 26,      // learner payload QR (was 18)
     payloadQrTopMM:  2,       // payload QR vertical position
 
     bubbleDiaMM:  4.5,        // was 4.2 — bigger for shading
     bubblePitchMM: 6.5,
     choiceCount: 5,
 
-    rowHeightMM: 7.5,
+    rowHeightMM: 7.0,
     maxRowsPerColumn: 20,
     maxColumns: 3,
     maxQuestions: 60,         // 20 × 3
 
-    headerTopMM: 32,          // grid starts here; letters row sits at 28
+    headerTopMM: 34,          // grid starts here; letters row sits at 28
     numberWidthMM: 8,
     columnGapMM: 5
   };
@@ -50765,11 +50765,11 @@ const AnswerSheetOMR = (() => {
     ringInner:        1.40,
     ringOuter:        1.90,
     // Homography acceptance
-    maxReprojErrPx:   3.0,
+    maxReprojErrPx:   6.0,
     // Sampling
     sampleRadiusMult: 0.50,
     // Multi-frame
-    confirmFrames:    2,
+    confirmFrames:    1,
     // Calibration timestamp
     calibratedAt:     null
   };
@@ -51106,15 +51106,26 @@ const AnswerSheetOMR = (() => {
     return true;
   }
 
-  /* ========================================================================
-     PRINTABLE SHEET
-     ======================================================================== */
-  function makeQrSvg(payload) {
-    const qr = window.qrcode(0, 'M');
-    qr.addData(payload);
-    qr.make();
-    return qr.createSvgTag({ cellSize: 2, margin: 0, scalable: true });
-  }
+/* Render one QR code as an SVG string WITH a white quiet zone.
+   jsQR (and every real-world QR reader) requires at least a 2-module
+   quiet zone around the code. `qrcodejs`'s createSvgTag signature has
+   changed between releases, so we defensively wrap the SVG in a small
+   white-padded <div> instead of relying on a `margin` option. This works
+   whether the library honours it or not. */
+function makeQrSvg(payload) {
+  const qr = window.qrcode(0, 'M');
+  qr.addData(payload);
+  qr.make();
+  const inner = qr.createSvgTag({ cellSize: 2, margin: 0, scalable: true });
+  return `
+    <div style="
+      width:100%;height:100%;
+      box-sizing:border-box;
+      padding:10%;
+      background:#fff;
+      display:flex;align-items:center;justify-content:center;
+    ">${inner}</div>`;
+}
 
   /* Renders ONE half-sheet (148.5 × 210 mm) — no page breaks inside.
      Two of these are wrapped in an `.omr-page` to form a full A4 landscape
@@ -51440,6 +51451,21 @@ function openScanner(assessmentId) {
 
   (async () => {
     await loadCalibration();
+
+        /* Resolve the active theme's palette so the canvas overlay matches the
+      rest of the UI. We read the *computed* values because getComputedStyle
+      resolves the CSS custom properties to real colors. */
+    const THEME = (() => {
+      const s = getComputedStyle(document.documentElement);
+      const v = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
+      return {
+        primary: v('--deped-blue',   '#0038A8'),
+        success: v('--success',      '#198754'),
+        warning: v('--warning',      '#F59E0B'),
+        danger:  v('--danger',       '#DC3545'),
+        gold:    v('--accent-gold',  '#F7C948')
+      };
+    })();
 
     const a = await DB.get('assessments', assessmentId);
     if (!a) { UI.toast('Assessment not found.', 'error'); return; }
@@ -52000,7 +52026,7 @@ function openScanner(assessmentId) {
 
       // QR codes decode at any orientation, and the labelled corners give the
       // sheet pose, so a single pass is enough (no 4× rotation retries).
-      const qrs = detectQRs(img, 5);
+      const qrs = detectQRs(img, 12);
       if (!qrs.length) { noSheet(); return; }
       session.found = true;
 
@@ -52037,6 +52063,18 @@ function openScanner(assessmentId) {
         return;
       }
 
+      // Mirror per-corner detection onto the four viewfinder squares.
+      const vfEls = {
+        TL: overlay.querySelector('.zg-viewfinder.tl'),
+        TR: overlay.querySelector('.zg-viewfinder.tr'),
+        BL: overlay.querySelector('.zg-viewfinder.bl'),
+        BR: overlay.querySelector('.zg-viewfinder.br')
+      };
+      ['TL', 'TR', 'BL', 'BR'].forEach(name => {
+        const el = vfEls[name];
+        if (el) el.classList.toggle('ready', !!anchors[name]);
+      });
+
       const quad = quadOf(anchors);
       const sheetAnchors = anchorCenters();
       const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
@@ -52062,7 +52100,7 @@ function openScanner(assessmentId) {
       let moving = false;
       if (prev && now - prev.t < 700) {
         const md = Math.max(...dstPts.map((p, i) => Math.hypot(p[0] - prev.pts[i][0], p[1] - prev.pts[i][1]))) / norm;
-        moving = md > 0.01;
+        moving = md >  0.035;;
       }
       session.lastCenters = { t: now, pts: dstPts };
       if (moving) {
@@ -52194,18 +52232,31 @@ function openScanner(assessmentId) {
       // Votes: the same reading on consecutive frames. A mostly-blank sheet (absent
       // or low-answered learner) is allowed, but needs a longer hold to confirm.
       const sparse = filledCount / Math.max(1, questionCount) < 0.4;
-      const needVotes = CAL.confirmFrames + (sparse ? 3 : 0);
+      const needVotes = CAL.confirmFrames + (sparse ? 1 : 0);
       const signature = perQuestion.map(p => p.choice === null ? (p.multiple ? 'm' : 'x') : p.choice).join(',');
       const pending = session.pendingConfirm.get(learner.id) || { signature: null, votes: 0 };
-      if (pending.signature === signature) pending.votes++;
-      else { pending.signature = signature; pending.votes = 1; }
-      session.pendingConfirm.set(learner.id, pending);
-
-      if (pending.votes < needVotes) {
-        setStatus(sparse
-          ? `Mostly blank sheet — hold to confirm (${pending.votes}/${needVotes})`
-          : `Reading sheet… (${pending.votes}/${needVotes})`, 'warn');
-        return;
+      if (pending.signature === signature) {
+        pending.votes++;
+      } else if (pending.signature === null) {
+        pending.signature = signature;
+        pending.votes = 1;
+      } else {
+        // Signature changed — but only reset the streak if the change is
+        // substantial. One differing question out of 40 is likely noise, not
+        // a real change of position.
+        const prev = pending.signature.split(',');
+        const curr = signature.split(',');
+        let diffs = 0;
+        for (let i = 0; i < Math.max(prev.length, curr.length); i++) {
+          if (prev[i] !== curr[i]) diffs++;
+        }
+        const threshold = Math.max(1, Math.floor(questionCount * 0.05));
+        if (diffs > threshold) {
+          pending.signature = signature;
+          pending.votes = 1;
+        } else {
+          pending.votes++;
+        }
       }
 
       session.recentScans.set(learner.id, t);
