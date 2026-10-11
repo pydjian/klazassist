@@ -2812,14 +2812,37 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
   100% { opacity: 0;   transform: scale(0.5) rotate(60deg); }
 }
 
-/* ---- Mobile — scale down but keep all effects ---- */
+/* ============================================================================
+   HERO PRO BADGE — MOBILE
+   Crown only. No text. The outer ring collapses to a circle that hugs the
+   crown, keeping the same metallic shine, halo, and sparkle effects.
+   Applies equally to the "Unlock PRO" pill and the active "PRO Licensed" one.
+   ============================================================================ */
 @media (max-width: 640px) {
-  .hero-pro-badge { top: 12px; right: 12px; }
-  .hero-pro-badge .hpb-inner { gap: 6px; padding: 5px 12px 5px 6px; }
+  .hero-pro-badge {
+    top: 12px;
+    right: 12px;
+    padding: 3px;                    /* keeps the outer ring thickness */
+    border-radius: 50%;              /* circle, not pill */
+  }
+
+  /* Collapse the inner pill into a 34×34 circle centred on the crown. */
+  .hero-pro-badge .hpb-inner {
+    gap: 0;
+    padding: 5px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    justify-content: center;
+  }
+
+  /* Hide the entire text column — label and sub-line. */
+  .hero-pro-badge .hpb-text { display: none; }
+
+  /* Crown stays the same visual size it had on desktop. */
   .hero-pro-badge .hpb-crown { width: 22px; height: 22px; }
   .hero-pro-badge .hpb-crown svg { width: 12px; height: 12px; }
-  .hero-pro-badge .hpb-label { font-size: 10px; letter-spacing: 1.1px; }
-  .hero-pro-badge .hpb-sub { font-size: 7.5px; }
+
 }
 
 /* ---- Respect reduced-motion preferences ---- */
@@ -13737,4 +13760,205 @@ body.zg-scanner-open #toast-container {
 @media (max-width: 640px) {
   .hub-tab-strip { margin: -4px 0 14px; }
   .hub-tab-strip .tab { padding: 10px 14px; font-size: 12px; }
+}
+/* ============================================================================
+   PRO BADGE — Halo and sparkles removed
+   ----------------------------------------------------------------------------
+   The previous design layered a pulsing radial halo, an expanding ring,
+   and four orbiting sparkle flares on top of the metallic pill. This
+   override strips all three so the badge is just the metallic pill plus
+   the rotating conic gradient on its edge.
+   Placed at the end of the file so it wins the cascade against every
+   earlier .hero-pro-badge rule without needing to edit them in place.
+   ============================================================================ */
+
+/* 1 · The badge itself — keep only the conic border rotation. */
+.hero-pro-badge,
+.hero-pro-badge:not(.active) {
+  animation: hpb-border-rotate 6s linear infinite;
+  /* Simplify the resting box-shadow — no more glowing halo circles. */
+  box-shadow: 0 3px 12px rgba(247, 201, 72, 0.32);
+}
+.hero-pro-badge.active {
+  animation: hpb-border-rotate 5s linear infinite;
+  box-shadow: 0 3px 14px rgba(186, 230, 253, 0.35);
+}
+
+/* 2 · Kill the ::before pseudo-element (the pulsing halo ring + bloom). */
+.hero-pro-badge::before,
+.hero-pro-badge.active::before,
+.hero-pro-badge:not(.active)::before {
+  display: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+  content: none !important;
+}
+
+/* 3 · Kill the sparkles container and every individual spark. */
+.hero-pro-badge .hpb-sparkles,
+.hero-pro-badge.active .hpb-sparkles,
+.hero-pro-badge:not(.active) .hpb-sparkles {
+  display: none !important;
+}
+.hero-pro-badge .hpb-spark,
+.hero-pro-badge.active .hpb-spark,
+.hero-pro-badge:not(.active) .hpb-spark {
+  display: none !important;
+  animation: none !important;
+}
+
+/* 4 · Slightly richer hover so the badge still feels alive without a halo. */
+.hero-pro-badge:hover,
+.hero-pro-badge:not(.active):hover {
+  box-shadow: 0 6px 22px rgba(247, 201, 72, 0.55);
+}
+.hero-pro-badge.active:hover {
+  box-shadow: 0 6px 24px rgba(186, 230, 253, 0.6);
+}
+/* ============================================================================
+   PRO BADGE — unified gold palette
+   ----------------------------------------------------------------------------
+   Replaces the silver-blue diamond treatment on the licensed badge with the
+   same gold family used by the Unlock badge. Both states now share:
+     · conic gold edge (rotating)
+     · deep bronze inner core
+     · gold gradient crown
+     · gold gradient text
+   Placed last in the file so it wins against every earlier .hero-pro-badge
+   rule without needing to edit them in place.
+   ============================================================================ */
+
+/* ---- 1 · Outer edge — brighter gold conic gradient for both states ---- */
+.hero-pro-badge,
+.hero-pro-badge.active {
+  background:
+    conic-gradient(
+      from 0deg,
+      #FDE68A 0%,
+      #F7C948 15%,
+      #B45309 30%,
+      #F7C948 45%,
+      #FDE68A 60%,
+      #F59E0B 75%,
+      #F7C948 90%,
+      #FDE68A 100%
+    );
+  background-size: 300% 300%;
+  animation: hpb-border-rotate 6s linear infinite;
+}
+.hero-pro-badge.active {
+  animation: hpb-border-rotate 5s linear infinite;
+}
+
+/* ---- 2 · Resting drop shadow — warm gold for both states ---- */
+.hero-pro-badge,
+.hero-pro-badge:not(.active) {
+  box-shadow: 0 3px 12px rgba(247, 201, 72, 0.32);
+}
+.hero-pro-badge.active {
+  box-shadow: 0 3px 14px rgba(247, 201, 72, 0.45);
+}
+
+/* ---- 3 · Inner core — deep bronze, unified across states ---- */
+.hero-pro-badge .hpb-inner,
+.hero-pro-badge.active .hpb-inner {
+  background:
+    linear-gradient(
+      135deg,
+      #1a1206 0%,
+      #3a2409 35%,
+      #4a2c0c 55%,
+      #1a1206 100%
+    );
+}
+
+/* Glass edge inside the pill — golden highlight instead of silver */
+.hero-pro-badge .hpb-inner::after,
+.hero-pro-badge.active .hpb-inner::after {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 232, 168, 0.28) 0%,
+    rgba(247, 201, 72, 0.08) 45%,
+    rgba(0, 0, 0, 0.22) 100%
+  );
+}
+
+/* ---- 4 · Crown — pure gold, no more platinum/indigo ---- */
+.hero-pro-badge .hpb-crown,
+.hero-pro-badge.active .hpb-crown {
+  background: linear-gradient(
+    135deg,
+    #FDE68A 0%,
+    #F7C948 40%,
+    #D97706 75%,
+    #B45309 100%
+  );
+  color: #4a2c00;
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.70),
+    inset 0 -2px 5px rgba(74, 44, 0, 0.35),
+    0 2px 6px rgba(247, 201, 72, 0.50);
+  filter: drop-shadow(0 0 4px rgba(247, 201, 72, 0.45));
+}
+.hero-pro-badge .hpb-crown svg,
+.hero-pro-badge.active .hpb-crown svg {
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.55));
+}
+
+/* ---- 5 · Label text — gold gradient on both states ---- */
+.hero-pro-badge .hpb-label,
+.hero-pro-badge.active .hpb-label {
+  background: linear-gradient(
+    180deg,
+    #FFF7D1 0%,
+    #FDE68A 35%,
+    #F7C948 60%,
+    #D97706 100%
+  );
+  background-size: 100% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  animation: hpb-label-shimmer 4s ease-in-out infinite;
+}
+
+/* ---- 6 · Sub-line — muted gold, unified across states ---- */
+.hero-pro-badge .hpb-sub,
+.hero-pro-badge.active .hpb-sub {
+  color: rgba(255, 232, 168, 0.72);
+}
+
+/* ---- 7 · Hover — warm gold glow on both states ---- */
+.hero-pro-badge:hover,
+.hero-pro-badge:not(.active):hover {
+  box-shadow: 0 6px 22px rgba(247, 201, 72, 0.60);
+  transform: translateY(-2px) scale(1.015);
+}
+.hero-pro-badge.active:hover {
+  box-shadow: 0 6px 24px rgba(247, 201, 72, 0.75);
+  transform: translateY(-2px) scale(1.015);
+}
+
+/* ---- 8 · Shine sweep — keep the gold-tinted glass sweep ---- */
+.hero-pro-badge .hpb-shine::before,
+.hero-pro-badge.active .hpb-shine::before {
+  background: linear-gradient(
+    115deg,
+    transparent 60%,
+    rgba(255, 255, 255, 0.35) 40%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.35) 60%,
+    transparent 100%
+  );
+}
+
+/* ---- 9 · Reduced motion — nothing moves on the badge when the user asks ---- */
+@media (prefers-reduced-motion: reduce) {
+  .hero-pro-badge,
+  .hero-pro-badge.active,
+  .hero-pro-badge .hpb-label,
+  .hero-pro-badge.active .hpb-label {
+    animation: none !important;
+  }
 }

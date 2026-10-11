@@ -55028,147 +55028,168 @@ const SyncManager = {
   /* ========================================================================
      HOST — the device that pushes its data out
      ======================================================================== */
-  async startHost(opts = {}) {
-    if (this._peer || this._conn) this.close();
-    this._mode = opts.mode || 'send';
-    this._role = 'host';
-    this._onProgress = opts.onProgress || null;
-    this._onComplete = opts.onComplete || null;
-    this._onError    = opts.onError    || null;
-    this._guestReady = false;
-    this._sent = false;
-    this._handshakeDone = false;
-    this._finished = false;  
+async startHost(opts = {}) {
+  if (this._peer || this._conn) this.close();
+  this._mode = opts.mode || 'send';
+  this._role = 'host';
+  this._onProgress = opts.onProgress || null;
+  this._onComplete = opts.onComplete || null;
+  this._onError    = opts.onError    || null;
+  this._guestReady = false;
+  this._sent = false;
+  this._handshakeDone = false;
+  this._finished = false;
+  this._timedOut = false;
+  this._retryCount = this._retryCount || 0;
 
-    const ok = await this._ensureLib();
-    if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
+  const ok = await this._ensureLib();
+  if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
 
-    this._code = this._generateCode();
-    const peerId = this._peerIdForCode(this._code);
-    console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
+  this._code = this._generateCode();
+  const peerId = this._peerIdForCode(this._code);
+  console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
 
-    try {
-      this._peer = new window.Peer(peerId, { debug: 1 });
-    } catch (e) {
-      this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
-      return null;
-    }
+  try {
+    this._peer = new window.Peer(peerId, { debug: 1 });
+  } catch (e) {
+    this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
+    return null;
+  }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-      this._peer.on('open', () => {
-        console.log('[Sync] Host peer is open on the signalling server.');
-        this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
-        settle(this._code);
-      });
-
-      this._peer.on('connection', (conn) => {
-        console.log('[Sync] Host received incoming connection:', conn.peer);
-        // Reject a second connection — one at a time.
-        if (this._conn) {
-          console.warn('[Sync] Rejecting second connection from', conn.peer);
-          try { conn.close(); } catch (e) {}
-          return;
-        }
-        this._conn = conn;
-        this._wireConnection();
-      });
-
-      this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
-        console.error('[Sync] Host peer error:', msg);
-        if (msg.includes('unavailable-id')) {
-          console.log('[Sync] Room code collided on the server — regenerating.');
-          this.close();
-          this.startHost(opts);
-          return;
-        }
-        this._fail('Sync error: ' + msg);
-        settle(null);
-      });
-
-      // Cap the waiting window at 3 minutes — after that the code is stale.
-      setTimeout(() => {
-        if (!this._conn && !settled) {
-          this._fail('No device joined within 3 minutes. Code expired.');
-          this.close();
-          settle(null);
-        }
-      }, 180000);
+    this._peer.on('open', () => {
+      console.log('[Sync] Host peer is open on the signalling server.');
+      this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
+      settle(this._code);
     });
-  },
+
+    this._peer.on('connection', (conn) => {
+      console.log('[Sync] Host received incoming connection:', conn.peer);
+      if (this._conn) {
+        console.warn('[Sync] Rejecting second connection from', conn.peer);
+        try { conn.close(); } catch (e) {}
+        return;
+      }
+      this._conn = conn;
+      this._wireConnection();
+    });
+
+    this._peer.on('error', (err) => {
+      const msg = String(err && err.type || err && err.message || err);
+      console.error('[Sync] Host peer error:', msg);
+
+      if (msg.includes('unavailable-id')) {
+        // The room code collided with a peer still registered on the server.
+        // Retry with a fresh code, but chain the resolution so the caller's
+        // promise actually settles this time.
+        this._retryCount = (this._retryCount || 0) + 1;
+        if (this._retryCount > 3) {
+          this._fail('Could not obtain a free room code after several attempts. Please wait a minute and try again.');
+          settle(null);
+          return;
+        }
+        console.log('[Sync] Room code collided — regenerating (attempt ' + this._retryCount + ').');
+        try { this._peer.removeAllListeners(); } catch (e) {}
+        this.close();
+        this.startHost(opts).then(settle, () => settle(null));
+        return;
+      }
+
+      this._fail('Sync error: ' + msg);
+      settle(null);
+    });
+
+    // Hard cap: if no guest has joined within 3 minutes, notify the sender.
+    setTimeout(() => {
+      if (!this._conn && !this._timedOut) {
+        this._timedOut = true;
+        this._fail('No device joined within 3 minutes. The room code has expired.');
+        // _fail() destroys the peer and calls _onError; the outer promise
+        // was already resolved with the code, so nothing else to do.
+      }
+    }, 180000);
+  });
+},
 
   /* ========================================================================
      GUEST — the device that receives (or sends, if mode='send' is set)
      ======================================================================== */
-  async joinAsGuest(opts = {}) {
-    if (this._peer || this._conn) this.close();
-    const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
+async joinAsGuest(opts = {}) {
+  if (this._peer || this._conn) this.close();
+  const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
-    this._mode = opts.mode || 'receive';
-    this._role = 'guest';
-    this._onProgress = opts.onProgress || null;
-    this._onComplete = opts.onComplete || null;
-    this._onError    = opts.onError    || null;
-    this._guestReady = false;
-    this._sent = false;
-    this._handshakeDone = false;
-    this._finished = false;
+  this._mode = opts.mode || 'receive';
+  this._role = 'guest';
+  this._onProgress = opts.onProgress || null;
+  this._onComplete = opts.onComplete || null;
+  this._onError    = opts.onError    || null;
+  this._guestReady = false;
+  this._sent = false;
+  this._handshakeDone = false;
+  this._finished = false;
 
-    const ok = await this._ensureLib();
-    if (!ok) { this._fail('Could not load the sync library.'); return false; }
+  const ok = await this._ensureLib();
+  if (!ok) { this._fail('Could not load the sync library.'); return false; }
 
-    this._code = code;
-    console.log('[Sync] Guest joining with code', code);
+  this._code = code;
+  console.log('[Sync] Guest joining with code', code);
 
-    try {
-      this._peer = new window.Peer(null, { debug: 1 });
-    } catch (e) {
-      this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
-      return false;
-    }
+  try {
+    this._peer = new window.Peer(null, { debug: 1 });
+  } catch (e) {
+    this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
+    return false;
+  }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-      this._peer.on('open', () => {
-        console.log('[Sync] Guest peer is open on the signalling server. Connecting to host…');
-        this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
-        const conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
-        this._conn = conn;
-        this._wireConnection();
+    this._peer.on('open', () => {
+      console.log('[Sync] Guest peer is open. Connecting to host…');
+      this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
 
-        conn.on('open', () => {
-          console.log('[Sync] Guest data channel is open.');
-          settle(true);
-        });
-
-        // If the host never responds, bail out after 30 s.
-        setTimeout(() => {
-          if (!conn.open && !settled) {
-            this._fail('Could not reach the other device. Double-check the code and that both devices have internet access.');
-            this.close();
-            settle(false);
-          }
-        }, 30000);
-      });
-
-      this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
-        console.error('[Sync] Guest peer error:', msg);
-        if (msg.includes('peer-unavailable')) {
-          this._fail('The other device is not reachable. Check the code, and that both devices are online.');
-        } else {
-          this._fail('Sync error: ' + msg);
-        }
+      let conn;
+      try {
+        conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
+      } catch (e) {
+        this._fail('Could not open a connection to that room code: ' + (e.message || 'unknown'));
         settle(false);
+        return;
+      }
+      this._conn = conn;
+      this._wireConnection();
+
+      conn.on('open', () => {
+        console.log('[Sync] Guest data channel is open.');
+        settle(true);
       });
+
+      setTimeout(() => {
+        if (!conn.open && !settled) {
+          this._fail('Could not reach the other device. Double-check the code, and make sure both devices have internet access.');
+          this.close();
+          settle(false);
+        }
+      }, 30000);
     });
-  },
+
+    this._peer.on('error', (err) => {
+      const msg = String(err && err.type || err && err.message || err);
+      console.error('[Sync] Guest peer error:', msg);
+      if (msg.includes('peer-unavailable')) {
+        this._fail('The other device is not reachable. Check the code, and that the sender modal is still open.');
+      } else {
+        this._fail('Sync error: ' + msg);
+      }
+      settle(false);
+    });
+  });
+},
 
   /* ========================================================================
      WIRE THE DATA CHANNEL
@@ -55333,7 +55354,12 @@ const SyncManager = {
 
     let i = 0;
     const pump = () => {
-      if (!this._conn || !this._conn.open) return;
+      if (!this._conn || !this._conn.open) {
+        // Channel closed mid-transfer — surface the failure rather than
+        // leaving the sender's modal stuck on "Sending data… 0%" forever.
+        this._fail('The connection to the other device was lost during transfer. Nothing was changed on either side.');
+        return;
+      }
 
       // If the channel is buffering, wait for it to drain before pushing more.
       const buffered = this._conn.dataChannel
@@ -55499,7 +55525,10 @@ const SyncManager = {
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
-    this._finished = false; 
+    this._timedOut = false;
+    // NOTE: deliberately NOT resetting `_finished` here. It is reset at the
+    // start of `startHost` / `joinAsGuest`, so the one-shot guard survives
+    // a close-then-late-message sequence.
   }
 };
 
