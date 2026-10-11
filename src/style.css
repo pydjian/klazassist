@@ -14049,3 +14049,103 @@ body.zg-scanner-open #toast-container {
     animation: none !important;
   }
 }
+
+
+/* ============================================================================
+   KlazAssist OMR scanner alignment + theme harmonization
+   The generated answer sheet is A5 portrait (148.5 × 210 mm). Anchor QR
+   codes are 19 mm square, beginning 4 mm from each paper edge. Keep the
+   guide in the same A5 aspect ratio so camera aspect-ratio cropping cannot
+   distort the corner targets.
+   ============================================================================ */
+.zg-header {
+  background: var(--gradient-primary, linear-gradient(135deg, #0038A8, #0057B8)) !important;
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .24);
+}
+.zg-header-title {
+  font-family: var(--font, 'Inter', 'Segoe UI', Roboto, Arial, sans-serif) !important;
+  letter-spacing: .2px !important;
+  font-weight: 800;
+  text-transform: none;
+}
+.zg-scanner, .zg-scanner button, .zg-sheet {
+  font-family: var(--font, 'Inter', 'Segoe UI', Roboto, Arial, sans-serif);
+}
+.zg-sheet-guide,
+.qr-sheet-guide {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  aspect-ratio: 148.5 / 210;
+  width: min(92%, calc(72dvh * 148.5 / 210));
+  height: auto;
+  max-height: 90%;
+  pointer-events: none;
+  z-index: 3;
+}
+.zg-sheet-guide {
+  width: min(92%, calc(72dvh * 148.5 / 210));
+  height: auto;
+  max-width: 92%;
+}
+.zg-viewfinder {
+  position: absolute;
+  width: 12.79%;
+  height: 9.05%;
+  border: 2px solid var(--accent-gold, #F7C948);
+  border-radius: 5px;
+  background: rgba(15, 23, 42, .12);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.65) inset, 0 0 0 2px rgba(0,0,0,.35);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.zg-viewfinder.tl { top: 1.905%; left: 2.694%; right: auto; bottom: auto; }
+.zg-viewfinder.tr { top: 1.905%; right: 2.694%; left: auto; bottom: auto; }
+.zg-viewfinder.bl { bottom: 1.905%; left: 2.694%; right: auto; top: auto; }
+.zg-viewfinder.br { bottom: 1.905%; right: 2.694%; left: auto; top: auto; }
+.zg-viewfinder.ready {
+  border-color: var(--success, #198754);
+  background: rgba(25, 135, 84, .16);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.8) inset, 0 0 0 2px rgba(25,135,84,.45);
+}
+
+/* Desktop guide uses the same paper geometry as the mobile scanner. */
+.qr-sheet-guide {
+  width: min(92%, calc(44vh * 148.5 / 210));
+  height: auto;
+  max-height: 94%;
+}
+.qr-reticle {
+  position: absolute;
+  inset: 0;
+}
+.qr-reticle-corner {
+  position: absolute;
+  width: 12.79%;
+  height: 9.05%;
+  border: 2px solid var(--accent-gold, #F7C948);
+  border-radius: 5px;
+  background: rgba(15, 23, 42, .10);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.28);
+}
+.qr-reticle-corner.tl { top: 1.905%; left: 2.694%; right: auto; bottom: auto; }
+.qr-reticle-corner.tr { top: 1.905%; right: 2.694%; left: auto; bottom: auto; }
+.qr-reticle-corner.bl { bottom: 1.905%; left: 2.694%; right: auto; top: auto; }
+.qr-reticle-corner.br { bottom: 1.905%; right: 2.694%; left: auto; top: auto; }
+
+@media (orientation: landscape) {
+  .zg-sheet-guide {
+    width: min(92%, calc(78dvh * 148.5 / 210));
+    height: auto;
+    max-width: 92%;
+  }
+  .qr-sheet-guide {
+    width: min(92%, calc(42vh * 148.5 / 210));
+    height: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zg-viewfinder { transition: none !important; }
+}

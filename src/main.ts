@@ -51543,10 +51543,12 @@ function openScanner(assessmentId) {
           <canvas id="omr-canvas" style="display:none;"></canvas>
           <canvas id="zg-overlay" class="zg-overlay" aria-hidden="true"></canvas>
 
-          <div class="zg-viewfinder tl" aria-hidden="true"></div>
-          <div class="zg-viewfinder tr" aria-hidden="true"></div>
-          <div class="zg-viewfinder bl" aria-hidden="true"></div>
-          <div class="zg-viewfinder br" aria-hidden="true"></div>
+          <div class="zg-sheet-guide" aria-hidden="true">
+            <div class="zg-viewfinder tl"></div>
+            <div class="zg-viewfinder tr"></div>
+            <div class="zg-viewfinder bl"></div>
+            <div class="zg-viewfinder br"></div>
+          </div>
 
           <button type="button" class="zg-counter" id="zg-counter" aria-label="Show scanned sheets">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
@@ -51665,11 +51667,13 @@ function openScanner(assessmentId) {
               <video id="omr-video" playsinline muted autoplay></video>
               <canvas id="omr-canvas" style="display:none;"></canvas>
 
-              <div class="qr-reticle" aria-hidden="true">
-                <span class="qr-reticle-corner tl"></span>
-                <span class="qr-reticle-corner tr"></span>
-                <span class="qr-reticle-corner bl"></span>
-                <span class="qr-reticle-corner br"></span>
+              <div class="qr-sheet-guide" aria-hidden="true">
+                <div class="qr-reticle">
+                  <span class="qr-reticle-corner tl"></span>
+                  <span class="qr-reticle-corner tr"></span>
+                  <span class="qr-reticle-corner bl"></span>
+                  <span class="qr-reticle-corner br"></span>
+                </div>
               </div>
 
               <div class="qr-flash" id="omr-flash"></div>
