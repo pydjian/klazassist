@@ -55131,7 +55131,23 @@ async startHost(opts = {}) {
   console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
 
   try {
-    this._peer = new window.Peer(peerId, { debug: 1 });
+    this._peer = new window.Peer(peerId, {
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: [
+              'turn:global.relay.metered.ca:443',
+              'turn:global.relay.metered.ca:443?transport=tcp',
+              'turns:global.relay.metered.ca:443?transport=tcp'
+            ],
+            username:   '4df34a98be3cb2a727bc0ed8',
+            credential: 'ut/AhiMSlovVxG0N'
+          }
+        ]
+      }
+    });
   } catch (e) {
     this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
     return null;
@@ -55219,7 +55235,23 @@ async joinAsGuest(opts = {}) {
   console.log('[Sync] Guest joining with code', code);
 
   try {
-    this._peer = new window.Peer(null, { debug: 1 });
+        this._peer = new window.Peer(peerId, {
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          {
+            urls: [
+              'turn:global.relay.metered.ca:443',
+              'turn:global.relay.metered.ca:443?transport=tcp',
+              'turns:global.relay.metered.ca:443?transport=tcp'
+            ],
+            username:   '4df34a98be3cb2a727bc0ed8',
+            credential: 'ut/AhiMSlovVxG0N'
+          }
+        ]
+      }
+    });
   } catch (e) {
     this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
     return false;
