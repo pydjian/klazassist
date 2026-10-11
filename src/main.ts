@@ -4152,66 +4152,54 @@ function icon(name, cls = '') {
    NAV STRUCTURE
    ============================================================================ */
 const NAV = [
-  { section: 'DASHBOARD', items: [{ id: 'dashboard', label: 'Dashboard', icon: 'home' }] },
+  { section: 'DASHBOARD', items: [
+    { id: 'dashboard', label: 'Dashboard', icon: 'home' }
+  ]},
+
   { section: 'MY CLASS', items: [
-    { id: 'classprofile', label: 'Class Profile', icon: 'book' },
-    { id: 'learners', label: 'Learners', icon: 'users' },
-    { id: 'seating', label: 'Seating Arrangement', icon: 'grid' },
-    { id: 'groups', label: 'Groups', icon: 'group' }
+    { id: 'classprofile',       label: 'Class Overview',      icon: 'book'   },
+    { id: 'learners',           label: 'Learners',            icon: 'users'  },
+    { id: 'seating-and-groups', label: 'Seating & Groups',    icon: 'grid'   }
   ]},
+
   { section: 'ATTENDANCE', items: [
-    { id: 'attendance', label: 'Daily Attendance', icon: 'check' },
-    { id: 'attendance-history', label: 'Attendance History', icon: 'calendar' },
-    { id: 'attendance-analytics', label: 'Attendance Analytics', icon: 'chart' },
-    { id: 'attendance-reports', label: 'Attendance Reports', icon: 'file' }
+    { id: 'attendance', label: 'Attendance', icon: 'check' }
   ]},
+
   { section: 'CLASS MANAGEMENT', items: [
-    { id: 'schedule', label: 'Class Schedule', icon: 'calendar' },
-    { id: 'assignments', label: 'Homework / Assignments', icon: 'file' },
-    { id: 'behavior', label: 'Behavior / Discipline Log', icon: 'shield' },
-    { id: 'parent-notes', label: 'Parent/Guardian Notes', icon: 'message' },
-    { id: 'parent-digest', label: 'Parent Digest', icon: 'message' },
+    { id: 'schedule',             label: 'Class Schedule',       icon: 'calendar' },
+    { id: 'assignments',          label: 'Assignments',          icon: 'file'     },
+    { id: 'behavior',             label: 'Behavior Log',         icon: 'shield'   },
+    { id: 'parent-communication', label: 'Parent Communication', icon: 'message'  },
+    { id: 'teaching-load',        label: 'Teaching Load',        icon: 'timer'    }
   ]},
+
   { section: 'GRADING & ASSESSMENT', items: [
-    { id: 'gradebook', label: 'Gradebook', icon: 'chart' },
-    { id: 'assessment-builder', label: 'Assessment Builder', icon: 'edit' },
-    { id: 'quiz-manager', label: 'Quiz Manager', icon: 'play' },
-    { id: 'item-analysis', label: 'Item Analysis', icon: 'analysis' },
-    { id: 'class-performance', label: 'Class Performance', icon: 'trending' },
-    { id: 'learner-performance', label: 'Learner Performance', icon: 'user-check' },
-    { id: 'phil-iri', label: 'Phil-IRI Reading Assessment', icon: 'book' },
+    { id: 'gradebook',   label: 'Gradebook',   icon: 'chart'    },
+    { id: 'assessments', label: 'Assessments', icon: 'edit'     },
+    { id: 'performance', label: 'Performance', icon: 'trending' },
+    { id: 'phil-iri',    label: 'Phil-IRI',    icon: 'book'     }
   ]},
-  { section: 'TEACHING TOOLS', items: [
-    { id: 'teaching-tools', label: 'Teaching Tools', icon: 'shuffle' }
-  ]},
+
   { section: 'LESSON & PLANNING', items: [
-    { id: 'planning', label: 'Lesson & Planning', icon: 'book-open' }
+    { id: 'teaching-tools', label: 'Teaching Tools',    icon: 'shuffle'   },
+    { id: 'planning',       label: 'Lesson & Planning', icon: 'book-open' },
+    { id: 'notes',          label: 'Notes',             icon: 'note'      }
   ]},
+
   { section: 'SCHOOL FORMS', items: [
-    { id: 'sf1', label: 'SF1 — School Register', icon: 'file' },
-    { id: 'sf2', label: 'SF2 — Daily Attendance', icon: 'calendar' },
-    { id: 'sf9', label: 'SF9 — Learner\u2019s Report', icon: 'file' }
+    { id: 'school-forms', label: 'School Forms', icon: 'file' }
   ]},
+
   { section: 'DOCUMENTS & REPORTS', items: [
-    { id: 'class-list', label: 'Class List', icon: 'list' },
-    { id: 'masterlist', label: 'Masterlist', icon: 'list' },
-    { id: 'grade-summary', label: 'Grade Summary', icon: 'chart' },
-    { id: 'learner-profile', label: 'Learner Profile', icon: 'user' },
-    { id: 'printable-reports', label: 'Printable Reports', icon: 'printer' },
-    { id: 'export-center', label: 'Export Center', icon: 'download' }
+    { id: 'rosters',            label: 'Rosters',           icon: 'list'    },
+    { id: 'grade-summary',      label: 'Grade Summary',     icon: 'chart'   },
+    { id: 'reports-and-export', label: 'Reports & Export',  icon: 'printer' }
   ]},
-{ section: 'RESOURCES', items: [
-    { id: 'notes', label: 'Notes', icon: 'note' },
-    { id: 'teaching-load', label: 'Teaching Load', icon: 'calendar' }
-]},
-  { section: 'SECURITY & SETTINGS', items: [
-    { id: 'settings', label: 'Settings', icon: 'settings' },
-    { id: 'sync', label: 'Sync Over WiFi', icon: 'signal' },
-    { id: 'security-settings', label: 'Security', icon: 'shield' },
-    { id: 'teacher-profile', label: 'Teacher Profile', icon: 'user' },
-    { id: 'school-profile', label: 'School Profile', icon: 'building' },
-    { id: 'activity-log', label: 'Activity Log', icon: 'history' },
-    { id: 'about', label: 'About', icon: 'info' }
+
+  { section: 'SETTINGS', items: [
+    { id: 'settings', label: 'Settings',       icon: 'settings' },
+    { id: 'sync',     label: 'Sync Over WiFi', icon: 'signal'   }
   ]}
 ];
 
@@ -4274,8 +4262,17 @@ const State = {
 
 /* Which nav item should appear "active" when a hub's sub-page is open? */
 const HUB_CHILDREN = {
-  'teaching-tools': ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
-  'planning':       ['lesson-planner', 'tos-generator', 'powerpoint-generator','rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library'],
+  'seating-and-groups':   ['seating', 'groups'],
+  'attendance':           ['attendance-history', 'attendance-analytics'],
+  'parent-communication': ['parent-notes', 'parent-digest'],
+  'assessments':          ['assessment-builder', 'quiz-manager'],
+  'performance':          ['class-performance', 'learner-performance', 'item-analysis'],
+  'school-forms':         ['sf1', 'sf2', 'sf9'],
+  'rosters':              ['class-list', 'masterlist'],
+  'reports-and-export':   ['printable-reports', 'export-center'],
+  'settings':             ['security-settings', 'teacher-profile', 'school-profile', 'activity-log', 'about'],
+  'teaching-tools':       ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
+  'planning':             ['lesson-planner', 'tos-generator', 'powerpoint-generator', 'rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library']
 };
 /* ============================================================================
    AUTH UI
@@ -14643,7 +14640,7 @@ _showClassMismatchDialog(comparison, classInfo) {
       }
     };
   },
-  async attendance(root) {
+  async _attendanceRecord(root) {
     if (!State.activeClass) {
       root.innerHTML = `<div class="card">${UI.emptyState({icon:'check', title:'No class selected', message:'Create or select a class first.', actionLabel:'+ Create Class', actionFn:'App.openClassForm()'})}</div>`;
       return;
@@ -41984,13 +41981,17 @@ async settings(root) {
   // Persist active tab across navigations
   if (!State._settingsTab) State._settingsTab = 'general';
 
-  const tabs = [
-    { id: 'general',  label: 'General',         icon: 'settings', desc: 'School year, theme, profiles' },
-    { id: 'academic', label: 'Academics',        icon: 'chart',    desc: 'Grading policy and benchmarks' },
-    { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
-    { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' }
-  ];
-
+const tabs = [
+  { id: 'general',  label: 'General',          icon: 'settings', desc: 'School year, theme, profiles' },
+  { id: 'academic', label: 'Academics',        icon: 'chart',    desc: 'Grading policy and benchmarks' },
+  { id: 'security', label: 'Security',         icon: 'shield',   desc: 'Password, session, email sending' },
+  { id: 'teacher',  label: 'Teacher Profile',  icon: 'user',     desc: 'Your info on printed reports' },
+  { id: 'school',   label: 'School Profile',   icon: 'building', desc: 'School name, ID, seals' },
+  { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
+  { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' },
+  { id: 'activity', label: 'Activity Log',     icon: 'history',  desc: 'Recent actions in the app' },
+  { id: 'about',    label: 'About',            icon: 'info',     desc: 'Version, developer, privacy' }
+];
   root.innerHTML = `
     <div class="page-head">
       <div>
@@ -42013,16 +42014,7 @@ async settings(root) {
             </span>
           </button>`).join('')}
 
-        <button class="settings-nav-item settings-nav-item-subtle" onclick="App.navigate('about')">
-          <span class="sn-icon">${icon('info')}</span>
-          <span class="sn-body">
-            <span class="sn-label">About KlazAssist</span>
-            <span class="sn-desc">Version, developer, license text</span>
-          </span>
-          <span class="sn-chevron">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-          </span>
-        </button>
+
       </aside>
 
       <section class="settings-panel" id="settings-content"></section>
@@ -42705,19 +42697,24 @@ async settings(root) {
   /* ══════════════════════════════════════════════════════════
      RENDER DISPATCHER
      ══════════════════════════════════════════════════════════ */
-  const renderTab = (tab) => {
-    State._settingsTab = tab;
-    root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
-      b.classList.toggle('active', b.dataset.st === tab);
-    });
-    switch (tab) {
-      case 'academic': renderAcademic(); break;
-      case 'license':  renderLicense();  break;
-      case 'data':     renderData();     break;
-      case 'general':
-      default:         renderGeneral();
-    }
-  };
+const renderTab = (tab) => {
+  State._settingsTab = tab;
+  root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
+    b.classList.toggle('active', b.dataset.st === tab);
+  });
+  switch (tab) {
+    case 'academic': renderAcademic(); break;
+    case 'security': Pages.securitySettings(content); break;
+    case 'teacher':  Pages.teacherProfile(content);   break;
+    case 'school':   Pages.schoolProfile(content);    break;
+    case 'license':  renderLicense(); break;
+    case 'data':     renderData();    break;
+    case 'activity': Pages.activityLog(content); break;
+    case 'about':    Pages.about(content);       break;
+    case 'general':
+    default:         renderGeneral();
+  }
+};
 
   root.querySelectorAll('.settings-nav-item[data-st]').forEach(b => {
     b.onclick = () => renderTab(b.dataset.st);
@@ -53201,9 +53198,154 @@ Pages.mergeFromJSON = function () {
     }
   };
 };
+/* ============================================================================
+   HUB RENDERER
+   ----------------------------------------------------------------------------
+   A hub is a page that presents a horizontal tab strip and delegates the
+   body to one of several existing child pages. The child page's own
+   `page-head` is left intact — the tab strip sits above it as an extra
+   navigation band.
+   ============================================================================ */
+Pages._renderHub = function (root, opts) {
+  const active = State[opts.stateKey] || opts.defaultTab;
+  root.innerHTML = `
+    <div class="hub-tab-strip">
+      ${opts.tabs.map(t => `
+        <button type="button"
+                class="tab ${t.id === active ? 'active' : ''}"
+                data-hub-tab="${Utils.attr(t.id)}">
+          ${icon(t.icon || 'file')} ${Utils.esc(t.label)}
+        </button>`).join('')}
+    </div>
+    <div id="hub-child-content"></div>
+  `;
+  root.querySelectorAll('[data-hub-tab]').forEach(btn => {
+    btn.onclick = () => {
+      State[opts.stateKey] = btn.dataset.hubTab;
+      App.navigate(opts.moduleId);
+    };
+  });
+  const tab = opts.tabs.find(t => t.id === active) || opts.tabs[0];
+  return tab.render(root.querySelector('#hub-child-content'));
+};
+
+/* ------------------------- Attendance hub ------------------------- */
+Pages._attendanceHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'attendance',
+    stateKey: '_attendanceHubTab',
+    defaultTab: 'record',
+    tabs: [
+      { id: 'record',    label: 'Record',    icon: 'check',    render: (c) => Pages._attendanceRecord(c) },
+      { id: 'history',   label: 'History',   icon: 'calendar', render: (c) => Pages.attendanceHistory(c) },
+      { id: 'analytics', label: 'Analytics', icon: 'chart',    render: (c) => Pages.attendanceAnalytics(c) }
+    ]
+  });
+};
+
+/* ------------------------- Seating & Groups hub ------------------------- */
+Pages._seatingAndGroupsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'seating-and-groups',
+    stateKey: '_seatingGroupsHubTab',
+    defaultTab: 'seating',
+    tabs: [
+      { id: 'seating', label: 'Seating', icon: 'grid',  render: (c) => Pages.seating(c) },
+      { id: 'groups',  label: 'Groups',  icon: 'group', render: (c) => Pages.groups(c) }
+    ]
+  });
+};
+
+/* ------------------------- Parent Communication hub ------------------------- */
+Pages._parentCommunicationHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'parent-communication',
+    stateKey: '_parentCommHubTab',
+    defaultTab: 'notes',
+    tabs: [
+      { id: 'notes',  label: 'Notes Log', icon: 'message', render: (c) => Pages.parentNotes(c) },
+      { id: 'digest', label: 'Digest',    icon: 'file',    render: (c) => Pages.parentDigest(c) }
+    ]
+  });
+};
+
+/* ------------------------- Assessments hub ------------------------- */
+Pages._assessmentsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'assessments',
+    stateKey: '_assessmentsHubTab',
+    defaultTab: 'builder',
+    tabs: [
+      { id: 'builder', label: 'Assessment Builder', icon: 'edit', render: (c) => Pages.assessmentBuilder(c) },
+      { id: 'quiz',    label: 'Quiz Manager',       icon: 'play', render: (c) => Pages.quizManager(c) }
+    ]
+  });
+};
+
+/* ------------------------- Performance hub ------------------------- */
+Pages._performanceHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'performance',
+    stateKey: '_performanceHubTab',
+    defaultTab: 'class',
+    tabs: [
+      { id: 'class',    label: 'Class',         icon: 'trending',   render: (c) => Pages.classPerformance(c) },
+      { id: 'learners', label: 'Learners',      icon: 'user-check', render: (c) => Pages.learnerPerformance(c) },
+      { id: 'items',    label: 'Item Analysis', icon: 'analysis',   render: (c) => Pages.itemAnalysis(c) }
+    ]
+  });
+};
+
+/* ------------------------- School Forms hub ------------------------- */
+Pages._schoolFormsHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'school-forms',
+    stateKey: '_schoolFormsHubTab',
+    defaultTab: 'sf1',
+    tabs: [
+      { id: 'sf1', label: 'SF1 — School Register',     icon: 'file',     render: (c) => Pages.sf1(c) },
+      { id: 'sf2', label: 'SF2 — Daily Attendance',    icon: 'calendar', render: (c) => Pages.sf2(c) },
+      { id: 'sf9', label: 'SF9 — Learner’s Report',    icon: 'file',     render: (c) => Pages.sf9(c) }
+    ]
+  });
+};
+
+/* ------------------------- Rosters hub ------------------------- */
+Pages._rostersHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'rosters',
+    stateKey: '_rostersHubTab',
+    defaultTab: 'class-list',
+    tabs: [
+      { id: 'class-list', label: 'Class List', icon: 'list', render: (c) => Pages.classList(c) },
+      { id: 'masterlist', label: 'Masterlist', icon: 'list', render: (c) => Pages.masterlist(c) }
+    ]
+  });
+};
+
+/* ------------------------- Reports & Export hub ------------------------- */
+Pages._reportsAndExportHub = function (root) {
+  return Pages._renderHub(root, {
+    moduleId: 'reports-and-export',
+    stateKey: '_reportsExportHubTab',
+    defaultTab: 'printable',
+    tabs: [
+      { id: 'printable', label: 'Printable Reports', icon: 'printer',  render: (c) => Pages.printableReports(c) },
+      { id: 'export',    label: 'Export Center',     icon: 'download', render: (c) => Pages.exportCenter(c) }
+    ]
+  });
+};
 
 /* Aliases */
 const aliases = {
+  'attendance':            '_attendanceHub',
+  'seating-and-groups':    '_seatingAndGroupsHub',
+  'parent-communication':  '_parentCommunicationHub',
+  'assessments':           '_assessmentsHub',
+  'performance':           '_performanceHub',
+  'school-forms':          '_schoolFormsHub',
+  'rosters':               '_rostersHub',
+  'reports-and-export':    '_reportsAndExportHub',
   'attendance-history': 'attendanceHistory',
   'attendance-analytics': 'attendanceAnalytics',
   'attendance-reports': 'attendanceReports',
@@ -53586,6 +53728,8 @@ Pages.sync = async function (root) {
    Sender modal — shows the code, waits, streams out
    ------------------------------------------------------------------------ */
 Pages._syncOpenSenderModal = async function () {
+  console.log('[SyncSender] Opening sender modal…');
+
   const m = UI.modal({
     title: 'Sending data from this device',
     size: 'modal-lg',
@@ -53598,30 +53742,54 @@ Pages._syncOpenSenderModal = async function () {
       </div>
     `,
     footer: `<button class="btn btn-outline" id="sync-cancel">Cancel</button>`,
-    onClose: () => SyncManager.close()
+    onClose: () => { try { SyncManager.close(); } catch (e) {} }
   });
 
-  const bodyEl   = m.overlay.querySelector('#sync-sender-body');
+  const bodyEl    = m.overlay.querySelector('#sync-sender-body');
   const cancelBtn = m.overlay.querySelector('#sync-cancel');
-  cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
 
-  const code = await SyncManager.startHost({
-    mode: 'send',
-    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, code),
-    onComplete: (r) => {
-      Pages._syncRenderSenderDone(bodyEl, true);
-      setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
-      App.logActivity('Sync: sent data to another device', 'Sync');
-    },
-    onError: (msg) => {
-      Pages._syncRenderSenderError(bodyEl, msg);
-    }
-  });
+  if (!bodyEl) {
+    console.error('[SyncSender] #sync-sender-body missing. Modal HTML:');
+    console.error(m.overlay.outerHTML);
+    try { m.close(); } catch (e) {}
+    UI.toast('Could not open the sync dialog. See console for details.', 'error', 6000);
+    return;
+  }
 
-  if (code) {
-    Pages._syncRenderSenderCode(bodyEl, code);
+  if (cancelBtn) {
+    cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
+  } else {
+    console.warn('[SyncSender] #sync-cancel missing — the footer did not render.');
+  }
+
+  // Holder object so `code` is readable inside the onProgress closure
+  // even though the await has not resolved yet.
+  const codeHolder = { value: null };
+
+  try {
+    console.log('[SyncSender] Calling SyncManager.startHost…');
+    codeHolder.value = await SyncManager.startHost({
+      mode: 'send',
+      onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value),
+      onComplete: () => {
+        Pages._syncRenderSenderDone(bodyEl, true);
+        setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
+        App.logActivity('Sync: sent data to another device', 'Sync');
+      },
+      onError: (msg) => {
+        Pages._syncRenderSenderError(bodyEl, msg);
+      }
+    });
+    console.log('[SyncSender] startHost resolved. Code:', codeHolder.value);
+  } catch (e) {
+    console.error('[SyncSender] startHost threw:', e);
+    Pages._syncRenderSenderError(bodyEl, e.message || 'Could not start the sync service.');
+    return;
+  }
+
+  if (codeHolder.value) {
+    Pages._syncRenderSenderCode(bodyEl, codeHolder.value);
   } else if (!bodyEl.querySelector('.sync-error')) {
-    // No code and no explicit error — treat it as a silent failure.
     Pages._syncRenderSenderError(bodyEl, 'Could not start the sync service.');
   }
 };
@@ -53644,9 +53812,7 @@ Pages._syncRenderSenderCode = function (bodyEl, code) {
 };
 
 Pages._syncRenderSenderProgress = function (bodyEl, p, code) {
-  // Keep the code visible until the peer connects, then switch to progress view.
   if (!bodyEl.querySelector('.sync-progress-wrap')) {
-    // fallback — shouldn't happen but safe
     if (code) Pages._syncRenderSenderCode(bodyEl, code);
   }
   const wrap   = bodyEl.querySelector('#sync-progress-wrap');
@@ -53655,13 +53821,44 @@ Pages._syncRenderSenderProgress = function (bodyEl, p, code) {
   const pctEl  = bodyEl.querySelector('#sync-progress-pct');
   const hintEl = bodyEl.querySelector('.sync-code-hint');
 
-  if (p.phase === 'waiting') return;   // still on the code screen
+  // `waiting` is the "still showing the code" phase — leave the code screen
+  // alone and don't claim we're connected yet.
+  if (p.phase === 'waiting') return;
 
   if (wrap)   wrap.style.display = '';
-  if (hintEl) hintEl.innerHTML = `${icon('check')} Connected`;
   if (label)  label.textContent = p.message || 'Working…';
   if (fill && typeof p.percent === 'number') fill.style.width = p.percent + '%';
   if (pctEl && typeof p.percent === 'number') pctEl.textContent = p.percent + '%';
+
+  // Only claim "Connected" once the transfer has actually started moving.
+  // Before that, `waiting-data` means the channel is up but the receiver
+  // hasn't signalled ready yet — a distinct, meaningful state.
+  if (hintEl) {
+    let hint;
+    switch (p.phase) {
+      case 'connected':
+        hint = `${icon('check')} Connected`;
+        break;
+      case 'preparing':
+        hint = `${icon('check')} Connected &middot; Preparing&hellip;`;
+        break;
+      case 'waiting-data':
+        hint = `${icon('check')} Connected &middot; Waiting for receiver&hellip;`;
+        break;
+      case 'sending':
+        hint = `${icon('check')} Connected &middot; Sending&hellip;`;
+        break;
+      case 'sent':
+        hint = `${icon('check')} Connected &middot; Confirming&hellip;`;
+        break;
+      case 'done':
+        hint = `${icon('check')} Sync complete`;
+        break;
+      default:
+        hint = `${icon('check')} Connected`;
+    }
+    hintEl.innerHTML = hint;
+  }
 };
 
 Pages._syncRenderSenderDone = function (bodyEl, ok) {
@@ -54840,35 +55037,68 @@ const SyncManager = {
   _onComplete: null,
   _onError: null,
   _libLoaded: false,
+  _sessionToken: null,        // ← NEW: invalidates stale async callbacks
 
-  // ── NEW: handshake / guard state ──
+  // ── Handshake / guard state ──
   _guestReady: false,   // host: receiver signalled it's ready
   _sent: false,         // host: snapshot already sent (prevents duplicate)
   _handshakeDone: false,// both: the open handshake already ran
-  _recvWatchdog: null,  // guest: fires if no snapshot-meta arrives in time
+  _recvWatchdog: null,  // receiver: fires if the sender stalls or never starts
+  _ackWatchdog: null,   // sender: fires if the receiver never confirms
+  _ackResolver: null,   // receiver: held ref so 'applied-ok' can cancel the wait
   _lastMetaAt: 0,
+  _recvDone: false,
+  _finished: false,
+  _timedOut: false,
+  _retryCount: 0,
+
+  // ── Setting keys that must NEVER travel in a sync payload ──
+  // The receiving device keeps its own credentials, API keys, and license.
+  // These are also filtered out of `Pages.backupAll` and honoured by
+  // `MergeEngine.SKIP_STORES`, so excluding them here keeps the three
+  // transports consistent.
+  SENSITIVE_SETTING_KEYS: new Set([
+    'auth.account',
+    'geminiApiKey',
+    'geminiModel',
+    'web3formsKey',
+    'pollinationsApiKey',
+    'emailSendMethod',
+    'license.current',
+    'gradingPolicyOverrides'
+  ]),
 
   /* ---------- lib loader ---------- */
-  async _ensureLib() {
-    if (window.Peer) { this._libLoaded = true; return true; }
-    return new Promise((resolve) => {
-      const src = './vendor/peerjs.min.js';
-      const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) {
-        const t = setInterval(() => {
-          if (window.Peer) { clearInterval(t); this._libLoaded = true; resolve(true); }
-        }, 50);
-        setTimeout(() => { clearInterval(t); resolve(!!window.Peer); }, 8000);
-        return;
-      }
-      const s = document.createElement('script');
-      s.src = src;
-      s.async = true;
-      s.onload = () => { this._libLoaded = !!window.Peer; resolve(this._libLoaded); };
-      s.onerror = () => resolve(false);
-      document.head.appendChild(s);
-    });
-  },
+async _ensureLib() {
+  if (window.Peer) { this._libLoaded = true; return true; }
+
+  // Already injected? Wait for it, but don't cache a failed promise.
+  const src = './vendor/peerjs.min.js';
+  const existing = document.querySelector(`script[src="${src}"]`);
+  if (existing) {
+    for (let i = 0; i < 60; i++) {          // up to 6 s
+      if (window.Peer) { this._libLoaded = true; return true; }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    console.warn('[Sync] peerjs.min.js present but window.Peer never appeared.');
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = () => {
+      // onload can fire a tick before the global is visible in some browsers
+      setTimeout(() => { this._libLoaded = !!window.Peer; resolve(this._libLoaded); }, 0);
+    };
+    s.onerror = () => {
+      console.error('[Sync] Failed to load ./vendor/peerjs.min.js');
+      resolve(false);
+    };
+    document.head.appendChild(s);
+  });
+},
 
   /* ---------- code generator ---------- */
   _generateCode() {
@@ -54886,183 +55116,336 @@ const SyncManager = {
   /* ========================================================================
      HOST — the device that pushes its data out
      ======================================================================== */
-  async startHost(opts = {}) {
-    if (this._peer || this._conn) this.close();
-    this._mode = opts.mode || 'send';
-    this._role = 'host';
-    this._onProgress = opts.onProgress || null;
-    this._onComplete = opts.onComplete || null;
-    this._onError    = opts.onError    || null;
-    this._guestReady = false;
-    this._sent = false;
-    this._handshakeDone = false;
-    this._finished = false;  
+async startHost(opts = {}) {
+  if (this._peer || this._conn) this.close();
 
-    const ok = await this._ensureLib();
-    if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
+  const sessionToken = Utils.uid('sync-');       // ← NEW
+  this._sessionToken = sessionToken;             // ← NEW
+  const alive = () => this._sessionToken === sessionToken;   // ← NEW
 
-    this._code = this._generateCode();
-    const peerId = this._peerIdForCode(this._code);
-    console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
+  this._mode = opts.mode || 'send';
+  this._role = 'host';
+  this._onProgress = opts.onProgress || null;
+  this._onComplete = opts.onComplete || null;
+  this._onError    = opts.onError    || null;
+  this._guestReady = false;
+  this._sent = false;
+  this._handshakeDone = false;
+  this._finished = false;
+  this._timedOut = false;
+  this._recvDone = false;
+  this._retryCount = opts._retryCount || 0;
 
-    try {
-      this._peer = new window.Peer(peerId, { debug: 1 });
-    } catch (e) {
-      this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
-      return null;
-    }
+  const ok = await this._ensureLib();
+  if (!ok) {
+    this._fail('Could not load the sync library. Make sure ./vendor/peerjs.min.js exists.');
+    return null;
+  }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
+  this._code = this._generateCode();
+  const peerId = this._peerIdForCode(this._code);
+  console.log('[Sync] Host starting with code', this._code, '(peer id:', peerId + ')');
 
-      this._peer.on('open', () => {
-        console.log('[Sync] Host peer is open on the signalling server.');
-        this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
-        settle(this._code);
-      });
+  try {
+    this._peer = new window.Peer(peerId, { debug: 1 });
+  } catch (e) {
+    this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
+    return null;
+  }
 
-      this._peer.on('connection', (conn) => {
-        console.log('[Sync] Host received incoming connection:', conn.peer);
-        // Reject a second connection — one at a time.
-        if (this._conn) {
-          console.warn('[Sync] Rejecting second connection from', conn.peer);
-          try { conn.close(); } catch (e) {}
-          return;
-        }
-        this._conn = conn;
-        this._wireConnection();
-      });
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-      this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
-        console.error('[Sync] Host peer error:', msg);
-        if (msg.includes('unavailable-id')) {
-          console.log('[Sync] Room code collided on the server — regenerating.');
-          this.close();
-          this.startHost(opts);
-          return;
-        }
-        this._fail('Sync error: ' + msg);
+    // (BUG #1 FIX) Fail fast if the signalling server never confirms our ID.
+    let openTimeout = setTimeout(() => {
+      if (!alive()) return;                                    // ← ADD
+      if (!settled) {
+        this._fail('Could not register with the sync server. Check your internet ' +
+                   'connection, then try again.');
         settle(null);
-      });
+      }
+    }, 30000);
 
-      // Cap the waiting window at 3 minutes — after that the code is stale.
-      setTimeout(() => {
-        if (!this._conn && !settled) {
-          this._fail('No device joined within 3 minutes. Code expired.');
-          this.close();
-          settle(null);
-        }
-      }, 180000);
+    const clearOpenTimeout = () => {
+      if (openTimeout) { clearTimeout(openTimeout); openTimeout = null; }
+    };
+
+    this._peer.on('open', () => {
+      // (BUG #5 FIX) Ignore if the peer was closed while we were waiting.
+      if (!alive()) return;                                    // ← ADD
+      if (!this._peer || this._finished) return;               // ← KEEP
+      clearOpenTimeout();
+      console.log('[Sync] Host peer is open on the signalling server.');
+      this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
+      settle(this._code);
     });
-  },
+
+    this._peer.on('connection', (conn) => {
+      if (!alive()) { try { conn.close(); } catch (e) {} return; }   // ← ADD
+      // (BUG #5 FIX)
+      if (!this._peer || this._finished) {
+        try { conn.close(); } catch (e) {}
+        return;
+      }
+      clearOpenTimeout();
+      console.log('[Sync] Host received incoming connection:', conn.peer);
+      if (this._conn) {
+        console.warn('[Sync] Rejecting second connection from', conn.peer);
+        try { conn.close(); } catch (e) {}
+        return;
+      }
+      this._conn = conn;
+      this._wireConnection();
+    });
+
+    this._peer.on('error', (err) => {
+      if (!alive()) return;                                    // ← ADD
+      const errType = (err && err.type) || '';
+      const errMsg  = (err && err.message) || String(err);
+      console.error('[Sync] Host peer error:', errType, errMsg);
+
+      if (errType === 'unavailable-id') {
+        clearOpenTimeout();
+        const nextRetry = (this._retryCount || 0) + 1;
+        if (nextRetry > 3) {
+          this._fail('Could not obtain a free room code after several attempts. ' +
+                     'Please wait a minute and try again.');
+          settle(null);
+          return;
+        }
+        console.log('[Sync] Room code collided — regenerating (attempt ' + nextRetry + ').');
+        try { this._peer.removeAllListeners(); } catch (e) {}
+        this.close();
+        this.startHost({ ...opts, _retryCount: nextRetry }).then(settle, () => settle(null));
+        return;
+      }
+
+      clearOpenTimeout();
+      let friendly;
+      switch (errType) {
+        case 'network':
+          friendly = 'Lost connection to the sync server. Check your internet connection.';
+          break;
+        case 'server-error':
+          friendly = 'The sync server is having problems. Please try again in a moment.';
+          break;
+        case 'browser-incompatible':
+          friendly = 'This browser does not support the features needed for sync. ' +
+                     'Try Chrome, Edge, Firefox, or Safari 15+.';
+          break;
+        case 'socket-error':
+        case 'socket-closed':
+          friendly = 'The connection to the sync server was lost. Reload the app and try again.';
+          break;
+        default:
+          friendly = 'Sync error: ' + (errType || errMsg || 'unknown');
+      }
+      this._fail(friendly);
+      settle(null);
+    });
+
+    setTimeout(() => {
+      if (!alive()) return;                                    // ← ADD
+      if (!this._conn && !this._timedOut) {
+        this._timedOut = true;
+        this._fail('No device joined within 3 minutes. The room code has expired.');
+        settle(null);
+      }
+    }, 180000);
+  });
+},
 
   /* ========================================================================
      GUEST — the device that receives (or sends, if mode='send' is set)
      ======================================================================== */
-  async joinAsGuest(opts = {}) {
-    if (this._peer || this._conn) this.close();
-    const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
+async joinAsGuest(opts = {}) {
+  if (this._peer || this._conn) this.close();
 
-    this._mode = opts.mode || 'receive';
-    this._role = 'guest';
-    this._onProgress = opts.onProgress || null;
-    this._onComplete = opts.onComplete || null;
-    this._onError    = opts.onError    || null;
-    this._guestReady = false;
-    this._sent = false;
-    this._handshakeDone = false;
-    this._finished = false;
+  const sessionToken = Utils.uid('sync-');                   // ← NEW
+  this._sessionToken = sessionToken;                         // ← NEW
+  const alive = () => this._sessionToken === sessionToken;   // ← NEW
 
-    const ok = await this._ensureLib();
-    if (!ok) { this._fail('Could not load the sync library.'); return false; }
+  this._retryCount = 0;
+  const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
-    this._code = code;
-    console.log('[Sync] Guest joining with code', code);
+  this._mode = opts.mode || 'receive';
+  this._role = 'guest';
+  this._onProgress = opts.onProgress || null;
+  this._onComplete = opts.onComplete || null;
+  this._onError    = opts.onError    || null;
+  this._guestReady = false;
+  this._sent = false;
+  this._handshakeDone = false;
+  this._finished = false;
 
-    try {
-      this._peer = new window.Peer(null, { debug: 1 });
-    } catch (e) {
-      this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
-      return false;
-    }
+  const ok = await this._ensureLib();
+  if (!ok) { this._fail('Could not load the sync library.'); return false; }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
+  this._code = code;
+  console.log('[Sync] Guest joining with code', code);
 
-      this._peer.on('open', () => {
-        console.log('[Sync] Guest peer is open on the signalling server. Connecting to host…');
-        this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
-        const conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
-        this._conn = conn;
-        this._wireConnection();
+  try {
+    // (BUG #6 FIX) Pass options as the SOLE argument so PeerJS assigns
+    // a fresh guest ID from the server. This is the documented pattern.
+    this._peer = new window.Peer({ debug: 1 });
+  } catch (e) {
+    this._fail('Could not start the sync service: ' + (e.message || 'unknown error'));
+    return false;
+  }
 
-        conn.on('open', () => {
-          console.log('[Sync] Guest data channel is open.');
-          settle(true);
-        });
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-        // If the host never responds, bail out after 30 s.
-        setTimeout(() => {
-          if (!conn.open && !settled) {
-            this._fail('Could not reach the other device. Double-check the code and that both devices have internet access.');
-            this.close();
-            settle(false);
-          }
-        }, 30000);
-      });
-
-      this._peer.on('error', (err) => {
-        const msg = String(err && err.type || err && err.message || err);
-        console.error('[Sync] Guest peer error:', msg);
-        if (msg.includes('peer-unavailable')) {
-          this._fail('The other device is not reachable. Check the code, and that both devices are online.');
-        } else {
-          this._fail('Sync error: ' + msg);
-        }
+    // (BUG #1 FIX for guest) Fail fast if we can't even reach the server.
+    let openTimeout = setTimeout(() => {
+      if (!alive()) return;
+      if (!settled) {
+        this._fail('Could not reach the sync server. Check your internet ' +
+                   'connection, then try again.');
         settle(false);
+      }
+    }, 30000);
+
+    const clearOpenTimeout = () => {
+      if (openTimeout) { clearTimeout(openTimeout); openTimeout = null; }
+    };
+
+    this._peer.on('open', () => {
+      if (!alive()) return; 
+      if (!this._peer || this._finished) return;
+      clearOpenTimeout();
+      console.log('[Sync] Guest peer is open. Connecting to host…');
+      this._progress({ phase: 'connecting', message: 'Connecting to the other device…' });
+
+      let conn;
+      try {
+        conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
+      } catch (e) {
+        if (!alive()) return; 
+        this._fail('Could not open a connection to that room code: ' + (e.message || 'unknown'));
+        settle(false);
+        return;
+      }
+      this._conn = conn;
+      this._wireConnection();
+
+      conn.on('open', () => {
+        if (!alive()) return; 
+        console.log('[Sync] Guest data channel is open.');
+        settle(true);
       });
+
+      // (BUG #7 FIX) 60 s is a realistic ceiling on mobile networks.
+      setTimeout(() => {
+        if (!alive()) return; 
+        if (!settled && (!conn || !conn.open)) {
+          this._fail(
+            'Could not reach the other device. Double-check that the code matches ' +
+            'EXACTLY, and that the sender\'s modal is still open on the other device.'
+          );
+          this.close();
+          settle(false);
+        }
+      }, 60000);
     });
-  },
+
+    this._peer.on('error', (err) => {
+      if (!alive()) return;                                    // ← ADD
+      const errType = (err && err.type) || '';
+      const errMsg  = (err && err.message) || String(err);
+      console.error('[Sync] Guest peer error:', errType, errMsg);
+      clearOpenTimeout();
+
+      // (BUG #4 FIX) Give the user a specific, actionable message.
+      let friendly;
+      switch (errType) {
+        case 'peer-unavailable':
+          friendly =
+            'The other device is not reachable. Common causes:\n' +
+            '• The room code was typed incorrectly (check every character).\n' +
+            '• The sender\'s "Sending data" modal was closed.\n' +
+            '• The sender\'s device lost its internet connection.';
+          break;
+        case 'network':
+          friendly = 'Lost connection to the sync server. Check your internet connection.';
+          break;
+        case 'server-error':
+          friendly = 'The sync server is having problems. Please try again in a moment.';
+          break;
+        case 'browser-incompatible':
+          friendly = 'This browser does not support the features needed for sync. ' +
+                     'Try Chrome, Edge, Firefox, or Safari 15+.';
+          break;
+        case 'unavailable-id':
+          // Should not normally happen on the guest because we don't
+          // specify an ID, but handle it defensively.
+          friendly = 'The server could not assign an ID for this device. ' +
+                     'Reload the app and try again.';
+          break;
+        case 'socket-error':
+        case 'socket-closed':
+          friendly = 'The connection to the sync server was lost. Reload the app and try again.';
+          break;
+        default:
+          friendly = 'Sync error: ' + (errType || errMsg || 'unknown');
+      }
+      this._fail(friendly);
+      settle(false);
+    });
+  });
+},
 
   /* ========================================================================
      WIRE THE DATA CHANNEL
      ======================================================================== */
-  _wireConnection() {
-    const conn = this._conn;
-    if (!conn) return;
+_wireConnection() {
+  const conn = this._conn;
+  if (!conn) return;
 
-    const doHandshake = () => {
-      if (this._handshakeDone) return;
-      this._handshakeDone = true;
-      console.log('[Sync] Handshake — role:', this._role, 'mode:', this._mode);
-      this._progress({ phase: 'connected', message: 'Devices connected.' });
-      if (this._role === 'host') this._hostFlow();
-      else                        this._guestFlow();
-    };
+  const sessionToken = this._sessionToken;                     // ← ADD
+  const alive = () => this._sessionToken === sessionToken;     // ← ADD
 
-    // PeerJS sometimes fires 'open' before we attach the listener.
-    // Guard against both cases.
-    if (conn.open) {
-      setTimeout(doHandshake, 0);
-    } else {
-      conn.on('open', doHandshake);
+  const doHandshake = () => {
+    if (!alive()) return;                                      // ← ADD
+    if (this._handshakeDone) return;
+    if (!this._conn || this._finished) return;
+    this._handshakeDone = true;
+    console.log('[Sync] Handshake — role:', this._role, 'mode:', this._mode);
+    this._progress({ phase: 'connected', message: 'Devices connected.' });
+    if (this._role === 'host') this._hostFlow();
+    else                        this._guestFlow();
+  };
+
+  if (conn.open) {
+    setTimeout(doHandshake, 0);
+  } else {
+    conn.on('open', doHandshake);
+  }
+
+  conn.on('data', (data) => {                                  // ← CHANGED
+    if (!alive()) return;
+    this._handleMessage(data);
+  });
+
+  conn.on('error', (err) => {                                  // ← CHANGED
+    if (!alive()) return;
+    console.error('[Sync] Connection error:', err);
+    this._fail('Connection error: ' + (err.message || 'unknown'));
+  });
+
+  conn.on('close', () => {                                     // ← CHANGED
+    if (!alive()) return;
+    console.log('[Sync] Data channel closed.');
+    if (this._recvDone && !this._finished) {
+      this._cancelSenderAckWait();
+      this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
+      this._finish({ success: true });
     }
-
-    conn.on('data', (data) => this._handleMessage(data));
-
-    conn.on('error', (err) => {
-      console.error('[Sync] Connection error:', err);
-      this._fail('Connection error: ' + (err.message || 'unknown'));
-    });
-
-    conn.on('close', () => {
-      console.log('[Sync] Data channel closed.');
-    });
-  },
+  });
+},
 
   /* ========================================================================
      HOST FLOW — build snapshot, wait for the receiver, send
@@ -55090,19 +55473,56 @@ const SyncManager = {
   /* ========================================================================
      GUEST FLOW
      ======================================================================== */
-  async _guestFlow() {
+async _guestFlow() {
+    const myToken = this._sessionToken;                    // ← ADD
+    const alive = () => this._sessionToken === myToken;    // ← ADD
+
+    // Defensive: if this method was invoked with no active session,
+    // there is nothing to do. (Should not happen in normal flow.)
+    if (!myToken) return;                                  // ← ADD
+
     if (this._mode === 'receive') {
+      if (!alive()) return;                                // ← ADD
       this._progress({ phase: 'waiting-data', message: 'Waiting for data…' });
       this._sendMessage({ type: 'ready-to-receive' });
 
-      // Watchdog — if no snapshot-meta arrives in 45 s, fail cleanly.
+      // Watchdog — catches two distinct failure modes:
+      //   (a) the sender never starts sending at all
+      //   (b) the sender dies mid-transfer, after meta but before 'snapshot-done'
+      // It is deliberately NOT cleared when 'snapshot-meta' arrives — it must
+      // keep running through the whole transfer. It is only cleared on the
+      // successful 'snapshot-done' path (or on _fail/_finish via close()).
       this._lastMetaAt = Date.now();
       if (this._recvWatchdog) clearInterval(this._recvWatchdog);
       this._recvWatchdog = setInterval(() => {
-        if (this._handshakeDone && Date.now() - this._lastMetaAt > 45000 && !this._recvTotal) {
+        if (!alive()) {                                    // ← ADD
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          return;
+        }
+        if (!this._handshakeDone) return;
+        if (this._recvDone) {           // transfer already completed — stop polling
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          return;
+        }
+
+        const silentFor = Date.now() - this._lastMetaAt;
+
+        // (a) No metadata at all in 45 s → the sender never began.
+        if (!this._recvTotal && silentFor > 45000) {
           clearInterval(this._recvWatchdog);
           this._recvWatchdog = null;
           this._fail('The other device accepted the connection but sent no data. Try again.');
+          return;
+        }
+
+        // (b) Metadata arrived but nothing has moved in 45 s → sender dropped.
+        if (this._recvTotal && silentFor > 45000) {
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          this._fail('The other device stopped sending data. Nothing was changed on this device.');
+          return;
         }
       }, 5000);
     } else {
@@ -55114,6 +55534,7 @@ const SyncManager = {
         this._fail('Could not read local data: ' + (e.message || ''));
         return;
       }
+      if (!alive()) return;                                // ← ADD
       this._progress({ phase: 'waiting-data', message: 'Waiting for the receiving device…' });
       this._maybeSendSnapshot();
     }
@@ -55149,9 +55570,19 @@ const SyncManager = {
     for (const store of CONFIG.STORES) {
       let rows = await DB.getAll(store);
       if (!Array.isArray(rows)) throw new Error('Could not read store: ' + store);
+
+      // Never transmit credentials, API keys, license records, or device-local
+      // UI state. The receiving device keeps its own copy of these — see
+      // `_applySnapshot`, which re-injects them into the incoming payload.
       if (store === 'settings') {
-        rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
+        rows = rows.filter(r => {
+          if (typeof r.id !== 'string') return true;
+          if (r.id.startsWith('imgCache.')) return false;
+          if (this.SENSITIVE_SETTING_KEYS.has(r.id)) return false;
+          return true;
+        });
       }
+
       data.data[store] = rows;
       data.counts[store] = rows.length;
     }
@@ -55161,19 +55592,31 @@ const SyncManager = {
   /* ========================================================================
      CHUNKED SEND
      ======================================================================== */
+  /**
+   * Sends a message over the data channel.
+   * Returns true on success, false if the channel was closed or the send
+   * threw. Callers on the critical chunk path MUST check the return value —
+   * silently dropping a chunk produces an un-parseable snapshot on the far
+   * side and wastes the user's time.
+   */
   _sendMessage(msg) {
     if (!this._conn || !this._conn.open) {
       console.warn('[Sync] Attempted to send while channel is closed:', msg && msg.type);
-      return;
+      return false;
     }
     try {
       this._conn.send(msg);
+      return true;
     } catch (e) {
       console.warn('[Sync] send failed:', e);
+      return false;
     }
   },
 
-  _sendChunkedSnapshot(snapshot) {
+_sendChunkedSnapshot(snapshot) {
+    const sessionToken = this._sessionToken;                     // ← ADD
+    const alive = () => this._sessionToken === sessionToken;     // ← ADD
+
     const json = JSON.stringify(snapshot);
     const CHUNK = 16 * 1024;                    // 16 KB — safe across browsers
     const totalChunks = Math.ceil(json.length / CHUNK);
@@ -55181,17 +55624,26 @@ const SyncManager = {
     this._sendSent = 0;
     console.log('[Sync] Snapshot size:', json.length, 'bytes; chunks:', totalChunks);
 
-    this._sendMessage({
+    if (!this._sendMessage({
       type: 'snapshot-meta',
       totalChunks,
       totalSize: json.length,
       exportDate: snapshot.exportDate,
       appVersion: snapshot.version
-    });
+    })) {
+      this._fail('Could not open the data channel. Please try again.');
+      return;
+    }
 
     let i = 0;
     const pump = () => {
-      if (!this._conn || !this._conn.open) return;
+      if (!alive()) return;   
+      if (!this._conn || !this._conn.open) {
+        // Channel closed mid-transfer — surface the failure rather than
+        // leaving the sender's modal stuck forever.
+        this._fail('The connection to the other device was lost during transfer. Nothing was changed on either side.');
+        return;
+      }
 
       // If the channel is buffering, wait for it to drain before pushing more.
       const buffered = this._conn.dataChannel
@@ -55203,14 +55655,42 @@ const SyncManager = {
       }
 
       if (i >= totalChunks) {
-        this._sendMessage({ type: 'snapshot-done' });
+        if (!this._sendMessage({ type: 'snapshot-done' })) {
+          this._fail('Could not finalise the transfer. Please try again.');
+          return;
+        }
+
+        // ── Sender-side ack watchdog ──
+        // The receiver will reply with `applied` or `apply-failed`. If we
+        // don't hear back within 15 s (receiver crashed, ICE died after the
+        // last chunk, tab closed), still close out the modal — the data was
+        // sent. Flag the result as unconfirmed so the sender's UI can warn
+        // the user to verify on the other device.
+        if (this._ackWatchdog) clearTimeout(this._ackWatchdog);
+        this._ackWatchdog = setTimeout(() => {
+          if (!alive()) return;
+          this._ackWatchdog = null;
+          console.warn('[Sync] Sender did not receive receiver confirmation in time.');
+          this._progress({
+            phase: 'done',
+            message: 'Transfer sent — the other device did not confirm in time. Please verify on that device.',
+            percent: 100,
+            unconfirmed: true
+          });
+          this._finish({ success: true, unconfirmed: true });
+        }, 15000);
+
         this._progress({ phase: 'sent', message: 'Transfer complete. Waiting for confirmation…', percent: 100 });
         console.log('[Sync] All chunks sent. Awaiting confirmation.');
         return;
       }
 
       const chunk = json.slice(i * CHUNK, (i + 1) * CHUNK);
-      this._sendMessage({ type: 'snapshot-chunk', index: i, chunk });
+      if (!this._sendMessage({ type: 'snapshot-chunk', index: i, chunk })) {
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
+        this._fail('Data channel dropped mid-transfer. Nothing was changed on either side.');
+        return;
+      }
       this._sendSent += chunk.length;
       i++;
 
@@ -55222,7 +55702,7 @@ const SyncManager = {
     pump();
   },
 
-  /* ========================================================================
+    /* ========================================================================
      MESSAGE HANDLER
      ======================================================================== */
   async _handleMessage(data) {
@@ -55246,7 +55726,8 @@ const SyncManager = {
         this._recvTotal = data.totalChunks;
         this._recvSize = data.totalSize;
         this._lastMetaAt = Date.now();
-        if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+        // Deliberately do NOT clear _recvWatchdog — it must keep running so
+        // it can catch a sender that dies mid-transfer.
         console.log('[Sync] Receiving snapshot —', data.totalChunks, 'chunks;', data.totalSize, 'bytes.');
         this._progress({ phase: 'receiving', message: 'Receiving data…', percent: 0 });
         break;
@@ -55254,7 +55735,8 @@ const SyncManager = {
       case 'snapshot-chunk': {
         if (!Array.isArray(this._recvChunks)) return;
         this._recvChunks[data.index] = data.chunk;
-        // Count only distinct indices received so far.
+        this._lastMetaAt = Date.now();   // feed the watchdog on every frame
+
         let received = 0;
         for (let i = 0; i < this._recvChunks.length; i++) {
           if (typeof this._recvChunks[i] === 'string') received += this._recvChunks[i].length;
@@ -55266,23 +55748,40 @@ const SyncManager = {
 
       case 'snapshot-done': {
         console.log('[Sync] All chunks received. Reassembling…');
+
+        this._recvDone = true;
+        if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
+
+        // ── Missing-chunk check ──
+        // A dropped chunk used to become `undefined` in the join and either
+        // produce garbage JSON or silently produce a shorter payload. Detect
+        // it up front so we never apply a partial snapshot.
+        const missing = [];
+        for (let i = 0; i < this._recvTotal; i++) {
+          if (typeof this._recvChunks[i] !== 'string') missing.push(i);
+        }
+        if (missing.length) {
+          console.error('[Sync] Missing chunks:', missing);
+          this._sendMessage({
+            type: 'apply-failed',
+            error: `Transfer incomplete — ${missing.length} of ${this._recvTotal} chunks missing.`
+          });
+          this._fail('Transfer was incomplete. Nothing was changed on this device. Please try again.');
+          return;
+        }
+
         try {
           const json = this._recvChunks.join('');
           const snapshot = JSON.parse(json);
           await this._applySnapshot(snapshot);
 
-          // Best-effort courtesy notification to the sender. We do NOT wait
-          // for a reply — the sender is the *receiver* of this message, so it
-          // will never echo it back.
+          // Tell the sender we applied successfully. We will not close the
+          // peer until the sender acknowledges with `applied-ok`, so the
+          // ack is guaranteed to be delivered before the channel goes away.
           this._sendMessage({ type: 'applied' });
-
-          // ── THE FIX ──
-          // We are the receiver; we own our own completion. Give the outgoing
-          // 'applied' message ~400 ms to flush, then close this side too.
-          // (Belt and suspenders: `_finish` now has a `_finished` guard, so a
-          // late 'applied' from the sender can't double-fire the callback.)
-          setTimeout(() => this._finish({ success: true }), 400);
+          this._waitForSenderAck();
         } catch (e) {
           console.error('[Sync] apply failed:', e);
           this._sendMessage({ type: 'apply-failed', error: String(e.message || e) });
@@ -55291,13 +55790,30 @@ const SyncManager = {
         break;
       }
 
-      case 'applied':
-        console.log('[Sync] Receiver confirmed. Done.');
+      case 'applied': {
+        // ── Sender path ──
+        // The receiver confirmed the apply. Acknowledge, clear the sender's
+        // watchdog, and close out.
+        console.log('[Sync] Receiver confirmed. Sending ack-ok.');
+        this._sendMessage({ type: 'applied-ok' });
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
         this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
         this._finish({ success: true });
         break;
+      }
+
+      case 'applied-ok': {
+        // ── Receiver path ──
+        // The sender acknowledged our `applied` message. We can close now.
+        console.log('[Sync] Sender acknowledged. Done.');
+        this._cancelSenderAckWait();
+        this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
+        this._finish({ success: true });
+        break;
+      }
 
       case 'apply-failed':
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
         this._fail('The other device could not apply the data: ' + (data.error || 'unknown'));
         break;
 
@@ -55306,15 +55822,54 @@ const SyncManager = {
     }
   },
 
+  /* --- Receiver-side ack wait --- */
+  _waitForSenderAck() {
+    this._cancelSenderAckWait();
+    this._ackResolver = setTimeout(() => {
+      this._ackResolver = null;
+      // Sender never acknowledged — either it crashed after our apply
+      // succeeded, or its own modal closed before our ack landed. The data
+      // is already committed on our side, so we finish successfully.
+      console.warn('[Sync] Sender did not acknowledge in time — closing anyway.');
+      this._progress({ phase: 'done', message: 'Data applied. Closing…', percent: 100 });
+      this._finish({ success: true });
+    }, 5000);
+  },
+
+  _cancelSenderAckWait() {
+    if (this._ackResolver) { clearTimeout(this._ackResolver); this._ackResolver = null; }
+  },
+
   /* ========================================================================
      APPLY — safe replace via the existing restore pipeline
      ======================================================================== */
-  async _applySnapshot(snapshot) {
-    if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
-    const written = await DB.restoreSnapshot(snapshot, { replace: true });
-    await App.loadState();
-    App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
-  },
+async _applySnapshot(snapshot) {
+  if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
+
+  // ── Preserve local identity, API keys, and license ──
+  // The snapshot intentionally excludes these (see _buildSnapshot), but the
+  // restore replaces the whole `settings` store. Capture the receiver's own
+  // sensitive rows here, then inject them back into the incoming payload so
+  // the restore is atomic and the receiver's credentials survive.
+  const localSettings = await DB.getAll('settings').catch(() => []);
+  const preserved = localSettings.filter(r => {
+    if (typeof r.id !== 'string') return false;
+    return this.SENSITIVE_SETTING_KEYS.has(r.id);
+  });
+
+  if (preserved.length) {
+    const incoming = Array.isArray(snapshot.data.settings) ? snapshot.data.settings : [];
+    const incomingIds = new Set(incoming.map(r => r.id));
+    for (const row of preserved) {
+      if (!incomingIds.has(row.id)) incoming.push(row);
+    }
+    snapshot.data.settings = incoming;
+  }
+
+  const written = await DB.restoreSnapshot(snapshot, { replace: true });
+  await App.loadState();
+  App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
+},
 
   /* ========================================================================
      PROGRESS / FINISH / FAIL
@@ -55343,6 +55898,8 @@ const SyncManager = {
      ======================================================================== */
   close() {
     if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+    if (this._ackWatchdog)  { clearTimeout(this._ackWatchdog);  this._ackWatchdog  = null; }
+    if (this._ackResolver)  { clearTimeout(this._ackResolver);  this._ackResolver  = null; }
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
     this._peer = null;
@@ -55357,7 +55914,14 @@ const SyncManager = {
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
-    this._finished = false; 
+    this._timedOut = false;
+    this._recvDone = false;
+    // Reset the collision budget for the next user-initiated session.
+    // startHost's collision path re-supplies it via opts so the cap still
+    // applies across an internal close+restart.
+    this._retryCount = 0;
+    // NOTE: `_finished` is deliberately NOT reset here — it is the one-shot
+    // guard against duplicate callbacks and must survive a close.
   }
 };
 
