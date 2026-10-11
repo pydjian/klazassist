@@ -50657,25 +50657,38 @@ kind=gst. Include the other field as an empty array.`;
    ============================================================================ */
 const AnswerSheetOMR = (() => {
 
-  /* ========================================================================
-     SHEET GEOMETRY
-     ======================================================================== */
+  /* ------------------------------------------------------------------------
+     Sheet geometry — TWO answer sheets per A4 LANDSCAPE page.
+     Each sheet is a full-height half-page (148.5 × 210 mm).
+
+     Layout tuning notes:
+       • rowHeightMM 7.5 + maxRowsPerColumn 20 = 150 mm of grid,
+         leaving a 9 mm buffer above the bottom anchor squares.
+       • headerTopMM 32 leaves room for the title block AND the payload QR
+         (which ends at y = 24) so they never collide with the letters row.
+       • payloadQrSizeMM 22 with a 2 mm gap to the top-right anchor QR.
+     ------------------------------------------------------------------------ */
   const SHEET = {
-    widthMM:  210,
-    heightMM: 297,
-    marginMM: 10,
-    anchorSizeMM: 20,
-    bubbleDiaMM: 4.2,
+    widthMM:  148.5,
+    heightMM: 210,
+
+    marginMM:  4,
+    anchorSizeMM:  15,        // corner anchor QR (was 20 on portrait A4)
+    payloadQrSizeMM: 22,      // learner payload QR (was 18)
+    payloadQrTopMM:  2,       // payload QR vertical position
+
+    bubbleDiaMM:  4.5,        // was 4.2 — bigger for shading
     bubblePitchMM: 6.5,
     choiceCount: 5,
-    rowHeightMM: 6.6,
-    maxRowsPerColumn: 30,
-    headerTopMM: 48,
-    columns: [
-      { xFirstBubbleMM: 42,  xQuestionNumberMM: 32 },
-      { xFirstBubbleMM: 108, xQuestionNumberMM: 98 },
-      { xFirstBubbleMM: 174, xQuestionNumberMM: 164 }
-    ]
+
+    rowHeightMM: 7.5,
+    maxRowsPerColumn: 20,
+    maxColumns: 3,
+    maxQuestions: 60,         // 20 × 3
+
+    headerTopMM: 32,          // grid starts here; letters row sits at 28
+    numberWidthMM: 8,
+    columnGapMM: 5
   };
 
   const ANCHOR_PAYLOADS = {
@@ -50695,29 +50708,43 @@ const AnswerSheetOMR = (() => {
     };
   }
 
-  /* Single-column sheets are shifted right so the grid looks centred on the
-     page. The shift MUST be part of the geometry: the printer and the scanner
-     both read positions from bubblePositions(), so they can never disagree. */
-  function columnShiftMM(questionCount) {
-    return questionCount <= SHEET.maxRowsPerColumn ? 28 : 0;
-  }
-
+  /* Bubble positions in sheet-mm space. The grid is centred horizontally
+     on the sheet, and the number of columns is chosen from the item count:
+     1-20 -> 1 column  -  21-40 -> 2 columns  -  41-60 -> 3 columns
+     Both the printer and the scanner read this same function, so paper and
+     camera can never disagree about where a bubble lives. */
   function bubblePositions(questionCount) {
-    const cols = questionCount <= SHEET.maxRowsPerColumn ? 1
-              : questionCount <= SHEET.maxRowsPerColumn * 2 ? 2 : 3;
-    const shift = columnShiftMM(questionCount);
+    const cols = questionCount <= SHEET.maxRowsPerColumn       ? 1
+               : questionCount <= SHEET.maxRowsPerColumn * 2   ? 2
+               : SHEET.maxColumns;
     const perCol = Math.ceil(questionCount / cols);
+
+    const colInnerWidth = SHEET.numberWidthMM
+                        + SHEET.choiceCount * SHEET.bubblePitchMM
+                        + 2;
+    const totalWidth  = cols * colInnerWidth + (cols - 1) * SHEET.columnGapMM;
+    const contentLeft = (SHEET.widthMM - totalWidth) / 2;
+
     const positions = [];
     for (let q = 0; q < questionCount; q++) {
       const col = Math.floor(q / perCol);
       const row = q % perCol;
-      const c = SHEET.columns[col];
+      const colLeft = contentLeft + col * (colInnerWidth + SHEET.columnGapMM);
+      const bubbleStartX = colLeft + SHEET.numberWidthMM;
       const y = SHEET.headerTopMM + row * SHEET.rowHeightMM + SHEET.rowHeightMM / 2;
+
       const choices = [];
       for (let ch = 0; ch < SHEET.choiceCount; ch++) {
-        choices.push([c.xFirstBubbleMM + shift + ch * SHEET.bubblePitchMM, y]);
+        choices.push([
+          bubbleStartX + ch * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2,
+          y
+        ]);
       }
-      positions.push({ q, row, col, choices, numberX: c.xQuestionNumberMM + shift, numberY: y });
+      positions.push({
+        q, row, col, choices,
+        numberX: colLeft + SHEET.numberWidthMM - 1.5,
+        numberY: y
+      });
     }
     return positions;
   }
@@ -51089,11 +51116,20 @@ const AnswerSheetOMR = (() => {
     return qr.createSvgTag({ cellSize: 2, margin: 0, scalable: true });
   }
 
+  /* Renders ONE half-sheet (148.5 × 210 mm) — no page breaks inside.
+     Two of these are wrapped in an `.omr-page` to form a full A4 landscape
+     page. The sheet's own `.omr-sheet` class is preserved so the OMR
+     scanner and any external callers keep finding it. */
+  /* Renders ONE half-sheet (148.5 × 210 mm) — no page breaks inside.
+     Two of these are wrapped in an `.omr-page` to form a full A4 landscape
+     page. The sheet's own `.omr-sheet` class is preserved so the OMR
+     scanner and any external callers keep finding it. */
   function renderSheetHTML(assessment, learner, questionCount) {
     const esc = Utils.esc;
     const cls = State.activeClass;
     const anchors = anchorCenters();
     const bubbles = bubblePositions(questionCount);
+
     const payload = JSON.stringify({
       e: assessment.id,
       l: learner ? learner.lrn : '',
@@ -51101,167 +51137,263 @@ const AnswerSheetOMR = (() => {
       c: SHEET.choiceCount
     });
 
-    const mmToPctX = (mm) => (mm / SHEET.widthMM) * 100;
-    const mmToPctY = (mm) => (mm / SHEET.heightMM) * 100;
+    const mmX = (mm) => (mm / SHEET.widthMM)  * 100;
+    const mmY = (mm) => (mm / SHEET.heightMM) * 100;
 
+    /* ---------- corner anchors ---------- */
     const anchorQR = (payloadText, sheetX, sheetY) => {
       const s = SHEET.anchorSizeMM;
       return `<div style="position:absolute;
-                          left:${mmToPctX(sheetX - s/2)}%;
-                          top:${mmToPctY(sheetY - s/2)}%;
+                          left:${mmX(sheetX - s / 2)}%;
+                          top:${mmY(sheetY - s / 2)}%;
                           width:${(s / SHEET.widthMM) * 100}%;
                           height:${(s / SHEET.heightMM) * 100}%;">
         ${makeQrSvg(payloadText)}
       </div>`;
     };
 
-    // Single-column layouts shift right to look centred on the page.
-    const usedColumnCount =
-      questionCount <= SHEET.maxRowsPerColumn     ? 1 :
-      questionCount <= SHEET.maxRowsPerColumn * 2 ? 2 : 3;
-    const singleColShiftMM = columnShiftMM(questionCount);   // letters row only; bubbles/numbers are already shifted
+    /* ---------- header text block ---------- */
+    const headerHTML = `
+      <div style="position:absolute;
+                  left:${mmX(SHEET.marginMM + SHEET.anchorSizeMM + 2)}%;
+                  top:4mm;
+                  width:82mm;
+                  font-family:Arial,sans-serif;">
+        <div style="font-size:3.6mm;font-weight:700;line-height:1.2;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${esc(assessment.title || 'Assessment')}
+        </div>
+        <div style="font-size:2.6mm;color:#444;margin-top:0.6mm;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}${cls && cls.subject ? ' · ' + esc(cls.subject) : ''} · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
+        </div>
+        <div style="font-size:2.8mm;margin-top:2.2mm;
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          <strong>Name:</strong> ${esc(learner ? Utils.fullName(learner) : '')}
+        </div>
+        <div style="font-size:2.6mm;margin-top:1.2mm;white-space:nowrap;">
+          <strong>LRN:</strong> ${esc(learner ? (learner.lrn || '') : '')}
+          &nbsp;·&nbsp;
+          <strong>Score:</strong> ________ / ${assessment.maxScore || questionCount}
+        </div>
+      </div>`;
 
+    /* ---------- learner payload QR (top-right, left of the TR anchor) ---------- */
+    const pqr = SHEET.payloadQrSizeMM;
+    const pqrLeft = SHEET.widthMM - SHEET.marginMM - SHEET.anchorSizeMM - 2 - pqr;
+    const payloadQRHTML = `
+      <div style="position:absolute;
+                  left:${mmX(pqrLeft)}%;
+                  top:${mmY(SHEET.payloadQrTopMM)}%;
+                  width:${(pqr / SHEET.widthMM) * 100}%;
+                  height:${(pqr / SHEET.heightMM) * 100}%;
+                  padding:1mm;
+                  box-sizing:border-box;
+                  background:#fff;
+                  border:0.2mm solid #ddd;
+                  border-radius:1mm;">
+        ${makeQrSvg(payload)}
+      </div>`;
+
+    /* ---------- A B C D E header row(s), one per column ---------- */
+    const usedCols = questionCount <= SHEET.maxRowsPerColumn     ? 1
+                   : questionCount <= SHEET.maxRowsPerColumn * 2 ? 2
+                   : SHEET.maxColumns;
+    const colInnerWidth = SHEET.numberWidthMM
+                        + SHEET.choiceCount * SHEET.bubblePitchMM
+                        + 2;
+    const totalWidth  = usedCols * colInnerWidth + (usedCols - 1) * SHEET.columnGapMM;
+    const contentLeft = (SHEET.widthMM - totalWidth) / 2;
+    const lettersY    = SHEET.headerTopMM - 4;
+
+    let lettersHTML = '';
+    for (let ci = 0; ci < usedCols; ci++) {
+      const colLeft = contentLeft + ci * (colInnerWidth + SHEET.columnGapMM);
+      const bubbleStartX = colLeft + SHEET.numberWidthMM;
+      'ABCDE'.split('').forEach((L, i) => {
+        const x = bubbleStartX + i * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2;
+        lettersHTML += `<div style="position:absolute;
+                                    left:${mmX(x)}%;
+                                    top:${mmY(lettersY)}%;
+                                    transform:translate(-50%,-50%);
+                                    font-size:2.8mm;
+                                    font-weight:800;
+                                    font-family:Arial,sans-serif;
+                                    color:#333;">${L}</div>`;
+      });
+    }
+
+    /* ---------- question numbers + bubbles ---------- */
     const bubblesHTML = bubbles.map(b => {
-      const dPct  = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
+      const dPctX = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
       const dPctY = (SHEET.bubbleDiaMM / SHEET.heightMM) * 100;
 
       const bubbleRow = b.choices.map(([x, y]) =>
         `<div style="position:absolute;
-                     left:${mmToPctX(x)}%;
-                     top:${mmToPctY(y)}%;
-                     width:${dPct}%;
+                     left:${mmX(x)}%;
+                     top:${mmY(y)}%;
+                     width:${dPctX}%;
                      height:${dPctY}%;
                      transform:translate(-50%,-50%);
-                     border:0.3mm solid #333;
+                     border:0.28mm solid #222;
                      border-radius:50%;
-                     box-sizing:border-box;"></div>`
+                     box-sizing:border-box;
+                     background:#fff;"></div>`
       ).join('');
 
       const numLabel = `<div style="position:absolute;
-                                   left:${mmToPctX(b.numberX)}%;
-                                   top:${mmToPctY(b.numberY)}%;
+                                   left:${mmX(b.numberX)}%;
+                                   top:${mmY(b.numberY)}%;
                                    transform:translate(-100%,-50%);
-                                   font-size:2.8mm;
+                                   font-size:2.9mm;
                                    font-weight:700;
                                    text-align:right;
-                                   padding-right:2mm;
+                                   padding-right:1mm;
+                                   font-variant-numeric:tabular-nums;
                                    font-family:Arial,sans-serif;">${b.q + 1}.</div>`;
 
       return numLabel + bubbleRow;
     }).join('');
 
-    const lettersRow = SHEET.columns.slice(0, usedColumnCount).map(c => {
-      return 'ABCDE'.split('').map((L, i) => {
-        const x = c.xFirstBubbleMM + i * SHEET.bubblePitchMM + singleColShiftMM;
-        const y = SHEET.headerTopMM - 4;
-        return `<div style="position:absolute;
-                            left:${mmToPctX(x)}%;
-                            top:${mmToPctY(y)}%;
-                            transform:translate(-50%,-50%);
-                            font-size:2.6mm;
-                            font-weight:800;
-                            font-family:Arial,sans-serif;
-                            color:#333;">${L}</div>`;
-      }).join('');
-    }).join('');
-
+    /* ---------- assemble ---------- */
     return `
       <div class="omr-sheet" style="position:relative;
                                     width:${SHEET.widthMM}mm;
                                     height:${SHEET.heightMM}mm;
-                                    background:#fff;color:#000;
+                                    background:#fff;
+                                    color:#000;
                                     font-family:Arial,sans-serif;
                                     overflow:hidden;
-                                    page-break-after:always;
-                                    break-after:page;">
+                                    box-sizing:border-box;">
         ${anchorQR('KLAZ-OMR-TL', anchors.TL[0], anchors.TL[1])}
         ${anchorQR('KLAZ-OMR-TR', anchors.TR[0], anchors.TR[1])}
         ${anchorQR('KLAZ-OMR-BL', anchors.BL[0], anchors.BL[1])}
         ${anchorQR('KLAZ-OMR-BR', anchors.BR[0], anchors.BR[1])}
-
-        <div style="position:absolute;
-                    left:${mmToPctX(152)}%;
-                    top:${mmToPctY(6)}%;
-                    width:${(18 / SHEET.widthMM) * 100}%;
-                    height:${(18 / SHEET.heightMM) * 100}%;">
-          ${makeQrSvg(payload)}
-        </div>
-
-        <div style="position:absolute;
-                    left:${mmToPctX(32)}%;
-                    top:${mmToPctY(6)}%;
-                    right:${100 - mmToPctX(148)}%;">
-          <div style="font-size:3mm;font-weight:700;letter-spacing:.3px;">
-            ${esc(assessment.title || 'Assessment')}
-          </div>
-          <div style="font-size:2.4mm;color:#444;margin-top:1mm;">
-            ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}
-            ${cls && cls.subject ? ' · ' + esc(cls.subject) : ''}
-            · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
-          </div>
-          <div style="font-size:2.6mm;margin-top:3mm;">
-            <strong>Name:</strong> ${esc(learner ? Utils.fullName(learner) : '')}
-          </div>
-          <div style="font-size:2.4mm;margin-top:1mm;">
-            <strong>LRN:</strong> ${esc(learner ? (learner.lrn || '') : '')}
-          </div>
-          <div style="font-size:2.4mm;margin-top:1mm;">
-            <strong>Score:</strong> ________ / ${assessment.maxScore || questionCount}
-          </div>
-        </div>
-
-        ${lettersRow}
+        ${headerHTML}
+        ${payloadQRHTML}
+        ${lettersHTML}
         ${bubblesHTML}
-
-        <div style="position:absolute;left:50%;bottom:4mm;transform:translateX(-50%);
-                    font-size:2.2mm;color:#666;text-align:center;">
-          Shade the circle of your answer completely. Erase changes fully. One answer per item.
-        </div>
       </div>`;
   }
 
+  /* Prints answer sheets in A4 LANDSCAPE, two sheets per page.
+     Learners are grouped in pairs (top-left + top-right); the final page
+     pads with a blank half-sheet when the count is odd. */
   async function printSheets(assessmentId) {
     const a = await DB.get('assessments', assessmentId);
     if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+
     if (!a.questions || !a.questions.length) {
       UI.toast('Add questions before printing answer sheets.', 'warning');
       return;
     }
+
     const qCount = a.questions.length;
-    if (qCount > SHEET.maxRowsPerColumn * 3) {
-      UI.toast(`Sheet layout supports up to ${SHEET.maxRowsPerColumn * 3} questions.`, 'warning', 5000);
+    if (qCount > SHEET.maxQuestions) {
+      UI.toast(
+        `Sheets support up to ${SHEET.maxQuestions} items. ` +
+        `This assessment has ${qCount}. Please split it into two shorter assessments.`,
+        'warning', 6500
+      );
       return;
     }
+
     const ok = await ensureLibs();
     if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
     const learners = State.learners.filter(Utils.isActiveLearner);
-    if (!learners.length) { UI.toast('No active learners in this class.', 'warning'); return; }
+    if (!learners.length) {
+      UI.toast('No active learners in this class.', 'warning');
+      return;
+    }
+
+    const pageCount = Math.ceil(learners.length / 2);
 
     UI.confirm({
       title: 'Print Answer Sheets',
-      message: `Generate one answer sheet for each of the <strong>${learners.length}</strong> active learners? Each sheet is tied to its learner via LRN.`,
+      message:
+        `Generate one answer sheet for each of the <strong>${learners.length}</strong> ` +
+        `active learners?<br><br>` +
+        `<strong>${pageCount}</strong> A4 landscape page${pageCount === 1 ? '' : 's'} will ` +
+        `be produced — two sheets side by side on each. ` +
+        `Cut along the dashed centre line before scanning.`,
       confirmText: 'Generate',
       confirmClass: 'btn-primary',
       onConfirm: () => {
-        const html = learners.map(l => renderSheetHTML(a, l, qCount)).join('');
+        /* -------- group learners into pairs, one pair per A4 page -------- */
+        const pagesHTML = [];
+        for (let i = 0; i < learners.length; i += 2) {
+          const left  = learners[i];
+          const right = learners[i + 1] || null;   // may be undefined on last odd
 
+          const leftSheet  = renderSheetHTML(a, left, qCount);
+          const rightSheet = right
+            ? renderSheetHTML(a, right, qCount)
+            : '<div class="omr-sheet omr-sheet-blank" style="width:148.5mm;height:210mm;background:#fff;"></div>';
+
+          pagesHTML.push(`<div class="omr-page">${leftSheet}${rightSheet}</div>`);
+        }
+
+        /* -------- print CSS for landscape A4 + two-sheets-per-page -------- */
         const styleId = 'omr-print-css';
         const prior = document.getElementById(styleId);
         if (prior) prior.remove();
+
         const st = document.createElement('style');
         st.id = styleId;
         st.media = 'print';
         st.textContent = `
-          @page { size: A4 portrait; margin: 0; }
-          #print-area { padding: 0 !important; margin: 0 !important; }
-          .omr-sheet { box-shadow: none !important; }
-          .omr-sheet svg { display: block; width: 100%; height: 100%; }
+          @page { size: A4 landscape; margin: 0; }
+
+          #print-area {
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+
+          .omr-page {
+            width: 297mm;
+            height: 210mm;
+            display: flex;
+            flex-direction: row;
+            overflow: hidden;
+            page-break-after: always;
+            break-after: page;
+          }
+          .omr-page:last-child {
+            page-break-after: auto;
+            break-after: auto;
+          }
+
+          .omr-sheet {
+            flex: 0 0 148.5mm;
+            width: 148.5mm;
+            height: 210mm;
+            box-shadow: none !important;
+            background: #fff;
+            overflow: hidden;
+          }
+          .omr-sheet + .omr-sheet {
+            border-left: 0.15mm dashed #ccc;   /* cut guide, very faint */
+          }
+          .omr-sheet-blank {
+            background: #fff;
+          }
+          .omr-sheet svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+          }
         `;
         document.head.appendChild(st);
 
-        document.getElementById('print-area').innerHTML = `<div style="padding:0;margin:0;">${html}</div>`;
-        App.logActivity(`Answer sheets generated for "${a.title}" (${learners.length} learners)`, 'Assessments');
+        document.getElementById('print-area').innerHTML =
+          `<div style="padding:0;margin:0;">${pagesHTML.join('')}</div>`;
+
+        App.logActivity(
+          `Answer sheets generated for "${a.title}" ` +
+          `(${learners.length} learners, ${pageCount} A4 landscape pages)`,
+          'Assessments'
+        );
 
         Pages._waitForPrintImagesThen(() => {
           window.print();
@@ -52974,7 +53106,7 @@ function openScanner(assessmentId) {
   })();
 }
 
-  return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, columnShiftMM, loadCalibration };
+  return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
 })();
 
 window.AnswerSheetOMR = AnswerSheetOMR;
