@@ -55037,6 +55037,7 @@ const SyncManager = {
   _onComplete: null,
   _onError: null,
   _libLoaded: false,
+  _sessionToken: null,        // ← NEW: invalidates stale async callbacks
 
   // ── Handshake / guard state ──
   _guestReady: false,   // host: receiver signalled it's ready
@@ -55117,6 +55118,11 @@ async _ensureLib() {
      ======================================================================== */
 async startHost(opts = {}) {
   if (this._peer || this._conn) this.close();
+
+  const sessionToken = Utils.uid('sync-');       // ← NEW
+  this._sessionToken = sessionToken;             // ← NEW
+  const alive = () => this._sessionToken === sessionToken;   // ← NEW
+
   this._mode = opts.mode || 'send';
   this._role = 'host';
   this._onProgress = opts.onProgress || null;
@@ -55153,6 +55159,7 @@ async startHost(opts = {}) {
 
     // (BUG #1 FIX) Fail fast if the signalling server never confirms our ID.
     let openTimeout = setTimeout(() => {
+      if (!alive()) return;                                    // ← ADD
       if (!settled) {
         this._fail('Could not register with the sync server. Check your internet ' +
                    'connection, then try again.');
@@ -55166,7 +55173,8 @@ async startHost(opts = {}) {
 
     this._peer.on('open', () => {
       // (BUG #5 FIX) Ignore if the peer was closed while we were waiting.
-      if (!this._peer || this._finished) return;
+      if (!alive()) return;                                    // ← ADD
+      if (!this._peer || this._finished) return;               // ← KEEP
       clearOpenTimeout();
       console.log('[Sync] Host peer is open on the signalling server.');
       this._progress({ phase: 'waiting', message: 'Waiting for the other device…' });
@@ -55174,6 +55182,7 @@ async startHost(opts = {}) {
     });
 
     this._peer.on('connection', (conn) => {
+      if (!alive()) { try { conn.close(); } catch (e) {} return; }   // ← ADD
       // (BUG #5 FIX)
       if (!this._peer || this._finished) {
         try { conn.close(); } catch (e) {}
@@ -55191,6 +55200,7 @@ async startHost(opts = {}) {
     });
 
     this._peer.on('error', (err) => {
+      if (!alive()) return;                                    // ← ADD
       const errType = (err && err.type) || '';
       const errMsg  = (err && err.message) || String(err);
       console.error('[Sync] Host peer error:', errType, errMsg);
@@ -55235,11 +55245,10 @@ async startHost(opts = {}) {
       settle(null);
     });
 
-    // Hard cap: no guest joined in 3 minutes.
     setTimeout(() => {
+      if (!alive()) return;                                    // ← ADD
       if (!this._conn && !this._timedOut) {
         this._timedOut = true;
-        // (BUG #3 FIX) settle() must be called so the caller's await returns.
         this._fail('No device joined within 3 minutes. The room code has expired.');
         settle(null);
       }
@@ -55252,6 +55261,11 @@ async startHost(opts = {}) {
      ======================================================================== */
 async joinAsGuest(opts = {}) {
   if (this._peer || this._conn) this.close();
+
+  const sessionToken = Utils.uid('sync-');                   // ← NEW
+  this._sessionToken = sessionToken;                         // ← NEW
+  const alive = () => this._sessionToken === sessionToken;   // ← NEW
+
   this._retryCount = 0;
   const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
@@ -55287,6 +55301,7 @@ async joinAsGuest(opts = {}) {
 
     // (BUG #1 FIX for guest) Fail fast if we can't even reach the server.
     let openTimeout = setTimeout(() => {
+      if (!alive()) return;
       if (!settled) {
         this._fail('Could not reach the sync server. Check your internet ' +
                    'connection, then try again.');
@@ -55299,6 +55314,7 @@ async joinAsGuest(opts = {}) {
     };
 
     this._peer.on('open', () => {
+      if (!alive()) return; 
       if (!this._peer || this._finished) return;
       clearOpenTimeout();
       console.log('[Sync] Guest peer is open. Connecting to host…');
@@ -55308,6 +55324,7 @@ async joinAsGuest(opts = {}) {
       try {
         conn = this._peer.connect(this._peerIdForCode(code), { reliable: true });
       } catch (e) {
+        if (!alive()) return; 
         this._fail('Could not open a connection to that room code: ' + (e.message || 'unknown'));
         settle(false);
         return;
@@ -55316,12 +55333,14 @@ async joinAsGuest(opts = {}) {
       this._wireConnection();
 
       conn.on('open', () => {
+        if (!alive()) return; 
         console.log('[Sync] Guest data channel is open.');
         settle(true);
       });
 
       // (BUG #7 FIX) 60 s is a realistic ceiling on mobile networks.
       setTimeout(() => {
+        if (!alive()) return; 
         if (!settled && (!conn || !conn.open)) {
           this._fail(
             'Could not reach the other device. Double-check that the code matches ' +
@@ -55334,6 +55353,7 @@ async joinAsGuest(opts = {}) {
     });
 
     this._peer.on('error', (err) => {
+      if (!alive()) return;                                    // ← ADD
       const errType = (err && err.type) || '';
       const errMsg  = (err && err.message) || String(err);
       console.error('[Sync] Guest peer error:', errType, errMsg);
@@ -55381,48 +55401,51 @@ async joinAsGuest(opts = {}) {
   /* ========================================================================
      WIRE THE DATA CHANNEL
      ======================================================================== */
-  _wireConnection() {
-    const conn = this._conn;
-    if (!conn) return;
+_wireConnection() {
+  const conn = this._conn;
+  if (!conn) return;
 
-    const doHandshake = () => {
-      if (this._handshakeDone) return;
-      if (!this._conn || this._finished) return;
-      this._handshakeDone = true;
-      console.log('[Sync] Handshake — role:', this._role, 'mode:', this._mode);
-      this._progress({ phase: 'connected', message: 'Devices connected.' });
-      if (this._role === 'host') this._hostFlow();
-      else                        this._guestFlow();
-    };
+  const sessionToken = this._sessionToken;                     // ← ADD
+  const alive = () => this._sessionToken === sessionToken;     // ← ADD
 
-    // PeerJS sometimes fires 'open' before we attach the listener.
-    // Guard against both cases.
-    if (conn.open) {
-      setTimeout(doHandshake, 0);
-    } else {
-      conn.on('open', doHandshake);
+  const doHandshake = () => {
+    if (!alive()) return;                                      // ← ADD
+    if (this._handshakeDone) return;
+    if (!this._conn || this._finished) return;
+    this._handshakeDone = true;
+    console.log('[Sync] Handshake — role:', this._role, 'mode:', this._mode);
+    this._progress({ phase: 'connected', message: 'Devices connected.' });
+    if (this._role === 'host') this._hostFlow();
+    else                        this._guestFlow();
+  };
+
+  if (conn.open) {
+    setTimeout(doHandshake, 0);
+  } else {
+    conn.on('open', doHandshake);
+  }
+
+  conn.on('data', (data) => {                                  // ← CHANGED
+    if (!alive()) return;
+    this._handleMessage(data);
+  });
+
+  conn.on('error', (err) => {                                  // ← CHANGED
+    if (!alive()) return;
+    console.error('[Sync] Connection error:', err);
+    this._fail('Connection error: ' + (err.message || 'unknown'));
+  });
+
+  conn.on('close', () => {                                     // ← CHANGED
+    if (!alive()) return;
+    console.log('[Sync] Data channel closed.');
+    if (this._recvDone && !this._finished) {
+      this._cancelSenderAckWait();
+      this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
+      this._finish({ success: true });
     }
-
-    conn.on('data', (data) => this._handleMessage(data));
-
-    conn.on('error', (err) => {
-      console.error('[Sync] Connection error:', err);
-      this._fail('Connection error: ' + (err.message || 'unknown'));
-    });
-
-    conn.on('close', () => {
-      console.log('[Sync] Data channel closed.');
-      // If we are the receiver and already applied the snapshot but are still
-      // waiting for the sender's ack, treat the channel close as an implicit
-      // ack. Otherwise the receiver's UI would sit at "Applying…" for up to 5 s
-      // after the sender's own modal has already closed.
-      if (this._recvDone && !this._finished) {
-        this._cancelSenderAckWait();
-        this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
-        this._finish({ success: true });
-      }
-    });
-  },
+  });
+},
 
   /* ========================================================================
      HOST FLOW — build snapshot, wait for the receiver, send
@@ -55450,8 +55473,16 @@ async joinAsGuest(opts = {}) {
   /* ========================================================================
      GUEST FLOW
      ======================================================================== */
-  async _guestFlow() {
+async _guestFlow() {
+    const myToken = this._sessionToken;                    // ← ADD
+    const alive = () => this._sessionToken === myToken;    // ← ADD
+
+    // Defensive: if this method was invoked with no active session,
+    // there is nothing to do. (Should not happen in normal flow.)
+    if (!myToken) return;                                  // ← ADD
+
     if (this._mode === 'receive') {
+      if (!alive()) return;                                // ← ADD
       this._progress({ phase: 'waiting-data', message: 'Waiting for data…' });
       this._sendMessage({ type: 'ready-to-receive' });
 
@@ -55464,6 +55495,11 @@ async joinAsGuest(opts = {}) {
       this._lastMetaAt = Date.now();
       if (this._recvWatchdog) clearInterval(this._recvWatchdog);
       this._recvWatchdog = setInterval(() => {
+        if (!alive()) {                                    // ← ADD
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          return;
+        }
         if (!this._handshakeDone) return;
         if (this._recvDone) {           // transfer already completed — stop polling
           clearInterval(this._recvWatchdog);
@@ -55498,6 +55534,7 @@ async joinAsGuest(opts = {}) {
         this._fail('Could not read local data: ' + (e.message || ''));
         return;
       }
+      if (!alive()) return;                                // ← ADD
       this._progress({ phase: 'waiting-data', message: 'Waiting for the receiving device…' });
       this._maybeSendSnapshot();
     }
@@ -55576,7 +55613,10 @@ async joinAsGuest(opts = {}) {
     }
   },
 
-  _sendChunkedSnapshot(snapshot) {
+_sendChunkedSnapshot(snapshot) {
+    const sessionToken = this._sessionToken;                     // ← ADD
+    const alive = () => this._sessionToken === sessionToken;     // ← ADD
+
     const json = JSON.stringify(snapshot);
     const CHUNK = 16 * 1024;                    // 16 KB — safe across browsers
     const totalChunks = Math.ceil(json.length / CHUNK);
@@ -55597,6 +55637,7 @@ async joinAsGuest(opts = {}) {
 
     let i = 0;
     const pump = () => {
+      if (!alive()) return;   
       if (!this._conn || !this._conn.open) {
         // Channel closed mid-transfer — surface the failure rather than
         // leaving the sender's modal stuck forever.
@@ -55627,6 +55668,7 @@ async joinAsGuest(opts = {}) {
         // the user to verify on the other device.
         if (this._ackWatchdog) clearTimeout(this._ackWatchdog);
         this._ackWatchdog = setTimeout(() => {
+          if (!alive()) return;
           this._ackWatchdog = null;
           console.warn('[Sync] Sender did not receive receiver confirmation in time.');
           this._progress({
