@@ -54987,8 +54987,9 @@ const SyncManager = {
   _guestReady: false,   // host: receiver signalled it's ready
   _sent: false,         // host: snapshot already sent (prevents duplicate)
   _handshakeDone: false,// both: the open handshake already ran
-  _recvWatchdog: null,  // guest: fires if no snapshot-meta arrives in time
-  _lastMetaAt: 0,
+  _recvWatchdog: null,  // guest: fires if the sender stalls or never starts
+  _lastMetaAt: 0,       // refreshed on every meta/chunk frame — feeds the watchdog
+  _recvDone: false,     // guest: set true once 'snapshot-done' has been handled
 
   /* ---------- lib loader ---------- */
   async _ensureLib() {
@@ -55035,12 +55036,13 @@ async startHost(opts = {}) {
   this._onProgress = opts.onProgress || null;
   this._onComplete = opts.onComplete || null;
   this._onError    = opts.onError    || null;
-  this._guestReady = false;
-  this._sent = false;
-  this._handshakeDone = false;
-  this._finished = false;
-  this._timedOut = false;
-  this._retryCount = this._retryCount || 0;
+    this._guestReady = false;
+    this._sent = false;
+    this._handshakeDone = false;
+    this._finished = false;
+    this._timedOut = false;
+    this._retryCount = this._retryCount || 0;
+    this._recvDone = false;
 
   const ok = await this._ensureLib();
   if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
@@ -55258,14 +55260,38 @@ async joinAsGuest(opts = {}) {
       this._progress({ phase: 'waiting-data', message: 'Waiting for data…' });
       this._sendMessage({ type: 'ready-to-receive' });
 
-      // Watchdog — if no snapshot-meta arrives in 45 s, fail cleanly.
+      // Watchdog — catches two distinct failure modes:
+      //   (a) the sender never starts sending at all
+      //   (b) the sender dies mid-transfer, after meta but before 'snapshot-done'
+      // It is deliberately NOT cleared when 'snapshot-meta' arrives — it must
+      // keep running through the whole transfer. It is only cleared on the
+      // successful 'snapshot-done' path (or on _fail/_finish via close()).
       this._lastMetaAt = Date.now();
       if (this._recvWatchdog) clearInterval(this._recvWatchdog);
       this._recvWatchdog = setInterval(() => {
-        if (this._handshakeDone && Date.now() - this._lastMetaAt > 45000 && !this._recvTotal) {
+        if (!this._handshakeDone) return;
+        if (this._recvDone) {           // transfer already completed — stop polling
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          return;
+        }
+
+        const silentFor = Date.now() - this._lastMetaAt;
+
+        // (a) No metadata at all in 45 s → the sender never began.
+        if (!this._recvTotal && silentFor > 45000) {
           clearInterval(this._recvWatchdog);
           this._recvWatchdog = null;
           this._fail('The other device accepted the connection but sent no data. Try again.');
+          return;
+        }
+
+        // (b) Metadata arrived but nothing has moved in 45 s → sender dropped.
+        if (this._recvTotal && silentFor > 45000) {
+          clearInterval(this._recvWatchdog);
+          this._recvWatchdog = null;
+          this._fail('The other device stopped sending data. Nothing was changed on this device.');
+          return;
         }
       }, 5000);
     } else {
@@ -55414,7 +55440,9 @@ async joinAsGuest(opts = {}) {
         this._recvTotal = data.totalChunks;
         this._recvSize = data.totalSize;
         this._lastMetaAt = Date.now();
-        if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+        // NOTE: deliberately do NOT clear _recvWatchdog here.
+        // The watchdog must keep running so it can catch a sender that dies
+        // mid-transfer. It is cleared in 'snapshot-done' and inside close().
         console.log('[Sync] Receiving snapshot —', data.totalChunks, 'chunks;', data.totalSize, 'bytes.');
         this._progress({ phase: 'receiving', message: 'Receiving data…', percent: 0 });
         break;
@@ -55422,6 +55450,8 @@ async joinAsGuest(opts = {}) {
       case 'snapshot-chunk': {
         if (!Array.isArray(this._recvChunks)) return;
         this._recvChunks[data.index] = data.chunk;
+        this._lastMetaAt = Date.now();   // feed the watchdog on every frame
+
         // Count only distinct indices received so far.
         let received = 0;
         for (let i = 0; i < this._recvChunks.length; i++) {
@@ -55434,6 +55464,13 @@ async joinAsGuest(opts = {}) {
 
       case 'snapshot-done': {
         console.log('[Sync] All chunks received. Reassembling…');
+
+        // The transfer has completed — stop the watchdog now, before any
+        // await, so a slow JSON.parse or IndexedDB write can never be
+        // mistaken for a stalled sender.
+        this._recvDone = true;
+        if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
         try {
           const json = this._recvChunks.join('');
@@ -55445,10 +55482,9 @@ async joinAsGuest(opts = {}) {
           // will never echo it back.
           this._sendMessage({ type: 'applied' });
 
-          // ── THE FIX ──
           // We are the receiver; we own our own completion. Give the outgoing
           // 'applied' message ~400 ms to flush, then close this side too.
-          // (Belt and suspenders: `_finish` now has a `_finished` guard, so a
+          // (Belt and suspenders: `_finish` has a `_finished` guard, so a
           // late 'applied' from the sender can't double-fire the callback.)
           setTimeout(() => this._finish({ success: true }), 400);
         } catch (e) {
