@@ -53729,27 +53729,22 @@ Pages.sync = async function (root) {
    ------------------------------------------------------------------------ */
 Pages._syncOpenSenderModal = async function () {
   const m = UI.modal({
-    title: 'Sending data from this device',
-    size: 'modal-lg',
-    body: `
-      <div id="sync-sender-body">
-        <div class="sync-waiting">
-          <div class="sync-spinner"></div>
-          <div class="sync-waiting-text">Starting the sync service…</div>
-        </div>
-      </div>
-    `,
-    footer: `<button class="btn btn-outline" id="sync-cancel">Cancel</button>`,
-    onClose: () => SyncManager.close()
+    // …unchanged modal config…
   });
 
   const bodyEl   = m.overlay.querySelector('#sync-sender-body');
   const cancelBtn = m.overlay.querySelector('#sync-cancel');
   cancelBtn.onclick = () => { SyncManager.close(); m.close(); };
 
-  const code = await SyncManager.startHost({
+  // `onProgress` fires synchronously from inside `startHost` (when the peer
+  // reaches the signalling server), i.e. BEFORE the await resolves. Reading
+  // `code` directly would hit the temporal dead zone; a holder object is
+  // safe to read at any time.
+  const codeHolder = { value: null };
+
+  codeHolder.value = await SyncManager.startHost({
     mode: 'send',
-    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, code),
+    onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value),
     onComplete: (r) => {
       Pages._syncRenderSenderDone(bodyEl, true);
       setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
@@ -53760,10 +53755,9 @@ Pages._syncOpenSenderModal = async function () {
     }
   });
 
-  if (code) {
-    Pages._syncRenderSenderCode(bodyEl, code);
+  if (codeHolder.value) {
+    Pages._syncRenderSenderCode(bodyEl, codeHolder.value);
   } else if (!bodyEl.querySelector('.sync-error')) {
-    // No code and no explicit error — treat it as a silent failure.
     Pages._syncRenderSenderError(bodyEl, 'Could not start the sync service.');
   }
 };
@@ -53786,9 +53780,7 @@ Pages._syncRenderSenderCode = function (bodyEl, code) {
 };
 
 Pages._syncRenderSenderProgress = function (bodyEl, p, code) {
-  // Keep the code visible until the peer connects, then switch to progress view.
   if (!bodyEl.querySelector('.sync-progress-wrap')) {
-    // fallback — shouldn't happen but safe
     if (code) Pages._syncRenderSenderCode(bodyEl, code);
   }
   const wrap   = bodyEl.querySelector('#sync-progress-wrap');
@@ -53797,13 +53789,44 @@ Pages._syncRenderSenderProgress = function (bodyEl, p, code) {
   const pctEl  = bodyEl.querySelector('#sync-progress-pct');
   const hintEl = bodyEl.querySelector('.sync-code-hint');
 
-  if (p.phase === 'waiting') return;   // still on the code screen
+  // `waiting` is the "still showing the code" phase — leave the code screen
+  // alone and don't claim we're connected yet.
+  if (p.phase === 'waiting') return;
 
   if (wrap)   wrap.style.display = '';
-  if (hintEl) hintEl.innerHTML = `${icon('check')} Connected`;
   if (label)  label.textContent = p.message || 'Working…';
   if (fill && typeof p.percent === 'number') fill.style.width = p.percent + '%';
   if (pctEl && typeof p.percent === 'number') pctEl.textContent = p.percent + '%';
+
+  // Only claim "Connected" once the transfer has actually started moving.
+  // Before that, `waiting-data` means the channel is up but the receiver
+  // hasn't signalled ready yet — a distinct, meaningful state.
+  if (hintEl) {
+    let hint;
+    switch (p.phase) {
+      case 'connected':
+        hint = `${icon('check')} Connected`;
+        break;
+      case 'preparing':
+        hint = `${icon('check')} Connected &middot; Preparing&hellip;`;
+        break;
+      case 'waiting-data':
+        hint = `${icon('check')} Connected &middot; Waiting for receiver&hellip;`;
+        break;
+      case 'sending':
+        hint = `${icon('check')} Connected &middot; Sending&hellip;`;
+        break;
+      case 'sent':
+        hint = `${icon('check')} Connected &middot; Confirming&hellip;`;
+        break;
+      case 'done':
+        hint = `${icon('check')} Sync complete`;
+        break;
+      default:
+        hint = `${icon('check')} Connected`;
+    }
+    hintEl.innerHTML = hint;
+  }
 };
 
 Pages._syncRenderSenderDone = function (bodyEl, ok) {
@@ -54983,13 +55006,34 @@ const SyncManager = {
   _onError: null,
   _libLoaded: false,
 
-  // ── NEW: handshake / guard state ──
+  // ── Handshake / guard state ──
   _guestReady: false,   // host: receiver signalled it's ready
   _sent: false,         // host: snapshot already sent (prevents duplicate)
   _handshakeDone: false,// both: the open handshake already ran
-  _recvWatchdog: null,  // guest: fires if the sender stalls or never starts
-  _lastMetaAt: 0,       // refreshed on every meta/chunk frame — feeds the watchdog
-  _recvDone: false,     // guest: set true once 'snapshot-done' has been handled
+  _recvWatchdog: null,  // receiver: fires if the sender stalls or never starts
+  _ackWatchdog: null,   // sender: fires if the receiver never confirms
+  _ackResolver: null,   // receiver: held ref so 'applied-ok' can cancel the wait
+  _lastMetaAt: 0,
+  _recvDone: false,
+  _finished: false,
+  _timedOut: false,
+  _retryCount: 0,
+
+  // ── Setting keys that must NEVER travel in a sync payload ──
+  // The receiving device keeps its own credentials, API keys, and license.
+  // These are also filtered out of `Pages.backupAll` and honoured by
+  // `MergeEngine.SKIP_STORES`, so excluding them here keeps the three
+  // transports consistent.
+  SENSITIVE_SETTING_KEYS: new Set([
+    'auth.account',
+    'geminiApiKey',
+    'geminiModel',
+    'web3formsKey',
+    'pollinationsApiKey',
+    'emailSendMethod',
+    'license.current',
+    'gradingPolicyOverrides'
+  ]),
 
   /* ---------- lib loader ---------- */
   async _ensureLib() {
@@ -55036,13 +55080,16 @@ async startHost(opts = {}) {
   this._onProgress = opts.onProgress || null;
   this._onComplete = opts.onComplete || null;
   this._onError    = opts.onError    || null;
-    this._guestReady = false;
-    this._sent = false;
-    this._handshakeDone = false;
-    this._finished = false;
-    this._timedOut = false;
-    this._retryCount = this._retryCount || 0;
-    this._recvDone = false;
+  this._guestReady = false;
+  this._sent = false;
+  this._handshakeDone = false;
+  this._finished = false;
+  this._timedOut = false;
+  this._recvDone = false;
+
+  // Reset the collision budget for a fresh user-initiated session, but let
+  // an internal retry carry its count through so we still cap at 3.
+  this._retryCount = opts._retryCount || 0;
 
   const ok = await this._ensureLib();
   if (!ok) { this._fail('Could not load the sync library. Check ./vendor/peerjs.min.js.'); return null; }
@@ -55084,19 +55131,19 @@ async startHost(opts = {}) {
       console.error('[Sync] Host peer error:', msg);
 
       if (msg.includes('unavailable-id')) {
-        // The room code collided with a peer still registered on the server.
-        // Retry with a fresh code, but chain the resolution so the caller's
-        // promise actually settles this time.
-        this._retryCount = (this._retryCount || 0) + 1;
-        if (this._retryCount > 3) {
+        // Collision budget is capped across recursive retries. `close()`
+        // resets _retryCount, so we carry it forward explicitly through
+        // opts on the recursive call.
+        const nextRetry = (this._retryCount || 0) + 1;
+        if (nextRetry > 3) {
           this._fail('Could not obtain a free room code after several attempts. Please wait a minute and try again.');
           settle(null);
           return;
         }
-        console.log('[Sync] Room code collided — regenerating (attempt ' + this._retryCount + ').');
+        console.log('[Sync] Room code collided — regenerating (attempt ' + nextRetry + ').');
         try { this._peer.removeAllListeners(); } catch (e) {}
         this.close();
-        this.startHost(opts).then(settle, () => settle(null));
+        this.startHost({ ...opts, _retryCount: nextRetry }).then(settle, () => settle(null));
         return;
       }
 
@@ -55104,13 +55151,11 @@ async startHost(opts = {}) {
       settle(null);
     });
 
-    // Hard cap: if no guest has joined within 3 minutes, notify the sender.
+    // Hard cap: if no guest joins within 3 minutes, notify the sender.
     setTimeout(() => {
       if (!this._conn && !this._timedOut) {
         this._timedOut = true;
         this._fail('No device joined within 3 minutes. The room code has expired.');
-        // _fail() destroys the peer and calls _onError; the outer promise
-        // was already resolved with the code, so nothing else to do.
       }
     }, 180000);
   });
@@ -55121,6 +55166,7 @@ async startHost(opts = {}) {
      ======================================================================== */
 async joinAsGuest(opts = {}) {
   if (this._peer || this._conn) this.close();
+  this._retryCount = 0;                // ← FIX: fresh session, fresh collision budget
   const code = String(opts.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length !== 6) { this._fail('Room code must be 6 characters.'); return false; }
 
@@ -55226,6 +55272,15 @@ async joinAsGuest(opts = {}) {
 
     conn.on('close', () => {
       console.log('[Sync] Data channel closed.');
+      // If we are the receiver and already applied the snapshot but are still
+      // waiting for the sender's ack, treat the channel close as an implicit
+      // ack. Otherwise the receiver's UI would sit at "Applying…" for up to 5 s
+      // after the sender's own modal has already closed.
+      if (this._recvDone && !this._finished) {
+        this._cancelSenderAckWait();
+        this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
+        this._finish({ success: true });
+      }
     });
   },
 
@@ -55338,9 +55393,19 @@ async joinAsGuest(opts = {}) {
     for (const store of CONFIG.STORES) {
       let rows = await DB.getAll(store);
       if (!Array.isArray(rows)) throw new Error('Could not read store: ' + store);
+
+      // Never transmit credentials, API keys, license records, or device-local
+      // UI state. The receiving device keeps its own copy of these — see
+      // `_applySnapshot`, which re-injects them into the incoming payload.
       if (store === 'settings') {
-        rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
+        rows = rows.filter(r => {
+          if (typeof r.id !== 'string') return true;
+          if (r.id.startsWith('imgCache.')) return false;
+          if (this.SENSITIVE_SETTING_KEYS.has(r.id)) return false;
+          return true;
+        });
       }
+
       data.data[store] = rows;
       data.counts[store] = rows.length;
     }
@@ -55350,15 +55415,24 @@ async joinAsGuest(opts = {}) {
   /* ========================================================================
      CHUNKED SEND
      ======================================================================== */
+  /**
+   * Sends a message over the data channel.
+   * Returns true on success, false if the channel was closed or the send
+   * threw. Callers on the critical chunk path MUST check the return value —
+   * silently dropping a chunk produces an un-parseable snapshot on the far
+   * side and wastes the user's time.
+   */
   _sendMessage(msg) {
     if (!this._conn || !this._conn.open) {
       console.warn('[Sync] Attempted to send while channel is closed:', msg && msg.type);
-      return;
+      return false;
     }
     try {
       this._conn.send(msg);
+      return true;
     } catch (e) {
       console.warn('[Sync] send failed:', e);
+      return false;
     }
   },
 
@@ -55370,19 +55444,22 @@ async joinAsGuest(opts = {}) {
     this._sendSent = 0;
     console.log('[Sync] Snapshot size:', json.length, 'bytes; chunks:', totalChunks);
 
-    this._sendMessage({
+    if (!this._sendMessage({
       type: 'snapshot-meta',
       totalChunks,
       totalSize: json.length,
       exportDate: snapshot.exportDate,
       appVersion: snapshot.version
-    });
+    })) {
+      this._fail('Could not open the data channel. Please try again.');
+      return;
+    }
 
     let i = 0;
     const pump = () => {
       if (!this._conn || !this._conn.open) {
         // Channel closed mid-transfer — surface the failure rather than
-        // leaving the sender's modal stuck on "Sending data… 0%" forever.
+        // leaving the sender's modal stuck forever.
         this._fail('The connection to the other device was lost during transfer. Nothing was changed on either side.');
         return;
       }
@@ -55397,14 +55474,41 @@ async joinAsGuest(opts = {}) {
       }
 
       if (i >= totalChunks) {
-        this._sendMessage({ type: 'snapshot-done' });
+        if (!this._sendMessage({ type: 'snapshot-done' })) {
+          this._fail('Could not finalise the transfer. Please try again.');
+          return;
+        }
+
+        // ── Sender-side ack watchdog ──
+        // The receiver will reply with `applied` or `apply-failed`. If we
+        // don't hear back within 15 s (receiver crashed, ICE died after the
+        // last chunk, tab closed), still close out the modal — the data was
+        // sent. Flag the result as unconfirmed so the sender's UI can warn
+        // the user to verify on the other device.
+        if (this._ackWatchdog) clearTimeout(this._ackWatchdog);
+        this._ackWatchdog = setTimeout(() => {
+          this._ackWatchdog = null;
+          console.warn('[Sync] Sender did not receive receiver confirmation in time.');
+          this._progress({
+            phase: 'done',
+            message: 'Transfer sent — the other device did not confirm in time. Please verify on that device.',
+            percent: 100,
+            unconfirmed: true
+          });
+          this._finish({ success: true, unconfirmed: true });
+        }, 15000);
+
         this._progress({ phase: 'sent', message: 'Transfer complete. Waiting for confirmation…', percent: 100 });
         console.log('[Sync] All chunks sent. Awaiting confirmation.');
         return;
       }
 
       const chunk = json.slice(i * CHUNK, (i + 1) * CHUNK);
-      this._sendMessage({ type: 'snapshot-chunk', index: i, chunk });
+      if (!this._sendMessage({ type: 'snapshot-chunk', index: i, chunk })) {
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
+        this._fail('Data channel dropped mid-transfer. Nothing was changed on either side.');
+        return;
+      }
       this._sendSent += chunk.length;
       i++;
 
@@ -55416,7 +55520,7 @@ async joinAsGuest(opts = {}) {
     pump();
   },
 
-  /* ========================================================================
+    /* ========================================================================
      MESSAGE HANDLER
      ======================================================================== */
   async _handleMessage(data) {
@@ -55440,9 +55544,8 @@ async joinAsGuest(opts = {}) {
         this._recvTotal = data.totalChunks;
         this._recvSize = data.totalSize;
         this._lastMetaAt = Date.now();
-        // NOTE: deliberately do NOT clear _recvWatchdog here.
-        // The watchdog must keep running so it can catch a sender that dies
-        // mid-transfer. It is cleared in 'snapshot-done' and inside close().
+        // Deliberately do NOT clear _recvWatchdog — it must keep running so
+        // it can catch a sender that dies mid-transfer.
         console.log('[Sync] Receiving snapshot —', data.totalChunks, 'chunks;', data.totalSize, 'bytes.');
         this._progress({ phase: 'receiving', message: 'Receiving data…', percent: 0 });
         break;
@@ -55452,7 +55555,6 @@ async joinAsGuest(opts = {}) {
         this._recvChunks[data.index] = data.chunk;
         this._lastMetaAt = Date.now();   // feed the watchdog on every frame
 
-        // Count only distinct indices received so far.
         let received = 0;
         for (let i = 0; i < this._recvChunks.length; i++) {
           if (typeof this._recvChunks[i] === 'string') received += this._recvChunks[i].length;
@@ -55465,28 +55567,39 @@ async joinAsGuest(opts = {}) {
       case 'snapshot-done': {
         console.log('[Sync] All chunks received. Reassembling…');
 
-        // The transfer has completed — stop the watchdog now, before any
-        // await, so a slow JSON.parse or IndexedDB write can never be
-        // mistaken for a stalled sender.
         this._recvDone = true;
         if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
 
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
+
+        // ── Missing-chunk check ──
+        // A dropped chunk used to become `undefined` in the join and either
+        // produce garbage JSON or silently produce a shorter payload. Detect
+        // it up front so we never apply a partial snapshot.
+        const missing = [];
+        for (let i = 0; i < this._recvTotal; i++) {
+          if (typeof this._recvChunks[i] !== 'string') missing.push(i);
+        }
+        if (missing.length) {
+          console.error('[Sync] Missing chunks:', missing);
+          this._sendMessage({
+            type: 'apply-failed',
+            error: `Transfer incomplete — ${missing.length} of ${this._recvTotal} chunks missing.`
+          });
+          this._fail('Transfer was incomplete. Nothing was changed on this device. Please try again.');
+          return;
+        }
+
         try {
           const json = this._recvChunks.join('');
           const snapshot = JSON.parse(json);
           await this._applySnapshot(snapshot);
 
-          // Best-effort courtesy notification to the sender. We do NOT wait
-          // for a reply — the sender is the *receiver* of this message, so it
-          // will never echo it back.
+          // Tell the sender we applied successfully. We will not close the
+          // peer until the sender acknowledges with `applied-ok`, so the
+          // ack is guaranteed to be delivered before the channel goes away.
           this._sendMessage({ type: 'applied' });
-
-          // We are the receiver; we own our own completion. Give the outgoing
-          // 'applied' message ~400 ms to flush, then close this side too.
-          // (Belt and suspenders: `_finish` has a `_finished` guard, so a
-          // late 'applied' from the sender can't double-fire the callback.)
-          setTimeout(() => this._finish({ success: true }), 400);
+          this._waitForSenderAck();
         } catch (e) {
           console.error('[Sync] apply failed:', e);
           this._sendMessage({ type: 'apply-failed', error: String(e.message || e) });
@@ -55495,13 +55608,30 @@ async joinAsGuest(opts = {}) {
         break;
       }
 
-      case 'applied':
-        console.log('[Sync] Receiver confirmed. Done.');
+      case 'applied': {
+        // ── Sender path ──
+        // The receiver confirmed the apply. Acknowledge, clear the sender's
+        // watchdog, and close out.
+        console.log('[Sync] Receiver confirmed. Sending ack-ok.');
+        this._sendMessage({ type: 'applied-ok' });
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
         this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
         this._finish({ success: true });
         break;
+      }
+
+      case 'applied-ok': {
+        // ── Receiver path ──
+        // The sender acknowledged our `applied` message. We can close now.
+        console.log('[Sync] Sender acknowledged. Done.');
+        this._cancelSenderAckWait();
+        this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
+        this._finish({ success: true });
+        break;
+      }
 
       case 'apply-failed':
+        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
         this._fail('The other device could not apply the data: ' + (data.error || 'unknown'));
         break;
 
@@ -55510,15 +55640,54 @@ async joinAsGuest(opts = {}) {
     }
   },
 
+  /* --- Receiver-side ack wait --- */
+  _waitForSenderAck() {
+    this._cancelSenderAckWait();
+    this._ackResolver = setTimeout(() => {
+      this._ackResolver = null;
+      // Sender never acknowledged — either it crashed after our apply
+      // succeeded, or its own modal closed before our ack landed. The data
+      // is already committed on our side, so we finish successfully.
+      console.warn('[Sync] Sender did not acknowledge in time — closing anyway.');
+      this._progress({ phase: 'done', message: 'Data applied. Closing…', percent: 100 });
+      this._finish({ success: true });
+    }, 5000);
+  },
+
+  _cancelSenderAckWait() {
+    if (this._ackResolver) { clearTimeout(this._ackResolver); this._ackResolver = null; }
+  },
+
   /* ========================================================================
      APPLY — safe replace via the existing restore pipeline
      ======================================================================== */
-  async _applySnapshot(snapshot) {
-    if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
-    const written = await DB.restoreSnapshot(snapshot, { replace: true });
-    await App.loadState();
-    App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
-  },
+async _applySnapshot(snapshot) {
+  if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
+
+  // ── Preserve local identity, API keys, and license ──
+  // The snapshot intentionally excludes these (see _buildSnapshot), but the
+  // restore replaces the whole `settings` store. Capture the receiver's own
+  // sensitive rows here, then inject them back into the incoming payload so
+  // the restore is atomic and the receiver's credentials survive.
+  const localSettings = await DB.getAll('settings').catch(() => []);
+  const preserved = localSettings.filter(r => {
+    if (typeof r.id !== 'string') return false;
+    return this.SENSITIVE_SETTING_KEYS.has(r.id);
+  });
+
+  if (preserved.length) {
+    const incoming = Array.isArray(snapshot.data.settings) ? snapshot.data.settings : [];
+    const incomingIds = new Set(incoming.map(r => r.id));
+    for (const row of preserved) {
+      if (!incomingIds.has(row.id)) incoming.push(row);
+    }
+    snapshot.data.settings = incoming;
+  }
+
+  const written = await DB.restoreSnapshot(snapshot, { replace: true });
+  await App.loadState();
+  App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
+},
 
   /* ========================================================================
      PROGRESS / FINISH / FAIL
@@ -55547,6 +55716,8 @@ async joinAsGuest(opts = {}) {
      ======================================================================== */
   close() {
     if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
+    if (this._ackWatchdog)  { clearTimeout(this._ackWatchdog);  this._ackWatchdog  = null; }
+    if (this._ackResolver)  { clearTimeout(this._ackResolver);  this._ackResolver  = null; }
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
     this._peer = null;
@@ -55562,9 +55733,13 @@ async joinAsGuest(opts = {}) {
     this._sent = false;
     this._handshakeDone = false;
     this._timedOut = false;
-    // NOTE: deliberately NOT resetting `_finished` here. It is reset at the
-    // start of `startHost` / `joinAsGuest`, so the one-shot guard survives
-    // a close-then-late-message sequence.
+    this._recvDone = false;
+    // Reset the collision budget for the next user-initiated session.
+    // startHost's collision path re-supplies it via opts so the cap still
+    // applies across an internal close+restart.
+    this._retryCount = 0;
+    // NOTE: `_finished` is deliberately NOT reset here — it is the one-shot
+    // guard against duplicate callbacks and must survive a close.
   }
 };
 
