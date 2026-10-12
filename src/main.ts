@@ -50846,19 +50846,19 @@ function bubblePositions(questionCount) {
    ======================================================================== */
 const DEFAULT_CALIBRATION = {
   // Bubble detection
-  markedRatio:      0.55,
-  gapRatio:         0.75,
-  fillStrong:       0.65,
-  fillAmbiguous:    0.25,
+  markedRatio:      0.68,   // was 0.55 — accept marks only 1.5× darker
+  gapRatio:         0.85,   // was 0.75 — easier to beat the runner-up
+  fillStrong:       0.42,   // was 0.65 — light shading counts as strong
+  fillAmbiguous:    0.10,   // was 0.25 — a small center dot counts
   ringInner:        1.40,
   ringOuter:        1.90,
-  sampleRadiusMult: 0.50,
+  sampleRadiusMult: 0.55,
 
   // ArUco detection
-  minMarkerPx:      14,       // smallest acceptable marker side length (image px)
-  maxMarkerPx:      220,      // largest acceptable marker side length (image px)
-  maxHamming:       2,        // allowed bit errors when matching the dictionary
-  minRingFill:      0.55,     // fraction of border cells that must be dark
+  minMarkerPx:      14,
+  maxMarkerPx:      220,
+  maxHamming:       2,
+  minRingFill:      0.55,
 
   // Geometry
   maxReprojErrPx:   6.0,
@@ -50869,8 +50869,8 @@ const DEFAULT_CALIBRATION = {
   maxBrightness:    235,
 
   // Confirmation
-  confirmFrames:    2,        // consecutive agreeing reads required
-  blobSnapRadius:   0.90,     // search radius for blob refinement (× bubble radius)
+  confirmFrames:    2,
+  blobSnapRadius:   0.90,
 
   calibratedAt:     null
 };
@@ -51011,6 +51011,40 @@ function fillFraction(imageData, px, py, radiusPx, threshold) {
     }
   }
   return n ? dark / n : 0;
+}
+
+/**
+ * Multi-scale fill: sample the interior at several sub-radii and return
+ * the maximum fraction of dark pixels observed.
+ *
+ * Why: a single full-radius sample is dominated by the empty area around
+ * a small center dot. Sampling at 35 %, 55 %, 75 %, and 100 % of the
+ * bubble radius lets a dot in the middle register as a mark without
+ * loosening the outer sample enough to include the printed ring.
+ *
+ * @param innerLum  the average luminance of the bubble interior (used to
+ *                  bias the threshold toward the local mark darkness)
+ * @param ringLum   the average luminance of the paper ring just outside
+ *                  the bubble (the local paper reference)
+ */
+function fillFractionMultiScale(imageData, px, py, baseRadiusPx, otsuThresh, innerLum, ringLum) {
+  // Local adaptive threshold. Fall back to otsu when the ring is dark
+  // (e.g. the sheet is in shadow) because a dark "paper reference" would
+  // otherwise classify the entire sheet as a mark.
+  const ringRef = (typeof ringLum === 'number' && ringLum > 60) ? ringLum : 200;
+  const adaptive = Math.max(innerLum + (ringRef - innerLum) * 0.55, otsuThresh * 0.75);
+  const threshold = Math.min(adaptive, ringRef * 0.92);
+
+  const radii = [0.35, 0.55, 0.75, 1.0];
+  let maxFill = 0;
+  for (const mult of radii) {
+    const r = Math.max(2, Math.round(baseRadiusPx * mult));
+    const f = fillFraction(imageData, px, py, r, threshold);
+    if (f > maxFill) maxFill = f;
+    // Early exit: a strong center reading is already conclusive.
+    if (maxFill >= 0.85) break;
+  }
+  return maxFill;
 }
 
 /* Otsu threshold over a rectangular region. */
@@ -51401,10 +51435,47 @@ function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThr
     const inner = sampleLuminance(imageData, px, py, bubbleR);
     const ring  = sampleRing(imageData, px, py, bubbleR * CAL.ringInner, bubbleR * CAL.ringOuter);
     const ratio = ring > 0 ? inner / ring : 1;
-    const fillThresh = Math.min(otsuThresh, ring * 0.75);
-    const fill = fillFraction(imageData, px, py, bubbleR, fillThresh);
+    // Multi-scale sampling. The threshold is now computed inside the
+    // helper using both the local mark darkness and the local paper
+    // brightness, so a lightly-shaded bubble in a well-lit frame and a
+    // heavily-shaded bubble in a dim frame are both classified correctly.
+    const fill = fillFractionMultiScale(imageData, px, py, bubbleR, otsuThresh, inner, ring);
     return { lum: inner, ring, ratio, fill, valid: true, snapped: refined.snapped, x: px, y: py };
   });
+
+    // ---- Row-level drift fallback ----
+  // If no bubble in this row is clearly marked AND every bubble is
+  // brighter than 190 (i.e. they all look blank), the row may be off
+  // the expected grid due to paper stretch. Retry with a small vertical
+  // and horizontal offset sweep.
+  const anyClearlyMarked = metrics.some(m =>
+    m.valid && m.ratio < 0.75 && m.fill >= 0.30
+  );
+  const allBright = metrics.every(m => !m.valid || m.lum > 190);
+  if (!anyClearlyMarked && allBright) {
+    const OFFSETS = [
+      [-2, -1], [0, -2], [2, -1], [-1, 0], [1, 0], [-2, 1], [0, 2], [2, 1]
+    ];
+    for (const [dx, dy] of OFFSETS) {
+      const retry = questionBubbles.map(([sx, sy]) => {
+        const [px0, py0] = applyH(H, sx + dx * mmPerPx, sy + dy * mmPerPx);
+        if (px0 < 0 || py0 < 0 || px0 >= imageData.width || py0 >= imageData.height) {
+          return { lum: 255, ring: 255, ratio: 1, fill: 0, valid: false };
+        }
+        const inner = sampleLuminance(imageData, px0, py0, bubbleR);
+        const ring  = sampleRing(imageData, px0, py0, bubbleR * CAL.ringInner, bubbleR * CAL.ringOuter);
+        const ratio = ring > 0 ? inner / ring : 1;
+        const fill = fillFractionMultiScale(imageData, px0, py0, bubbleR, otsuThresh, inner, ring);
+        return { lum: inner, ring, ratio, fill, valid: true, snapped: false, x: px0, y: py0 };
+      });
+      const hit = retry.some(m => m.valid && m.ratio < 0.75 && m.fill >= 0.30);
+      if (hit) {
+        // Replace the metrics array in place and stop the sweep.
+        retry.forEach((m, i) => { metrics[i] = m; });
+        break;
+      }
+    }
+  }
 
   const valid = metrics.filter(m => m.valid);
   if (!valid.length) return { choice: null, confidence: 0, metrics };
@@ -52088,8 +52159,11 @@ function openScanner(assessmentId) {
             <div class="zg-status-sub" id="omr-status-sub">${Utils.esc(assessLabel)} · ${Utils.esc(classLabel)}</div>
           </div>
 
-          <button type="button" class="zg-undo" id="omr-undo" disabled aria-label="Undo last scan">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 01-15-6.7L3 13"/></svg>
+          <button type="button" class="zg-undo" id="omr-undo" disabled aria-label="Undo last scan" title="Undo last scan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7v6h6"/>
+              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+            </svg>
           </button>
 
           <div class="zg-camera-error" id="zg-error" hidden></div>

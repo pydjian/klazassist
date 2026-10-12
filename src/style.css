@@ -12273,8 +12273,8 @@ body.zg-scanner-open {
   padding-top: env(safe-area-inset-top, 0);
   height: calc(56px + env(safe-area-inset-top, 0));
   flex-shrink: 0;
-  background: #1b5e20;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  background: var(--gradient-primary);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
   z-index: 10;
 }
 
@@ -12615,7 +12615,7 @@ body.zg-scanner-open #toast-container {
 .zg-card-sub { font-size: 12px; color: #444; margin-top: 2px; }
 .zg-card-btn {
   min-height: 40px; padding: 0 14px; border-radius: 10px; border: 0;
-  background: #1b5e20; color: #fff; font: 800 13px var(--font); cursor: pointer;
+  background: var(--deped-blue); color: #fff; font: 800 13px var(--font); cursor: pointer;
 }
 .zg-card.warn .zg-card-btn { background: #b45309; }
 
@@ -12634,7 +12634,7 @@ body.zg-scanner-open #toast-container {
   min-height: 48px; padding: 0 20px; border-radius: 12px; border: 0;
   font: 800 15px var(--font); cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
-.zg-btn.primary { background: #1b5e20; color: #fff; flex: 1; }
+.zg-btn.primary { background: var(--deped-blue); color: #fff; flex: 1; }
 .zg-btn.ghost { background: rgba(0,0,0,0.06); color: #111; }
 .zg-btn.ghost.danger { color: #b91c1c; }
 .zg-btn:disabled { opacity: .5; }
@@ -14131,4 +14131,113 @@ body.zg-scanner-open #toast-container {
 }
 @media (prefers-reduced-motion: reduce) {
   .zg-viewfinder { transition: none !important; }
+}
+/* ============================================================================
+   SCANNER MODALS — theme-aware chrome
+   ----------------------------------------------------------------------------
+   The mobile scanner was designed against a fixed forest-green palette.
+   These overrides re-point every piece of scanner *chrome* — the header bar,
+   primary action buttons, toggle switches, and hover states — at the current
+   theme's primary color so the bottom sheets, coach card, and settings modal
+   feel continuous with the rest of the app.
+
+   Deliberately NOT overridden:
+     • .zg-row-pct.good / .zg-rev-score.good   (a good score is green)
+     • .zg-tag.good                            (a "correct" tag is green)
+     • .zg-ch.key                              (the correct-answer key is green)
+     • .zg-flash                               (the success flash is green)
+     • .zg-card.warn                           (warning amber is preserved)
+   These are semantic colors. They must stay stable across every theme so
+   "correct" always reads the same way to the learner and the teacher.
+   ============================================================================ */
+
+/* ---- Header bar ---- */
+.zg-header {
+  background: var(--gradient-primary) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+}
+
+/* Header buttons keep their translucent-white treatment — it reads
+   correctly on every theme's primary gradient. */
+.zg-header-btn:active {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ---- Primary action buttons (bottom sheets, coach, camera error) ---- */
+.zg-btn.primary {
+  background: var(--gradient-primary) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  transition: filter 0.15s ease, transform 0.12s ease;
+}
+.zg-btn.primary:hover  { filter: brightness(1.06); }
+.zg-btn.primary:active {
+  filter: brightness(0.94);
+  transform: scale(0.985);
+}
+.zg-btn.primary:disabled {
+  filter: grayscale(0.35) brightness(0.9);
+  cursor: not-allowed;
+}
+
+/* ---- Settings sheet — toggle switches ---- */
+.zg-switch.on {
+  background: var(--deped-blue) !important;
+}
+.zg-switch.on i {
+  /* Keep the thumb pure white on every theme — a colored thumb on a
+     colored track reads as a solid block at 26 px. */
+  background: #fff;
+}
+
+/* ---- Settings sheet — segmented control (sensitivity, frames) ---- */
+.zg-seg button.on {
+  /* The active segment already uses the card background. Just add a
+     subtle theme-colored accent so it doesn't read as "disabled". */
+  color: var(--deped-blue);
+  font-weight: 800;
+}
+
+/* ---- Coach overlay card — title accent ---- */
+.zg-coach-card h4 {
+  color: var(--deped-blue);
+}
+
+/* ---- Sheet header title — subtle theme tint ---- */
+.zg-sheet-head h3 {
+  color: var(--text);
+}
+.zg-sheet-x {
+  color: var(--text-muted);
+}
+.zg-sheet-x:active {
+  color: var(--deped-blue);
+}
+
+/* ---- Ghost button (used for "Rescan" in the review sheet) ----
+   Its danger variant is already styled; the plain ghost stays neutral
+   but gets a subtle theme-tinted hover for consistency. */
+.zg-btn.ghost:hover {
+  background: var(--light-blue);
+  color: var(--deped-blue);
+}
+.zg-btn.ghost.danger:hover {
+  background: rgba(220, 53, 69, 0.10);
+  color: var(--danger);
+}
+
+/* ---- Dark-theme adjustments ----
+   On dark themes the sheet background is white, so the theme-colored
+   accents stay legible. But the coach overlay and camera-error panel
+   sit on a dark surface and need brighter accents. */
+[data-theme="dark"]  .zg-coach-card h4,
+[data-theme="navy"]  .zg-coach-card h4,
+[data-theme="noir"]  .zg-coach-card h4 {
+  color: var(--deped-blue);
+}
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  .zg-btn.primary { transition: none; }
+  .zg-btn.primary:active { transform: none; }
 }
