@@ -50722,38 +50722,43 @@ const SHEET = {
   widthMM:  148.5,
   heightMM: 210,
 
-  /* ---- ArUco corner markers ---- */
-  markerSizeMM:  8,
-  markerInsetMM: 4,
+  /* ---- ArUco corner markers ----
+     10 mm (was 8 mm) for reliable camera decode at 30–50 cm.
+     Inset stays at 4 mm so the sheet still fits on A5 with margin. */
+  markerSizeMM:  10,
+  markerInsetMM: 3.5,
   markerGridSize: 4,
 
-  /* ---- Payload QR — top-right of header, 26 mm ---- */
+  /* ---- Payload QR — pushed 6 mm further left so it clears the
+     larger TR marker with room to spare ---- */
   payloadQrSizeMM:   26,
-  payloadQrTopMM:    14,
-  payloadQrRightGapMM: 14,      // gap from the QR's right edge to the sheet's right edge
+  payloadQrTopMM:    12,
+  payloadQrRightGapMM: 22,
 
-  /* ---- Header text block ---- */
-  headerLeftMM:   14,
+  /* ---- Header text block — narrowed to match the QR shift ---- */
+  headerLeftMM:   16,
   headerTopMM:    14,
-  headerWidthMM:  90,
+  headerWidthMM:  80,
   headerHeightMM: 26,
 
-  /* ---- Bubble grid ---- */
-  bubbleDiaMM:  4.2,
-  bubblePitchMM: 6.0,
+  /* ---- Bubble grid — bigger bubbles for easier pencil shading ---- */
+  bubbleDiaMM:  5.2,
+  bubblePitchMM: 7.0,
   choiceCount:  5,
 
-  rowHeightMM:       6.8,
+  /* ---- Row height ----
+     This is now a PREFERRED MAXIMUM. bubblePositions() will
+     automatically shrink it when the question count requires it. */
+  rowHeightMM:       11.0,
   maxRowsPerColumn:  20,
   maxColumns:        3,
   maxQuestions:      60,
 
-  gridTopMM:   52,   // first bubble row centre
-  lettersRowMM: 48,  // column-letter labels
-  numberWidthMM: 8,
-  columnGapMM:  6,
+  gridTopMM:    52,
+  lettersRowMM: 47,
+  numberWidthMM: 9,
+  columnGapMM:  8,
 
-  /* ---- Timing ticks ---- */
   tickCount:    20,
   tickLengthMM: 3.0,
   tickWidthMM:  1.0,
@@ -50777,11 +50782,32 @@ function bubblePositions(questionCount) {
              : SHEET.maxColumns;
   const perCol = Math.ceil(questionCount / cols);
 
-  // A single column:  [8 mm number][5 bubbles at 6 mm pitch][1.8 mm pad]
-  const colWidth   = SHEET.numberWidthMM
-                   + (SHEET.choiceCount - 1) * SHEET.bubblePitchMM
-                   + SHEET.bubbleDiaMM
-                   + 1.8;
+  /* ---- Adaptive row height ----
+     Fill the sheet for small exams, compress for large ones.
+     The grid must never collide with the bottom ArUco markers. */
+  const gridTop = SHEET.gridTopMM;
+  const gridBottomLimit = SHEET.heightMM
+                        - SHEET.markerInsetMM
+                        - SHEET.markerSizeMM
+                        - 8;   // 8 mm breathing room above the bottom markers
+  const availableH = gridBottomLimit - gridTop;
+  const maxRowH = perCol > 1
+    ? (availableH - SHEET.bubbleDiaMM) / (perCol - 1)
+    : availableH;
+  // 1.5 mm minimum gap is the true OMR lower bound. The previous 2.5 mm
+  // floor silently overflowed the sheet for per-column counts >= 18,
+  // pushing the bubble grid past the bottom ArUco markers.
+  const MIN_ROW_H = SHEET.bubbleDiaMM + 1.5;
+  const rowH = Math.max(
+    MIN_ROW_H,
+    Math.min(SHEET.rowHeightMM, maxRowH)
+  );
+
+  /* ---- Column geometry (unchanged formula, new constants) ---- */
+  const colWidth = SHEET.numberWidthMM
+                 + (SHEET.choiceCount - 1) * SHEET.bubblePitchMM
+                 + SHEET.bubbleDiaMM
+                 + 1.8;
   const totalWidth = cols * colWidth + (cols - 1) * SHEET.columnGapMM;
   const contentLeft = (SHEET.widthMM - totalWidth) / 2;
 
@@ -50790,9 +50816,8 @@ function bubblePositions(questionCount) {
     const col = Math.floor(q / perCol);
     const row = q % perCol;
     const colLeft = contentLeft + col * (colWidth + SHEET.columnGapMM);
-    const bubbleStartX = colLeft + SHEET.numberWidthMM
-                       + SHEET.bubblePitchMM / 2;   // first bubble centre
-    const y = SHEET.gridTopMM + row * SHEET.rowHeightMM;
+    const bubbleStartX = colLeft + SHEET.numberWidthMM + SHEET.bubblePitchMM / 2;
+    const y = gridTop + row * rowH;
 
     const choices = [];
     for (let ch = 0; ch < SHEET.choiceCount; ch++) {
@@ -50807,11 +50832,17 @@ function bubblePositions(questionCount) {
       numberY: y
     });
   }
+  // Cache the computed row height so AnswerSheetOMR.diagnose() can read
+  // back the real value rather than the nominal SHEET.rowHeightMM.
+  // For dense layouts these two numbers differ, and the diagnostic needs
+  // the adaptive value to correctly detect overflow.
+  bubblePositions.lastRowH = rowH;
+
   return positions;
 }
 
 /* ========================================================================
-   CALIBRATION
+   CALIBRATION  
    ======================================================================== */
 const DEFAULT_CALIBRATION = {
   // Bubble detection
@@ -51035,10 +51066,29 @@ function frameQuality(imageData) {
       sum += g;
     }
   }
+
+  // ---- Mean brightness check --------------------------------------------
   const mean = sum / (sw * sh);
   if (mean < CAL.minBrightness) return { ok: false, reason: 'Too dark — move to brighter light' };
   if (mean > CAL.maxBrightness) return { ok: false, reason: 'Overexposed — reduce glare on the sheet' };
 
+  // ---- Dark-fraction check ----------------------------------------------
+  // A frame that is more than 40% dark cannot contain four small black ring
+  // markers floating in a sea of white paper. This catches the "camera
+  // pointed at a shadow / wall / dark table" failure mode before it reaches
+  // the (expensive) connected-components stage.
+  let darkSamples = 0;
+  for (let i = 0; i < gray.length; i++) if (gray[i] < 110) darkSamples++;
+  const darkRatio = darkSamples / gray.length;
+  if (darkRatio > 0.40) {
+    return {
+      ok: false,
+      reason: 'Too much shadow — point at the sheet, fill the frame',
+      darkRatio
+    };
+  }
+
+  // ---- Sharpness check (Laplacian variance) -----------------------------
   const border = 6;
   let lapSum = 0, lapSumSq = 0, count = 0;
   for (let y = border; y < sh - border; y++) {
@@ -51057,7 +51107,8 @@ function frameQuality(imageData) {
   if (variance < CAL.minSharpness) {
     return { ok: false, reason: 'Image is blurry — hold steady' };
   }
-  return { ok: true, variance, mean };
+
+  return { ok: true, variance, mean, darkRatio };
 }
 
 /* ========================================================================
@@ -51084,11 +51135,22 @@ function frameQuality(imageData) {
 function detectArucoMarkers(imageData) {
   const w = imageData.width, h = imageData.height, d = imageData.data;
 
-  // ---- 1. Binarise ----
+  // ---- 1. Binarise — adaptive (Otsu) with a hard floor/ceiling ----
+  // A fixed threshold of 110 assumes a specific exposure. Otsu computes
+  // the split point from the frame's own histogram, which survives the
+  // lighting differences between a sunny classroom and a dim faculty room.
+  let globalThreshold = otsuThreshold(imageData);
+  // Clamp so we don't get pathological thresholds on near-uniform frames
+  // (e.g. an all-black cap or an all-white sheet with no marker in view).
+  globalThreshold = Utils.clamp(globalThreshold, 60, 200);
+  if (window.__OMR_DEBUG && typeof State !== 'undefined' && State._omrSessionRef) {
+    State._omrSessionRef._dbgOtsu = globalThreshold;
+  }
+
   const binary = new Uint8Array(w * h);
   for (let i = 0, j = 0; i < d.length; i += 4, j++) {
     const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-    binary[j] = lum < 110 ? 1 : 0;
+    binary[j] = lum < globalThreshold ? 1 : 0;
   }
 
   // ---- 2. Connected components on black pixels ----
@@ -51772,8 +51834,9 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
     const leftSheet = renderSheetHTML(assessment, left, qCount);
     const rightSheet = right
       ? renderSheetHTML(assessment, right, qCount)
-      : '<div class="omr-sheet omr-sheet-blank" style="width:148.5mm;height:210mm;background:#fff;"></div>';
-    pagesHTML.push(`<div class="omr-page">${leftSheet}${rightSheet}</div>`);
+      : '';
+    const pageClass = right ? 'omr-page' : 'omr-page omr-page-half';
+    pagesHTML.push(`<div class="${pageClass}">${leftSheet}${rightSheet}</div>`);
   }
 
   const styleId = 'omr-print-css';
@@ -51787,6 +51850,7 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
     #print-area { padding: 0 !important; margin: 0 !important; }
     .omr-page { width: 297mm; height: 210mm; display: flex; flex-direction: row;
                 overflow: hidden; page-break-after: always; break-after: page; }
+    .omr-page.omr-page-half { width: 148.5mm; }
     .omr-page:last-child { page-break-after: auto; break-after: auto; }
     .omr-sheet { flex: 0 0 148.5mm; width: 148.5mm; height: 210mm;
                  box-shadow: none !important; background: #fff; overflow: hidden; }
@@ -51816,15 +51880,18 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
 }
 
 function _seededShuffle(n, seed) {
+  if (n <= 1) return Array.from({ length: n }, (_, i) => i);
   let h = 2166136261 >>> 0;
   for (let i = 0; i < seed.length; i++) {
     h ^= seed.charCodeAt(i);
     h = Math.imul(h, 16777619) >>> 0;
   }
+  if (h === 0) h = 0x9E3779B9;               // never let the state collapse
   const rng = () => {
     h ^= h << 13; h >>>= 0;
     h ^= h >> 17;
     h ^= h << 5;  h >>>= 0;
+    if (h === 0) h = 0x9E3779B9;
     return h / 4294967296;
   };
   const arr = Array.from({ length: n }, (_, i) => i);
@@ -51944,7 +52011,8 @@ function openScanner(assessmentId) {
         'candidates  ' + (session._dbgCandidates || 0) + '\n' +
         'decoded     ' + (session._dbgDecoded    || 0) + '\n' +
         'found       ' + (session.found ? 'yes' : 'no') + '\n' +
-        'quality     ' + (session._dbgQuality    || '—');
+        'quality     ' + (session._dbgQuality    || '—') + '\n' +
+        'otsu        ' + (session._dbgOtsu       || '—');
     }
 
     const WORK_LONG = 1280;
@@ -52349,10 +52417,17 @@ function openScanner(assessmentId) {
 
     function startDecodeLoop() {
       if (session.timer) clearTimeout(session.timer);
+      session.frameCount = 0;                       // reset on every (re)start
       const tick = () => {
         session.timer = null;
         if (session.closed || !session.stream) return;
         if (session.paused || session.suspended) { session.timer = setTimeout(tick, 250); return; }
+
+        // Discard the first three frames — some Android Chrome builds return a
+        // blank canvas on the first few drawImage calls after play().
+        session.frameCount++;
+        if (session.frameCount <= 3) { session.timer = setTimeout(tick, 90); return; }
+
         const t0 = performance.now();
         try { processFrame(); } catch (e) { console.warn('[OMR] frame error:', e); }
         const spent = performance.now() - t0;
@@ -52460,6 +52535,12 @@ function openScanner(assessmentId) {
       session.geom = { W, H: Hh, vw, vh };
 
       const quality = frameQuality(img);
+      session._dbgQuality = quality.ok
+        ? 'ok'
+        : (quality.darkRatio !== undefined
+            ? 'dark ' + Math.round(quality.darkRatio * 100) + '%'
+            : 'reject');
+      updateDebugHUD();
       if (!quality.ok) {
         session.found = false;
         session.lastCenters = null;
@@ -52551,18 +52632,28 @@ function openScanner(assessmentId) {
         return;
       }
       const sheetVersion = (payload.v || 'A').toUpperCase();
-      const sheetKey = session.resolveAnswerKey(sheetVersion);
-      if (sheetKey.length !== baseAnswerKey.length) {
+      const sheetKey     = session.resolveAnswerKey(sheetVersion);
+      const sheetN       = Number(payload.n) || 0;
+      const liveN        = baseAnswerKey.length;
+
+      // Reject BEFORE sampling — the printed bubble grid is physically locked
+      // to whatever item count the sheet was generated with. Reading it as if
+      // it had the current item count silently produces wrong scores.
+      if (sheetN && sheetN !== liveN) {
+        drawOverlay(quad, THEME.danger);
+        setStatus(
+          `Sheet printed for ${sheetN} items, exam now has ${liveN}. Reprint.`,
+          'err'
+        );
+        return;
+      }
+
+      if (sheetKey.length !== liveN) {
         drawOverlay(quad, THEME.danger);
         setStatus(`Form ${sheetVersion} key mismatch — reprint sheets`, 'err');
         return;
       }
       session.answerKey = sheetKey;
-      if (payload.n && payload.n !== baseAnswerKey.length) {
-        drawOverlay(quad, THEME.danger);
-        setStatus(`Exam now has ${baseAnswerKey.length} items — reprint sheets`, 'err');
-        return;
-      }
 
       // ---- High-res bubble sampling ----
       let sample = img, f = 1;
@@ -53601,7 +53692,15 @@ function openScanner(assessmentId) {
   })();
 }
 
-return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
+return {
+  printSheets,
+  openScanner,
+  SHEET,
+  anchorCenters,
+  bubblePositions,
+  renderSheetHTML,
+  loadCalibration
+};
 })();
 
 window.AnswerSheetOMR = AnswerSheetOMR;
@@ -53614,7 +53713,25 @@ window.AnswerSheetOMR = AnswerSheetOMR;
    Open the DevTools console and run:
        AnswerSheetOMR.diagnose()
    ============================================================================ */
-AnswerSheetOMR.diagnose = function () {
+/* ============================================================================
+   AnswerSheetOMR.diagnose()
+   ----------------------------------------------------------------------------
+   Runs a battery of layout checks against the current SHEET geometry and
+   opens a printable debug sheet with every element outlined and labelled.
+   Open the DevTools console and run:
+       AnswerSheetOMR.diagnose()
+   ============================================================================ */
+AnswerSheetOMR.diagnose = async function () {
+  // Pull the private helpers out of the namespace once. `bubblePositions`
+  // and `renderSheetHTML` live inside the AnswerSheetOMR IIFE closure and
+  // are not in scope here — they must be reached via the public object.
+  const {
+    SHEET,
+    anchorCenters,
+    bubblePositions,
+    renderSheetHTML
+  } = AnswerSheetOMR;
+
   const failures = [];
   const warnings = [];
   const passes   = [];
@@ -53622,15 +53739,18 @@ AnswerSheetOMR.diagnose = function () {
   const warn = (m) => warnings.push(m);
   const fail = (m) => failures.push(m);
 
+  // Local alias so the rest of the body reads like the original code.
+  const S = SHEET;
+
   /* ----------------------------------------------------------------
-     1. Every rendered element must sit inside the sheet.
+     1. Every ArUco marker must sit fully inside the sheet.
      ---------------------------------------------------------------- */
-  const anchors = AnswerSheetOMR.anchorCenters();
-  const markerSize = AnswerSheetOMR.SHEET.markerSizeMM;
+  const anchors = anchorCenters();
+  const markerSize = S.markerSizeMM;
   for (const [name, [cx, cy]] of Object.entries(anchors)) {
     const x0 = cx - markerSize / 2, y0 = cy - markerSize / 2;
     const x1 = cx + markerSize / 2, y1 = cy + markerSize / 2;
-    if (x0 < 0 || y0 < 0 || x1 > AnswerSheetOMR.SHEET.widthMM || y1 > AnswerSheetOMR.SHEET.heightMM) {
+    if (x0 < 0 || y0 < 0 || x1 > S.widthMM || y1 > S.heightMM) {
       fail(`ArUco ${name} marker escapes the sheet: (${x0},${y0})–(${x1},${y1})`);
     }
   }
@@ -53639,7 +53759,6 @@ AnswerSheetOMR.diagnose = function () {
   /* ----------------------------------------------------------------
      2. Payload QR must clear both the header and the TR marker.
      ---------------------------------------------------------------- */
-  const S = AnswerSheetOMR.SHEET;
   const qrLeft  = S.widthMM - S.payloadQrRightGapMM - S.payloadQrSizeMM;
   const qrRight = qrLeft + S.payloadQrSizeMM;
   const qrTop   = S.payloadQrTopMM;
@@ -53649,70 +53768,121 @@ AnswerSheetOMR.diagnose = function () {
   const trTop  = S.markerInsetMM;
   const trBot  = S.markerInsetMM + S.markerSizeMM;
 
-  if (qrRight > trLeft)          fail(`QR right edge (${qrRight}) overlaps TR marker left edge (${trLeft})`);
-  else if (trLeft - qrRight < 1) warn(`QR is only ${(trLeft - qrRight).toFixed(2)} mm from TR marker (want ≥ 1 mm)`);
-  else                           pass(`QR clears TR marker by ${(trLeft - qrRight).toFixed(2)} mm.`);
+  if (qrRight > trLeft) {
+    fail(`QR right edge (${qrRight}) overlaps TR marker left edge (${trLeft})`);
+  } else if (trLeft - qrRight < 1) {
+    warn(`QR is only ${(trLeft - qrRight).toFixed(2)} mm from TR marker (want ≥ 1 mm)`);
+  } else {
+    pass(`QR clears TR marker by ${(trLeft - qrRight).toFixed(2)} mm.`);
+  }
 
-  if (qrBot > trBot + 2)         warn(`QR bottom (${qrBot}) extends well below TR marker bottom (${trBot})`);
-  else                           pass(`QR vertical extent overlaps header rows as intended.`);
+  // Proper 2D bounding-box overlap test. The old check compared only
+  // vertical extents, which fired a false positive whenever the QR was
+  // taller than the TR marker — which is always true by design.
+  const qrBox = { x0: qrLeft, y0: qrTop, x1: qrRight, y1: qrBot };
+  const trBox = { x0: trLeft, y0: trTop, x1: S.widthMM - S.markerInsetMM, y1: trBot };
+  const qrOverlapsTR =
+    qrBox.x1 > trBox.x0 && qrBox.x0 < trBox.x1 &&
+    qrBox.y1 > trBox.y0 && qrBox.y0 < trBox.y1;
+
+  if (qrOverlapsTR) {
+    fail('Payload QR and TR marker bounding boxes intersect.');
+  } else {
+    pass('Payload QR and TR marker do not intersect in 2D.');
+  }
 
   const headerRight = S.headerLeftMM + S.headerWidthMM;
-  if (headerRight > qrLeft)      fail(`Header right edge (${headerRight}) overlaps QR left edge (${qrLeft})`);
-  else if (qrLeft - headerRight < 3) warn(`Header-QR gap only ${(qrLeft - headerRight).toFixed(2)} mm (want ≥ 3 mm)`);
-  else                           pass(`Header–QR gap is ${(qrLeft - headerRight).toFixed(2)} mm.`);
+  if (headerRight > qrLeft) {
+    fail(`Header right edge (${headerRight}) overlaps QR left edge (${qrLeft})`);
+  } else if (qrLeft - headerRight < 3) {
+    warn(`Header-QR gap only ${(qrLeft - headerRight).toFixed(2)} mm (want ≥ 3 mm)`);
+  } else {
+    pass(`Header–QR gap is ${(qrLeft - headerRight).toFixed(2)} mm.`);
+  }
 
   /* ----------------------------------------------------------------
      3. Question grid must fit between the header and the bottom markers.
-     ---------------------------------------------------------------- */
+     ----------------------------------------------------------------
+     Row height is computed adaptively by bubblePositions() for the
+     worst-case density (maxRowsPerColumn). Read it back from there
+     instead of the nominal S.rowHeightMM — the two differ for dense
+     layouts, and using the nominal value silently masks overflow. */
+  // Prime the memo by invoking bubblePositions() once at worst-case
+  // density, then read the property off the FUNCTION object. Reading
+  // `.lastRowH` from the call's return value always yields undefined —
+  // the memo lives on the function, not on the returned array.
+  bubblePositions(S.maxRowsPerColumn);
+  const rowH = bubblePositions.lastRowH;
   const gridTop = S.gridTopMM;
   const maxRow  = S.maxRowsPerColumn - 1;
-  const gridBot = gridTop + maxRow * S.rowHeightMM + S.bubbleDiaMM / 2;
+  const gridBot = gridTop + maxRow * rowH + S.bubbleDiaMM / 2;
   const blMarkerTop = S.heightMM - S.markerInsetMM - S.markerSizeMM;
 
-  if (gridBot > blMarkerTop) fail(`Grid bottom (${gridBot.toFixed(2)}) overlaps BL/BR markers (top ${blMarkerTop})`);
-  else                       pass(`Grid bottom is ${(blMarkerTop - gridBot).toFixed(2)} mm above the bottom markers.`);
+  if (gridBot > blMarkerTop) {
+    fail(`Grid bottom (${gridBot.toFixed(2)}) overlaps BL/BR markers (top ${blMarkerTop})`);
+  } else {
+    pass(`Grid bottom is ${(blMarkerTop - gridBot).toFixed(2)} mm above the bottom markers.`);
+  }
 
   /* ----------------------------------------------------------------
-     4. Column layout for 3 columns must fit within the sheet.
-     ---------------------------------------------------------------- */
+     4. Column layout must not collide with the marker columns.
+     ----------------------------------------------------------------
+     A pure horizontal-proximity test fires false positives because
+     the bubble grid sits vertically in the middle of the sheet while
+     markers only occupy the top and bottom bands. Only warn when the
+     layout's horizontal extent overlaps a marker column AND the grid's
+     vertical extent overlaps a marker band. */
   const colWidth = S.numberWidthMM
                  + (S.choiceCount - 1) * S.bubblePitchMM
                  + S.bubbleDiaMM + 1.8;
+
+  const markerXLeft  = S.markerInsetMM + S.markerSizeMM;
+  const markerXRight = S.widthMM - S.markerInsetMM - S.markerSizeMM;
+  const markerBands = [
+    { y0: S.markerInsetMM,                                 y1: S.markerInsetMM + S.markerSizeMM },
+    { y0: S.heightMM - S.markerInsetMM - S.markerSizeMM,   y1: S.heightMM - S.markerInsetMM }
+  ];
+  const gridVerticallyHitsAMarkerBand = markerBands.some(band =>
+    gridBot > band.y0 && gridTop < band.y1
+  );
+
   for (const cols of [1, 2, 3]) {
     const totalW = cols * colWidth + (cols - 1) * S.columnGapMM;
     const left   = (S.widthMM - totalW) / 2;
     const right  = left + totalW;
-    if (left < S.markerInsetMM + S.markerSizeMM) {
-      warn(`${cols}-col layout starts at x=${left.toFixed(2)} — near the left markers (${S.markerInsetMM + S.markerSizeMM})`);
-    } else if (right > S.widthMM - S.markerInsetMM - S.markerSizeMM) {
-      warn(`${cols}-col layout ends at x=${right.toFixed(2)} — near the right markers`);
+
+    const horizontallyOverlapsLeft  = left  < markerXLeft;
+    const horizontallyOverlapsRight = right > markerXRight;
+
+    if ((horizontallyOverlapsLeft || horizontallyOverlapsRight) && gridVerticallyHitsAMarkerBand) {
+      warn(`${cols}-col layout horizontally overlaps the marker column AND vertically overlaps a marker band.`);
     } else {
-      pass(`${cols}-column layout spans x=${left.toFixed(2)} to ${right.toFixed(2)} mm.`);
+      pass(`${cols}-column layout spans x=${left.toFixed(2)} to ${right.toFixed(2)} mm (no marker collision).`);
     }
   }
 
   /* ----------------------------------------------------------------
      5. QR module size at realistic camera resolutions.
      ---------------------------------------------------------------- */
-  const payloadSample = JSON.stringify({
-    e: 'a-0123456789', l: '136012345678', n: 40, c: 5, v: 'A'
-  });
-  // QR version 5 at ECC-M = 37 modules (this is what a ~60-char payload needs).
   const QR_MODULES = 37;
   const moduleMM   = S.payloadQrSizeMM / QR_MODULES;
 
   const resol = [
-    { label: 'SD phone (854 px)',       px: 854 },
-    { label: 'HD phone (1280 px)',      px: 1280 },
-    { label: 'FHD phone (1920 px)',     px: 1920 },
-    { label: '4K phone (3840 px)',      px: 3840 }
+    { label: 'SD phone (854 px)',   px: 854  },
+    { label: 'HD phone (1280 px)',  px: 1280 },
+    { label: 'FHD phone (1920 px)', px: 1920 },
+    { label: '4K phone (3840 px)',  px: 3840 }
   ];
   for (const r of resol) {
-    const pxPerMM = r.px / S.widthMM;
+    const pxPerMM     = r.px / S.widthMM;
     const pxPerModule = moduleMM * pxPerMM;
-    if (pxPerModule < 2.5) fail(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — too small for jsQR`);
-    else if (pxPerModule < 3.5) warn(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — marginal`);
-    else                        pass(`${r.label}: ${pxPerModule.toFixed(1)} px/module — reliable.`);
+    if (pxPerModule < 2.5) {
+      fail(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — too small for jsQR`);
+    } else if (pxPerModule < 3.5) {
+      warn(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — marginal`);
+    } else {
+      pass(`${r.label}: ${pxPerModule.toFixed(1)} px/module — reliable.`);
+    }
   }
 
   /* ----------------------------------------------------------------
@@ -53720,8 +53890,11 @@ AnswerSheetOMR.diagnose = function () {
      ---------------------------------------------------------------- */
   const pitch = S.bubblePitchMM, dia = S.bubbleDiaMM;
   const gap = pitch - dia;
-  if (gap < 1.0) fail(`Bubble gap only ${gap.toFixed(2)} mm — bubbles may touch`);
-  else           pass(`Bubble gap is ${gap.toFixed(2)} mm (pitch ${pitch} mm, Ø ${dia} mm).`);
+  if (gap < 1.0) {
+    fail(`Bubble gap only ${gap.toFixed(2)} mm — bubbles may touch`);
+  } else {
+    pass(`Bubble gap is ${gap.toFixed(2)} mm (pitch ${pitch} mm, Ø ${dia} mm).`);
+  }
 
   /* ----------------------------------------------------------------
      Report + open the debug sheet
@@ -53735,12 +53908,27 @@ AnswerSheetOMR.diagnose = function () {
   warnings.forEach(m => console.warn ('  ! ' + m));
   passes  .forEach(m => console.log  ('  ✓ ' + m));
 
+  // The debug sheet embeds a QR code, so the qrcode-generator library must
+  // be loaded before renderSheetHTML runs. It is otherwise loaded lazily by
+  // the attendance scanner and the printable-sheets flow.
+  const qrReady = await (typeof Pages._loadQRCodeLib === 'function'
+    ? Pages._loadQRCodeLib()
+    : Promise.resolve(!!window.qrcode));
+
+  if (!qrReady || typeof window.qrcode !== 'function') {
+    warnings.push('qrcode-generator library not loaded — debug sheet will render without the payload QR.');
+  }
   // Render the debug sheet into the print area so it can be visually verified.
   const a = { title: 'Layout Diagnostic', maxScore: 40, omrFormVersion: 'A', id: '__diag__' };
-  const dummyLearner = { lrn: '136012345678', firstName: 'Juan', middleName: 'R.', lastName: 'Dela Cruz', photo: '' };
+  const dummyLearner = {
+    lrn: '136012345678',
+    firstName: 'Juan',
+    middleName: 'R.',
+    lastName: 'Dela Cruz',
+    photo: ''
+  };
   const sheet = renderSheetHTML(a, dummyLearner, 40);
 
-  // Wrap in an outline-only overlay that draws every declared element boundary.
   const dbg = document.getElementById('print-area') || document.body;
   dbg.innerHTML = `
     <div style="padding:20px;background:#e5e7eb;">
@@ -53751,32 +53939,29 @@ AnswerSheetOMR.diagnose = function () {
         <div style="position:relative;width:148.5mm;height:210mm;background:#fff;
                     box-shadow:0 4px 24px rgba(0,0,0,.15);">
           ${sheet}
-          <!-- marker outlines -->
           ${Object.entries(anchorCenters()).map(([n,[x,y]]) => {
-            const s = SHEET.markerSizeMM;
-            const px = ((x - s/2) / SHEET.widthMM)  * 100;
-            const py = ((y - s/2) / SHEET.heightMM) * 100;
-            const pw = (s / SHEET.widthMM)  * 100;
-            const ph = (s / SHEET.heightMM) * 100;
+            const s = S.markerSizeMM;
+            const px = ((x - s/2) / S.widthMM)  * 100;
+            const py = ((y - s/2) / S.heightMM) * 100;
+            const pw = (s / S.widthMM)  * 100;
+            const ph = (s / S.heightMM) * 100;
             return `<div style="position:absolute;left:${px}%;top:${py}%;
                                 width:${pw}%;height:${ph}%;
                                 border:0.5mm solid red;box-sizing:border-box;
                                 pointer-events:none;"></div>`;
           }).join('')}
-          <!-- QR outline -->
           <div style="position:absolute;
-                      left:${(qrLeft / SHEET.widthMM) * 100}%;
-                      top:${(qrTop / SHEET.heightMM) * 100}%;
-                      width:${(S.payloadQrSizeMM / SHEET.widthMM) * 100}%;
-                      height:${(S.payloadQrSizeMM / SHEET.heightMM) * 100}%;
+                      left:${(qrLeft / S.widthMM) * 100}%;
+                      top:${(qrTop / S.heightMM) * 100}%;
+                      width:${(S.payloadQrSizeMM / S.widthMM) * 100}%;
+                      height:${(S.payloadQrSizeMM / S.heightMM) * 100}%;
                       border:0.5mm solid blue;box-sizing:border-box;
                       pointer-events:none;"></div>
-          <!-- header outline -->
           <div style="position:absolute;
-                      left:${(S.headerLeftMM / SHEET.widthMM) * 100}%;
-                      top:${(S.headerTopMM / SHEET.heightMM) * 100}%;
-                      width:${(S.headerWidthMM / SHEET.widthMM) * 100}%;
-                      height:${(S.headerHeightMM / SHEET.heightMM) * 100}%;
+                      left:${(S.headerLeftMM / S.widthMM) * 100}%;
+                      top:${(S.headerTopMM / S.heightMM) * 100}%;
+                      width:${(S.headerWidthMM / S.widthMM) * 100}%;
+                      height:${(S.headerHeightMM / S.heightMM) * 100}%;
                       border:0.5mm dashed green;box-sizing:border-box;
                       pointer-events:none;"></div>
         </div>
@@ -53798,7 +53983,6 @@ AnswerSheetOMR.diagnose = function () {
       </div>
     </div>`;
 
-  // Return a machine-readable summary so the caller can branch on it.
   return {
     passed:  passes.length,
     warned:  warnings.length,
