@@ -14241,3 +14241,35 @@ body.zg-scanner-open #toast-container {
   .zg-btn.primary { transition: none; }
   .zg-btn.primary:active { transform: none; }
 }
+/* ============================================================================
+   OMR — reassign learner picker
+   ============================================================================ */
+.omr-reassign-row:hover:not(:disabled) {
+  background: var(--light-blue) !important;
+}
+.omr-reassign-row:last-child {
+  border-bottom: none !important;
+}
+.omr-reassign-row svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+  flex-shrink: 0;
+  display: block;
+}
+
+/* Ensure the footer of the mobile review sheet keeps three buttons
+   on one line at narrow widths. */
+.zg-sheet-foot .zg-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 13px;
+  padding: 0 12px;
+}
+.zg-sheet-foot .zg-btn.ghost.danger {
+  flex: 0 0 auto;
+  padding: 0 14px;
+}

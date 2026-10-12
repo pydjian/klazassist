@@ -52963,6 +52963,207 @@ function openScanner(assessmentId) {
       }
     }
 
+        /**
+     * Delete a scanned result entirely — no rescan expected.
+     * Distinct from Rescan (which removes and then waits for a fresh scan):
+     * this just drops the result so the row disappears and the learner is
+     * free to be scanned again at any time.
+     */
+    async function deleteResult(result) {
+      if (!result) return;
+      const who = result.learner.firstName || Utils.fullName(result.learner);
+      UI.confirm({
+        title: 'Delete this scan?',
+        message: `Remove the graded result for <strong>${Utils.esc(Utils.fullName(result.learner))}</strong>? ` +
+                 `You can re-scan the same sheet later.`,
+        confirmText: 'Delete',
+        confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          await removeResult(result);
+          session.dupshownAt && session.dupShownAt.delete(result.learner.id);
+          setStatus(`Deleted scan for ${who}`, 'warn');
+          hideCard();
+          UI.toast('Scan removed', 'info', 2200);
+          App.logActivity(`OMR scan deleted: ${Utils.fullName(result.learner)}`, 'Assessments');
+        }
+      });
+    }
+
+    /**
+     * Reassign a scanned result to a different learner in the same class.
+     * Keeps the detected bubble answers and the reviewed score; only the
+     * owning learner changes. If the target learner already has a scan of
+     * this assessment, the user is asked to confirm before overwriting.
+     */
+    function reassignResult(result) {
+      if (!result) return;
+
+      const candidates = State.learners.filter(Utils.isActiveLearner);
+      if (!candidates.length) {
+        UI.toast('No active learners in this class.', 'warning');
+        return;
+      }
+
+      // Mark the currently-attached learner so the list can exclude them.
+      const currentId = result.learner.id;
+
+      const m = UI.modal({
+        title: 'Change learner',
+        size: 'modal-lg',
+        body: `
+          <p class="text-sm text-muted mb-12">
+            Reassign the scanned answers for
+            <strong>${Utils.esc(Utils.fullName(result.learner))}</strong>
+            to another learner. The detected bubbles and score are kept — only
+            the owner changes.
+          </p>
+
+          <div class="bh-search" style="margin-bottom:10px;">
+            ${icon('search')}
+            <input type="text" id="omr-reassign-search"
+                   placeholder="Search learners…" autocomplete="off">
+          </div>
+
+          <div id="omr-reassign-list"
+               style="max-height:46vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+            ${candidates.map(l => `
+              <button type="button" class="omr-reassign-row"
+                      data-omr-reassign="${Utils.attr(l.id)}"
+                      ${l.id === currentId ? 'disabled' : ''}
+                      style="display:flex;align-items:center;gap:10px;width:100%;
+                             padding:10px 14px;border:0;border-bottom:1px solid var(--border);
+                             background:${l.id === currentId ? 'var(--bg)' : 'var(--card)'};
+                             text-align:left;cursor:${l.id === currentId ? 'not-allowed' : 'pointer'};
+                             opacity:${l.id === currentId ? 0.55 : 1};
+                             font:inherit;color:inherit;">
+                  ${Utils.avatarHTML(l, 32, 12)}
+                  <span style="flex:1;min-width:0;">
+                    <span style="display:block;font-weight:700;font-size:13px;
+                                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                      ${Utils.esc(Utils.fullName(l))}
+                    </span>
+                    <span class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</span>
+                  </span>
+                  ${l.id === currentId ? '<span class="badge badge-neutral" style="font-size:10px;">current</span>' : ''}
+                </button>`).join('')}
+          </div>
+        `,
+        footer: `<button class="btn btn-outline" data-close>Cancel</button>`
+      });
+
+      const listEl = m.overlay.querySelector('#omr-reassign-list');
+      const searchEl = m.overlay.querySelector('#omr-reassign-search');
+
+      searchEl.addEventListener('input', () => {
+        const q = searchEl.value.trim().toLowerCase();
+        listEl.querySelectorAll('[data-omr-reassign]').forEach(btn => {
+          const id = btn.dataset.omrReassign;
+          const learner = candidates.find(l => l.id === id);
+          const hay = learner
+            ? (Utils.fullName(learner) + ' ' + (learner.lrn || '')).toLowerCase()
+            : '';
+          btn.style.display = (!q || hay.includes(q)) ? '' : 'none';
+        });
+      });
+
+      listEl.querySelectorAll('[data-omr-reassign]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const newId = btn.dataset.omrReassign;
+          if (newId === currentId) return;
+          const newLearner = candidates.find(l => l.id === newId);
+          if (!newLearner) return;
+
+          // If the target already has a scan of this same assessment in
+          // this session, ask before overwriting.
+          const existing = session.scanned.find(s =>
+            s.learner.id === newId && s !== result
+          );
+          if (existing) {
+            const ok = await new Promise(resolve => {
+              UI.confirm({
+                title: 'Replace existing scan?',
+                message:
+                  `<strong>${Utils.esc(Utils.fullName(newLearner))}</strong> ` +
+                  `already has a scanned result for this assessment ` +
+                  `(${existing.percentage}%). Reassigning will replace it.`,
+                confirmText: 'Replace',
+                confirmClass: 'btn-warning',
+                onConfirm: () => resolve(true),
+                onClose:    () => resolve(false)
+              });
+            });
+            if (!ok) return;
+            await removeResult(existing);
+          }
+
+          m.close();
+          await commitReassignment(result, newLearner);
+        });
+      });
+    }
+
+    /**
+     * Perform the reassignment. Persists to IndexedDB, swaps the learner on
+     * the in-memory result, and refreshes the scanner UI.
+     */
+    async function commitReassignment(result, newLearner) {
+      const oldLearner = result.learner;
+      const assessment = session.assessment;
+      const answers = result.answers;
+      const score = result.score;
+      const percentage = result.percentage;
+
+      try {
+        // 1 · Remove the persisted result under the old learner.
+        const existingOld = (await DB.getAllByIndex('assessmentResults', 'learnerId', oldLearner.id))
+          .find(r => r.assessmentId === assessment.id);
+        if (existingOld) await DB.delete('assessmentResults', existingOld.id);
+
+        // 2 · Write the result under the new learner.
+        const rec = {
+          id: Utils.uid('r-'),
+          learnerId: newLearner.id,
+          assessmentId: assessment.id,
+          classId: State.activeClass ? State.activeClass.id : assessment.classId,
+          score,
+          maxScore: assessment.maxScore || answers.filter(a => a.correct !== null).length,
+          percentage,
+          omrDetails: answers,
+          omrScanned: true,
+          omrReassignedFrom: oldLearner.id,
+          omrReassignedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await DB.put('assessmentResults', rec);
+
+        // 3 · Update the in-memory result.
+        result.learner = newLearner;
+        result.saving = Promise.resolve();
+
+        // 4 · Drop the 4-second debounce for the old learner so their
+        //     sheet can be scanned again immediately.
+        session.recentScans.delete(oldLearner.id);
+
+        // 5 · Refresh UI.
+        renderList();
+        setStatus(
+          `✓ Reassigned to ${newLearner.firstName || Utils.fullName(newLearner)} — ${percentage}%`,
+          'ok'
+        );
+        hideCard();
+
+        App.logActivity(
+          `OMR scan reassigned: ${Utils.fullName(oldLearner)} → ${Utils.fullName(newLearner)}`,
+          'Assessments'
+        );
+        UI.toast(`Reassigned to ${Utils.fullName(newLearner)}`, 'success', 2600);
+      } catch (e) {
+        console.error('[OMR] Reassign failed:', e);
+        UI.toast('Could not reassign scan: ' + (e.message || 'unknown error'), 'error', 5000);
+      }
+    }
+
     /* ----------------------------------------------------------------
        Undo / review
        ---------------------------------------------------------------- */
@@ -53297,12 +53498,23 @@ function openScanner(assessmentId) {
         title: Utils.fullName(result.learner),
         body: '',
         footer: `
-          <button type="button" class="zg-btn ghost danger" id="zg-rescan">Rescan</button>
+          <button type="button" class="zg-btn ghost" id="zg-reassign">Change learner</button>
+          <button type="button" class="zg-btn ghost danger" id="zg-delete">Delete</button>
           <button type="button" class="zg-btn primary" id="zg-save">Save</button>`,
         tall: true
       });
-      const rescanBtn = foot.querySelector('#zg-rescan');
-      const saveBtn = foot.querySelector('#zg-save');
+      const reassignBtn = foot.querySelector('#zg-reassign');
+      const deleteBtn   = foot.querySelector('#zg-delete');
+      const saveBtn     = foot.querySelector('#zg-save');
+
+      reassignBtn.onclick = () => reassignResult(result);
+
+      deleteBtn.onclick = () => {
+        // Mirror deleteResult() but close the sheet first so the modal
+        // it opens is not stacked behind an open bottom sheet.
+        closeSheet();
+        deleteResult(result);
+      };
 
       const render = () => {
         const graded = result.answers.filter(p => p.correct !== null);
@@ -53502,6 +53714,8 @@ function openScanner(assessmentId) {
           <div id="omr-review-detail"></div>
         `,
         footer: `
+          <button class="btn btn-danger-outline" id="omr-review-delete">${icon('trash')} Delete</button>
+          <button class="btn btn-outline" id="omr-review-reassign">${icon('users')} Change learner</button>
           <button class="btn btn-outline" data-close>Close</button>
           <button class="btn btn-primary" id="omr-review-save">Save Changes</button>
         `
@@ -53597,6 +53811,14 @@ function openScanner(assessmentId) {
       });
 
       m.overlay.querySelector('[data-close]').onclick = m.close;
+            m.overlay.querySelector('#omr-review-delete').onclick = () => {
+        m.close();
+        deleteResult(result);
+      };
+      m.overlay.querySelector('#omr-review-reassign').onclick = () => {
+        m.close();
+        reassignResult(result);
+      };
 
       m.overlay.querySelector('#omr-review-save').onclick = async () => {
         await commitReview(result);
