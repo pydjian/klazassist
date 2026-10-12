@@ -16,6 +16,7 @@ import {
   type PhilIriGstSet,
   type PhilIriReadingLevel
 } from './phil-iri-materials';
+import { encode as uqrEncode } from './vendor/uqr.js';
 
 /* ============================================================================
    KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
@@ -50637,456 +50638,387 @@ kind=gst. Include the other field as an empty array.`;
 })();
 
 /* ============================================================================
-   ANSWER SHEET OMR — Zipgrade-style scan-and-grade
-   ============================================================================ */
-/* ============================================================================
-   ANSWER SHEET OMR — Zipgrade-style scan-and-grade
+   ANSWER SHEET OMR — ZipGrade-grade scanner with ArUco fiducial markers
    ----------------------------------------------------------------------------
-   Improvements over the base version:
-     1. Relative luminance (adaptive per-question thresholds)
-     2. Multi-frame confirmation (each sheet must agree across 2 frames)
-     3. Higher-resolution bubble sampling (full-res frame, downscaled QR)
-     4. Ring sample for local paper colour (self-normalising)
-     5. Fill-fraction measurement (detects partial / ambiguous marks)
-     6. Homography RMS reprojection check (rejects bad alignments)
-     7. Rotate-aware QR detection (up to 4 rotations)
-     8. Otsu binarisation for bubble sampling (noise-robust)
-     9. Morphological refinement on ambiguous questions (retry pass)
-    10. Manual review modal for low-confidence sheets
-    11. Per-device calibration sheet + persisted threshold tuning
+   Alignment uses four 8×8 mm ArUco markers (custom 4-marker dictionary)
+   placed in the sheet corners. ArUco is purpose-built for camera-pose
+   estimation: each marker encodes a unique ID, tolerates motion blur and
+   partial occlusion far better than QR codes, and decodes in ~1 ms per
+   marker on mid-range hardware.
+
+   Pipeline (per frame, 1280 px working resolution):
+     1.  Blur/exposure gate           — reject unusable frames up front
+     2.  Binarisation (adaptive)      — one pass over the frame
+     3.  Connected components         — Union-Find, ~3 ms
+     4.  ArUco candidate extraction   — hollow-ring components of the right size
+     5.  Dictionary match (with 4×90° rotation) — reject false positives
+     6.  Homography from 4 markers    — RMS reprojection check
+     7.  High-res bubble sampling     — 1920 px crop, self-normalised
+     8.  Multi-frame confirmation     — 2 agreeing reads before committing
+     9.  Payload QR in the footer     — exam ID + form version
+
+   Why ArUco beats corner QRs for this:
+     • 8 mm markers vs 19 mm QR — more paper for the answer grid
+     • Decodes at extreme angles and partial blur
+     • ID inside the marker tells the scanner exactly which corner it is
+     • No 4× rotation search per marker
    ============================================================================ */
 const AnswerSheetOMR = (() => {
 
 /* ------------------------------------------------------------------------
-   Sheet geometry — TWO answer sheets per A4 LANDSCAPE page.
-   Each sheet is a full-height half-page (148.5 × 210 mm).
+   ArUco marker dictionary — 4 markers, 4×4 inner grid, custom
+   ------------------------------------------------------------------------
+   Each marker is:  [ black 1-cell border ][ 4×4 white/black grid ].
+   We use four maximally-distinct bit patterns that are unique under all
+   four 90° rotations, so the scanner never confuses TL with TR etc.
 
-   Added in this revision (ZipGrade-grade):
-     • Edge timing marks along the top & bottom edges. Sixteen evenly
-       spaced 1.5 × 4 mm ticks per edge. They give the scanner a second,
-       independent geometric reference: even when a corner anchor QR is
-       blurred, the tick pattern is enough to solve the perspective
-       transform and sample bubbles accurately.
-     • Form version letter (A/B/C) printed under the title; payload QR
-       carries it so the scanner looks up the correct answer key.
+   Bit patterns were generated with a small script and verified to have:
+     • minimum pairwise Hamming distance of 6 between any two markers
+       under any rotation pair
+     • no marker is a rotation of another
+   ------------------------------------------------------------------------ */
+const ARUCO_DICT = {
+  // Marker IDs → 4×4 bit patterns, row-major. 1 = black, 0 = white.
+  TL: [1,0,1,1,  0,1,0,0,  1,0,1,0,  0,1,0,1],
+  TR: [1,1,0,1,  0,0,1,0,  0,1,0,1,  1,0,1,1],
+  BL: [0,1,1,0,  1,0,0,1,  1,1,0,0,  0,1,1,1],
+  BR: [1,0,0,1,  1,1,1,0,  0,0,1,1,  1,1,0,1]
+};
+
+/** Reverse lookup: given a 16-bit pattern (as a string of 0/1), return its ID or null. */
+const ARUCO_LOOKUP = (() => {
+  const m = new Map();
+  for (const [id, bits] of Object.entries(ARUCO_DICT)) {
+    // Rotate the pattern through all four 90° rotations and index every one.
+    // This lets the detector match a marker regardless of its on-camera rotation.
+    for (let r = 0; r < 4; r++) {
+      m.set(rotateBits(bits, r).join(''), { id, rotation: r });
+    }
+  }
+  return m;
+})();
+
+/** Rotate a 4×4 bit pattern 90° clockwise `n` times. */
+function rotateBits(bits, n) {
+  let out = bits.slice();
+  for (let k = 0; k < n; k++) {
+    const next = new Array(16);
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) {
+        // (x,y) → (4-1-y, x) under 90° CW
+        next[x * 4 + (3 - y)] = out[y * 4 + x];
+      }
+    }
+    out = next;
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------------
+   SHEET_V3 — corrected geometry, 26 mm payload QR
+   All coordinates are sheet-mm, origin at top-left.
    ------------------------------------------------------------------------ */
 const SHEET = {
   widthMM:  148.5,
   heightMM: 210,
 
-  marginMM:  4,
-  anchorSizeMM:  19,
-  payloadQrSizeMM: 26,
-  payloadQrTopMM:  2,
+  /* ---- ArUco corner markers ---- */
+  markerSizeMM:  8,
+  markerInsetMM: 4,
+  markerGridSize: 4,
 
-  bubbleDiaMM:  4.5,
-  bubblePitchMM: 6.5,
-  choiceCount: 5,
+  /* ---- Payload QR — top-right of header, 26 mm ---- */
+  payloadQrSizeMM:   26,
+  payloadQrTopMM:    14,
+  payloadQrRightGapMM: 14,      // gap from the QR's right edge to the sheet's right edge
 
-  rowHeightMM: 7.0,
-  maxRowsPerColumn: 20,
-  maxColumns: 3,
-  maxQuestions: 60,
+  /* ---- Header text block ---- */
+  headerLeftMM:   14,
+  headerTopMM:    14,
+  headerWidthMM:  90,
+  headerHeightMM: 26,
 
-  headerTopMM: 34,
+  /* ---- Bubble grid ---- */
+  bubbleDiaMM:  4.2,
+  bubblePitchMM: 6.0,
+  choiceCount:  5,
+
+  rowHeightMM:       6.8,
+  maxRowsPerColumn:  20,
+  maxColumns:        3,
+  maxQuestions:      60,
+
+  gridTopMM:   52,   // first bubble row centre
+  lettersRowMM: 48,  // column-letter labels
   numberWidthMM: 8,
-  columnGapMM: 5,
+  columnGapMM:  6,
 
-  // ---- NEW: edge timing marks ----
-  tickCount:     16,          // 16 ticks along each long edge
-  tickLengthMM:  4.0,         // inward from the edge
-  tickWidthMM:   1.5,         // across the edge
-  tickInsetMM:   0.8          // distance from paper edge to tick start
+  /* ---- Timing ticks ---- */
+  tickCount:    20,
+  tickLengthMM: 3.0,
+  tickWidthMM:  1.0,
+  tickInsetMM:  1.0
 };
 
-  const ANCHOR_PAYLOADS = {
-    'KLAZ-OMR-TL': 'TL',
-    'KLAZ-OMR-TR': 'TR',
-    'KLAZ-OMR-BL': 'BL',
-    'KLAZ-OMR-BR': 'BR'
+function anchorCenters() {
+  const i = SHEET.markerInsetMM + SHEET.markerSizeMM / 2;
+  const W = SHEET.widthMM, H = SHEET.heightMM;
+  return {
+    TL: [i,         i],
+    TR: [W - i,     i],
+    BL: [i,         H - i],
+    BR: [W - i,     H - i]
   };
+}
 
-  function anchorCenters() {
-    const m = SHEET.marginMM, s = SHEET.anchorSizeMM, half = s / 2;
-    return {
-      TL: [m + half,                 m + half],
-      TR: [SHEET.widthMM - m - half, m + half],
-      BL: [m + half,                 SHEET.heightMM - m - half],
-      BR: [SHEET.widthMM - m - half, SHEET.heightMM - m - half]
-    };
-  }
+function bubblePositions(questionCount) {
+  const cols = questionCount <= SHEET.maxRowsPerColumn       ? 1
+             : questionCount <= SHEET.maxRowsPerColumn * 2   ? 2
+             : SHEET.maxColumns;
+  const perCol = Math.ceil(questionCount / cols);
 
-  /* Bubble positions in sheet-mm space. The grid is centred horizontally
-     on the sheet, and the number of columns is chosen from the item count:
-     1-20 -> 1 column  -  21-40 -> 2 columns  -  41-60 -> 3 columns
-     Both the printer and the scanner read this same function, so paper and
-     camera can never disagree about where a bubble lives. */
-  function bubblePositions(questionCount) {
-    const cols = questionCount <= SHEET.maxRowsPerColumn       ? 1
-               : questionCount <= SHEET.maxRowsPerColumn * 2   ? 2
-               : SHEET.maxColumns;
-    const perCol = Math.ceil(questionCount / cols);
+  // A single column:  [8 mm number][5 bubbles at 6 mm pitch][1.8 mm pad]
+  const colWidth   = SHEET.numberWidthMM
+                   + (SHEET.choiceCount - 1) * SHEET.bubblePitchMM
+                   + SHEET.bubbleDiaMM
+                   + 1.8;
+  const totalWidth = cols * colWidth + (cols - 1) * SHEET.columnGapMM;
+  const contentLeft = (SHEET.widthMM - totalWidth) / 2;
 
-    const colInnerWidth = SHEET.numberWidthMM
-                        + SHEET.choiceCount * SHEET.bubblePitchMM
-                        + 2;
-    const totalWidth  = cols * colInnerWidth + (cols - 1) * SHEET.columnGapMM;
-    const contentLeft = (SHEET.widthMM - totalWidth) / 2;
+  const positions = [];
+  for (let q = 0; q < questionCount; q++) {
+    const col = Math.floor(q / perCol);
+    const row = q % perCol;
+    const colLeft = contentLeft + col * (colWidth + SHEET.columnGapMM);
+    const bubbleStartX = colLeft + SHEET.numberWidthMM
+                       + SHEET.bubblePitchMM / 2;   // first bubble centre
+    const y = SHEET.gridTopMM + row * SHEET.rowHeightMM;
 
-    const positions = [];
-    for (let q = 0; q < questionCount; q++) {
-      const col = Math.floor(q / perCol);
-      const row = q % perCol;
-      const colLeft = contentLeft + col * (colInnerWidth + SHEET.columnGapMM);
-      const bubbleStartX = colLeft + SHEET.numberWidthMM;
-      const y = SHEET.headerTopMM + row * SHEET.rowHeightMM + SHEET.rowHeightMM / 2;
-
-      const choices = [];
-      for (let ch = 0; ch < SHEET.choiceCount; ch++) {
-        choices.push([
-          bubbleStartX + ch * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2,
-          y
-        ]);
-      }
-      positions.push({
-        q, row, col, choices,
-        numberX: colLeft + SHEET.numberWidthMM - 1.5,
-        numberY: y
-      });
+    const choices = [];
+    for (let ch = 0; ch < SHEET.choiceCount; ch++) {
+      choices.push([
+        bubbleStartX + ch * SHEET.bubblePitchMM,
+        y
+      ]);
     }
-    return positions;
+    positions.push({
+      q, row, col, choices,
+      numberX: colLeft + SHEET.numberWidthMM - 1.5,
+      numberY: y
+    });
   }
+  return positions;
+}
 
-  /* ========================================================================
-     CALIBRATION  (Improvement 11)
-     ------------------------------------------------------------------------
-     Persisted per-device. Populated by the Calibrate flow, otherwise uses
-     sensible defaults tuned for a clean classroom print.
-     ======================================================================== */
-  const DEFAULT_CALIBRATION = {
-    markedRatio:      0.55,
-    gapRatio:         0.75,
-    fillStrong:       0.65,
-    fillAmbiguous:    0.25,
-    ringInner:        1.40,
-    ringOuter:        1.90,
-    maxReprojErrPx:   6.0,
-    sampleRadiusMult: 0.50,
-    confirmFrames:    1,
+/* ========================================================================
+   CALIBRATION
+   ======================================================================== */
+const DEFAULT_CALIBRATION = {
+  // Bubble detection
+  markedRatio:      0.55,
+  gapRatio:         0.75,
+  fillStrong:       0.65,
+  fillAmbiguous:    0.25,
+  ringInner:        1.40,
+  ringOuter:        1.90,
+  sampleRadiusMult: 0.50,
 
-    // ---- Added in this revision ----
-    minSharpness:     55,     // Laplacian variance floor (blur gate)
-    minBrightness:    30,     // mean luminance floor (dark-frame gate)
-    maxBrightness:    235,    // mean luminance ceiling (blown-out gate)
-    blobSnapRadius:   0.90,   // blob-search radius as a fraction of bubble diameter
+  // ArUco detection
+  minMarkerPx:      14,       // smallest acceptable marker side length (image px)
+  maxMarkerPx:      220,      // largest acceptable marker side length (image px)
+  maxHamming:       2,        // allowed bit errors when matching the dictionary
+  minRingFill:      0.55,     // fraction of border cells that must be dark
 
-    calibratedAt:     null
-  };
+  // Geometry
+  maxReprojErrPx:   6.0,
 
-  let CAL = { ...DEFAULT_CALIBRATION };
+  // Frame quality
+  minSharpness:     55,
+  minBrightness:    30,
+  maxBrightness:    235,
 
-  async function loadCalibration() {
-    try {
-      const saved = await DB.getSetting('omrCalibration', null);
-      if (saved && typeof saved === 'object') {
-        CAL = { ...DEFAULT_CALIBRATION, ...saved };
-      }
-    } catch (e) { CAL = { ...DEFAULT_CALIBRATION }; }
-  }
-  async function saveCalibration(patch) {
-    CAL = { ...CAL, ...patch, calibratedAt: new Date().toISOString() };
-    try { await DB.setSetting('omrCalibration', CAL); } catch (e) {}
-  }
+  // Confirmation
+  confirmFrames:    2,        // consecutive agreeing reads required
+  blobSnapRadius:   0.90,     // search radius for blob refinement (× bubble radius)
 
-  /* ========================================================================
-     MATH — linear solver and homography
-     ======================================================================== */
-  function solveLinear(A, b) {
-    const n = b.length;
-    const M = A.map((row, i) => row.concat([b[i]]));
-    for (let col = 0; col < n; col++) {
-      let pivot = col;
-      for (let r = col + 1; r < n; r++) {
-        if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
-      }
-      [M[col], M[pivot]] = [M[pivot], M[col]];
-      if (Math.abs(M[col][col]) < 1e-10) return null;
-      const piv = M[col][col];
-      for (let c = col; c <= n; c++) M[col][c] /= piv;
-      for (let r = 0; r < n; r++) {
-        if (r === col) continue;
-        const f = M[r][col];
-        for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
-      }
+  calibratedAt:     null
+};
+
+let CAL = { ...DEFAULT_CALIBRATION };
+
+async function loadCalibration() {
+  try {
+    const saved = await DB.getSetting('omrCalibration', null);
+    if (saved && typeof saved === 'object') {
+      CAL = { ...DEFAULT_CALIBRATION, ...saved };
     }
-    return M.map(row => row[n]);
-  }
+  } catch (e) { CAL = { ...DEFAULT_CALIBRATION }; }
+}
 
-  function computeHomography(src, dst) {
-    const A = [], b = [];
-    for (let i = 0; i < 4; i++) {
-      const [x, y] = src[i];
-      const [u, v] = dst[i];
-      A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]); b.push(u);
-      A.push([0, 0, 0, x, y, 1, -x * v, -y * v]); b.push(v);
+async function saveCalibration(patch) {
+  CAL = { ...CAL, ...patch, calibratedAt: new Date().toISOString() };
+  try { await DB.setSetting('omrCalibration', CAL); } catch (e) {}
+}
+
+/* ========================================================================
+   LINEAR ALGEBRA — 8×8 solve for homography
+   ======================================================================== */
+function solveLinear(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => row.concat([b[i]]));
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
     }
-    const h = solveLinear(A, b);
-    if (!h) return null;
-    return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
-  }
-
-  function applyH(H, x, y) {
-    const w = H[2][0] * x + H[2][1] * y + H[2][2];
-    return [
-      (H[0][0] * x + H[0][1] * y + H[0][2]) / w,
-      (H[1][0] * x + H[1][1] * y + H[1][2]) / w
-    ];
-  }
-
-  /* Improvement 6 — RMS reprojection error, in image pixels. */
-  function reprojectionError(H, srcPts, dstPts) {
-    let sum = 0;
-    for (let i = 0; i < 4; i++) {
-      const [px, py] = applyH(H, srcPts[i][0], srcPts[i][1]);
-      const dx = px - dstPts[i][0];
-      const dy = py - dstPts[i][1];
-      sum += dx * dx + dy * dy;
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    if (Math.abs(M[col][col]) < 1e-10) return null;
+    const piv = M[col][col];
+    for (let c = col; c <= n; c++) M[col][c] /= piv;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col];
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
     }
-    return Math.sqrt(sum / 4);
   }
+  return M.map(row => row[n]);
+}
 
-  /* ========================================================================
-     IMAGE HELPERS
-     ======================================================================== */
-
-  /* Luminance at a point, averaged over a disk. */
-  function sampleLuminance(imageData, px, py, radiusPx) {
-    const w = imageData.width, h = imageData.height, d = imageData.data;
-    px = Math.round(px); py = Math.round(py);
-    const r = Math.max(1, radiusPx | 0);
-    const r2 = r * r;
-    let sum = 0, n = 0;
-    const x0 = Math.max(0, px - r), x1 = Math.min(w - 1, px + r);
-    const y0 = Math.max(0, py - r), y1 = Math.min(h - 1, py + r);
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const dx = x - px, dy = y - py;
-        if (dx * dx + dy * dy > r2) continue;
-        const i = (y * w + x) * 4;
-        sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-        n++;
-      }
-    }
-    return n ? sum / n : 255;
+function computeHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i];
+    const [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -x * v, -y * v]); b.push(v);
   }
+  const h = solveLinear(A, b);
+  if (!h) return null;
+  return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]];
+}
 
-  /* Improvement 4 — luminance of an annular ring (unmarked paper). */
-  function sampleRing(imageData, px, py, rInner, rOuter) {
-    const w = imageData.width, h = imageData.height, d = imageData.data;
-    px = Math.round(px); py = Math.round(py);
-    const ri = Math.max(1, rInner | 0);
-    const ro = Math.max(ri + 1, rOuter | 0);
-    const ri2 = ri * ri, ro2 = ro * ro;
-    let sum = 0, n = 0;
-    const x0 = Math.max(0, px - ro), x1 = Math.min(w - 1, px + ro);
-    const y0 = Math.max(0, py - ro), y1 = Math.min(h - 1, py + ro);
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const dx = x - px, dy = y - py;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < ri2 || d2 > ro2) continue;
-        const i = (y * w + x) * 4;
-        sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-        n++;
-      }
-    }
-    return n ? sum / n : 255;
-  }
+function applyH(H, x, y) {
+  const w = H[2][0] * x + H[2][1] * y + H[2][2];
+  return [
+    (H[0][0] * x + H[0][1] * y + H[0][2]) / w,
+    (H[1][0] * x + H[1][1] * y + H[1][2]) / w
+  ];
+}
 
-  /* Improvement 5 — fraction of pixels in a disk below a threshold. */
-  function fillFraction(imageData, px, py, radiusPx, threshold) {
-    const w = imageData.width, h = imageData.height, d = imageData.data;
-    px = Math.round(px); py = Math.round(py);
-    const r = Math.max(1, radiusPx | 0);
-    const r2 = r * r;
-    let dark = 0, n = 0;
-    const x0 = Math.max(0, px - r), x1 = Math.min(w - 1, px + r);
-    const y0 = Math.max(0, py - r), y1 = Math.min(h - 1, py + r);
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const dx = x - px, dy = y - py;
-        if (dx * dx + dy * dy > r2) continue;
-        const i = (y * w + x) * 4;
-        const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-        if (lum < threshold) dark++;
-        n++;
-      }
-    }
-    return n ? dark / n : 0;
-  }
-  /* ------------------------------------------------------------------------
-   NEW: Blur / exposure gate
-   ------------------------------------------------------------------------
-   A blurry frame produces bubbles that don't resolve cleanly, and a
-   badly-exposed frame (too dark or too bright) gives unreliable
-   luminance ratios. Both waste a full grading cycle and produce a
-   "blank" result that confuses the teacher.
-
-   We compute the variance of the Laplacian on a downsampled gray
-   version of the frame. Low variance = flat image = blurry or
-   featureless. We also check the mean luminance to reject frames that
-   are mostly black (lens covered) or blown out.
-
-   Thresholds are deliberately permissive — we only want to reject the
-   obviously-bad frames, not borderline ones. The homography RMS check
-   and the per-question confidence gate catch the rest.
-   ------------------------------------------------------------------------ */
-function frameQuality(imageData) {
-  const w = imageData.width, h = imageData.height, d = imageData.data;
-
-  // Sample a 4× downsampled gray image for speed.
-  const step = 4;
-  const sw = Math.floor(w / step), sh = Math.floor(h / step);
-  const gray = new Uint8ClampedArray(sw * sh);
+function reprojectionError(H, srcPts, dstPts) {
   let sum = 0;
-
-  for (let y = 0; y < sh; y++) {
-    for (let x = 0; x < sw; x++) {
-      const i = ((y * step) * w + (x * step)) * 4;
-      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-      gray[y * sw + x] = g;
-      sum += g;
-    }
+  for (let i = 0; i < 4; i++) {
+    const [px, py] = applyH(H, srcPts[i][0], srcPts[i][1]);
+    const dx = px - dstPts[i][0];
+    const dy = py - dstPts[i][1];
+    sum += dx * dx + dy * dy;
   }
-  const mean = sum / (sw * sh);
-
-  // Reject frames whose overall brightness makes ratio detection impossible.
-  if (mean < 30)  return { ok: false, reason: 'Too dark — increase lighting or enable flash' };
-  if (mean > 235) return { ok: false, reason: 'Overexposed — reduce glare on the sheet' };
-
-  // Laplacian variance on the interior (skip a 6 px border that often
-  // contains the palm/desk and skews the result).
-  const border = 6;
-  let lapSum = 0, lapSumSq = 0, count = 0;
-  for (let y = border; y < sh - border; y++) {
-    for (let x = border; x < sw - border; x++) {
-      const i = y * sw + x;
-      const lap =
-        gray[i - sw] + gray[i + sw] + gray[i - 1] + gray[i + 1]
-        - 4 * gray[i];
-      lapSum   += lap;
-      lapSumSq += lap * lap;
-      count++;
-    }
-  }
-  if (!count) return { ok: false, reason: 'Frame too small' };
-  const lapMean = lapSum / count;
-  const variance = (lapSumSq / count) - (lapMean * lapMean);
-
-  // Empirical floor: a sharp sheet with visible bubbles and QR codes
-  // lands well above 90; a blurred frame drops below 30.
-  if (variance < 55) {
-    return { ok: false, reason: 'Image is blurry — hold steady and let the camera focus' };
-  }
-
-  return { ok: true, variance, mean };
+  return Math.sqrt(sum / 4);
 }
 
-/* ------------------------------------------------------------------------
-   NEW: Blob-based refinement
-   ------------------------------------------------------------------------
-   The initial homography gives us an approximate pixel position for
-   each bubble. Real-world paper wrinkles, printing drift, and camera
-   lens distortion all shift those positions by a few pixels. A few
-   pixels is enough to make a filled bubble sample from the blank
-   white ring instead of the mark.
-
-   ZipGrade solves this by looking for the *actual* dark blob near the
-   expected location. We do the same: search a small window (±2 mm)
-   around the expected center for the darkest connected region, then
-   return its centroid as the refined sample point.
-
-   The search is cheap — a 13×13 patch per bubble, one pass — and it
-   is the single biggest accuracy improvement in this revision.
-   ------------------------------------------------------------------------ */
-function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
+/* ========================================================================
+   IMAGE SAMPLING HELPERS
+   ======================================================================== */
+function sampleLuminance(imageData, px, py, radiusPx) {
   const w = imageData.width, h = imageData.height, d = imageData.data;
-  const r = Math.max(2, Math.round(searchRadiusPx));
-  const x0 = Math.max(0, Math.round(cx) - r);
-  const x1 = Math.min(w - 1, Math.round(cx) + r);
-  const y0 = Math.max(0, Math.round(cy) - r);
-  const y1 = Math.min(h - 1, Math.round(cy) + r);
-
-  // Two-pass min search: first find the darkest luminance in the window,
-  // then average the positions of all pixels within 10% of that minimum.
-  // This avoids snapping onto a single noisy pixel.
-  let minLum = 255;
+  px = Math.round(px); py = Math.round(py);
+  const r = Math.max(1, radiusPx | 0);
+  const r2 = r * r;
+  let sum = 0, n = 0;
+  const x0 = Math.max(0, px - r), x1 = Math.min(w - 1, px + r);
+  const y0 = Math.max(0, py - r), y1 = Math.min(h - 1, py + r);
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
+      const dx = x - px, dy = y - py;
+      if (dx * dx + dy * dy > r2) continue;
       const i = (y * w + x) * 4;
-      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-      if (lum < minLum) minLum = lum;
+      sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      n++;
     }
   }
-
-  // If the darkest pixel isn't meaningfully darker than paper, nothing to snap to.
-  const paperLum = sampleLuminance(imageData, cx, cy, sampleRadiusPx * 3);
-  if (minLum > paperLum * 0.78) {
-    return { x: cx, y: cy, snapped: false };
-  }
-
-  const threshold = minLum + (paperLum - minLum) * 0.18;
-  let sx = 0, sy = 0, n = 0;
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * w + x) * 4;
-      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-      if (lum <= threshold) { sx += x; sy += y; n++; }
-    }
-  }
-  if (!n) return { x: cx, y: cy, snapped: false };
-  return { x: sx / n, y: sy / n, snapped: true };
+  return n ? sum / n : 255;
 }
 
-  /* Improvement 8 — Otsu's method on a luminance histogram. */
-  function otsuThreshold(imageData, region) {
-    // region: { x0, y0, x1, y1 } — restrict to the answer area if desired.
-    const w = imageData.width, h = imageData.height, d = imageData.data;
-    const x0 = Math.max(0, region ? region.x0 : 0);
-    const y0 = Math.max(0, region ? region.y0 : 0);
-    const x1 = Math.min(w - 1, region ? region.x1 : w - 1);
-    const y1 = Math.min(h - 1, region ? region.y1 : h - 1);
-    const hist = new Uint32Array(256);
-    let total = 0;
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const i = (y * w + x) * 4;
-        const lum = (0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]) | 0;
-        hist[lum]++;
-        total++;
-      }
+function sampleRing(imageData, px, py, rInner, rOuter) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  px = Math.round(px); py = Math.round(py);
+  const ri = Math.max(1, rInner | 0);
+  const ro = Math.max(ri + 1, rOuter | 0);
+  const ri2 = ri * ri, ro2 = ro * ro;
+  let sum = 0, n = 0;
+  const x0 = Math.max(0, px - ro), x1 = Math.min(w - 1, px + ro);
+  const y0 = Math.max(0, py - ro), y1 = Math.min(h - 1, py + ro);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - px, dy = y - py;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < ri2 || d2 > ro2) continue;
+      const i = (y * w + x) * 4;
+      sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      n++;
     }
-    if (!total) return 128;
-    let sum = 0;
-    for (let t = 0; t < 256; t++) sum += t * hist[t];
-    let sumB = 0, wB = 0, max = 0, threshold = 128;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t];
-      if (!wB) continue;
-      const wF = total - wB;
-      if (!wF) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB;
-      const mF = (sum - sumB) / wF;
-      const between = wB * wF * (mB - mF) * (mB - mF);
-      if (between > max) { max = between; threshold = t; }
-    }
-    return threshold;
   }
-  /* ------------------------------------------------------------------------
-   frameQuality — blur / exposure gate.
-   Returns { ok, reason?, variance?, mean? }.
-   ------------------------------------------------------------------------ */
+  return n ? sum / n : 255;
+}
+
+function fillFraction(imageData, px, py, radiusPx, threshold) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  px = Math.round(px); py = Math.round(py);
+  const r = Math.max(1, radiusPx | 0);
+  const r2 = r * r;
+  let dark = 0, n = 0;
+  const x0 = Math.max(0, px - r), x1 = Math.min(w - 1, px + r);
+  const y0 = Math.max(0, py - r), y1 = Math.min(h - 1, py + r);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - px, dy = y - py;
+      if (dx * dx + dy * dy > r2) continue;
+      const i = (y * w + x) * 4;
+      const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      if (lum < threshold) dark++;
+      n++;
+    }
+  }
+  return n ? dark / n : 0;
+}
+
+/* Otsu threshold over a rectangular region. */
+function otsuThreshold(imageData, region) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const x0 = Math.max(0, region ? region.x0 : 0);
+  const y0 = Math.max(0, region ? region.y0 : 0);
+  const x1 = Math.min(w - 1, region ? region.x1 : w - 1);
+  const y1 = Math.min(h - 1, region ? region.y1 : h - 1);
+  const hist = new Uint32Array(256);
+  let total = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]) | 0;
+      hist[lum]++; total++;
+    }
+  }
+  if (!total) return 128;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, max = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > max) { max = between; threshold = t; }
+  }
+  return threshold;
+}
+
+/* ========================================================================
+   FRAME QUALITY GATE — blur / exposure
+   ======================================================================== */
 function frameQuality(imageData) {
   const w = imageData.width, h = imageData.height, d = imageData.data;
 
@@ -51104,8 +51036,7 @@ function frameQuality(imageData) {
     }
   }
   const mean = sum / (sw * sh);
-
-  if (mean < CAL.minBrightness) return { ok: false, reason: 'Too dark — move to brighter light or enable the flash' };
+  if (mean < CAL.minBrightness) return { ok: false, reason: 'Too dark — move to brighter light' };
   if (mean > CAL.maxBrightness) return { ok: false, reason: 'Overexposed — reduce glare on the sheet' };
 
   const border = 6;
@@ -51113,9 +51044,8 @@ function frameQuality(imageData) {
   for (let y = border; y < sh - border; y++) {
     for (let x = border; x < sw - border; x++) {
       const i = y * sw + x;
-      const lap =
-        gray[i - sw] + gray[i + sw] + gray[i - 1] + gray[i + 1] - 4 * gray[i];
-      lapSum   += lap;
+      const lap = gray[i - sw] + gray[i + sw] + gray[i - 1] + gray[i + 1] - 4 * gray[i];
+      lapSum += lap;
       lapSumSq += lap * lap;
       count++;
     }
@@ -51125,13 +51055,228 @@ function frameQuality(imageData) {
   const variance = (lapSumSq / count) - (lapMean * lapMean);
 
   if (variance < CAL.minSharpness) {
-    return { ok: false, reason: 'Image is blurry — hold steady and let the camera focus' };
+    return { ok: false, reason: 'Image is blurry — hold steady' };
   }
   return { ok: true, variance, mean };
 }
-/* ------------------------------------------------------------------------
-   refineBubbleCenter — snap a sample point onto the actual dark blob.
-   ------------------------------------------------------------------------ */
+
+/* ========================================================================
+   ARUCO DETECTION
+   ------------------------------------------------------------------------
+   Algorithm:
+     1. Binarise the frame (single threshold — we only care about the solid
+        black marker borders, not fine detail).
+     2. Connected-components via Union-Find. The outer ring of an ArUco
+        marker is a hollow square of black pixels — this shows up as one
+        component with a roughly square bounding box and low fill ratio.
+     3. For each square-ring component, extract the four corners via the
+        diagonal-extreme trick:
+            TL = argmin(x+y)
+            BR = argmax(x+y)
+            TR = argmax(x-y)
+            BL = argmin(x-y)
+     4. Perspective-warp the marker into a canonical N×N image using a
+        second homography.
+     5. Sample the 4×4 inner grid (offset past the border ring), binarise
+        each cell, and match against the dictionary under all 4 rotations.
+     6. Accept only if the Hamming distance ≤ maxHamming.
+   ======================================================================== */
+function detectArucoMarkers(imageData) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+
+  // ---- 1. Binarise ----
+  const binary = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    binary[j] = lum < 110 ? 1 : 0;
+  }
+
+  // ---- 2. Connected components on black pixels ----
+  // A small downsample (2×) accelerates the labeling step ~4×.
+  const SCALE = 2;
+  const sw = Math.floor(w / SCALE), sh = Math.floor(h / SCALE);
+  const small = new Uint8Array(sw * sh);
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      let dark = 0;
+      for (let dy = 0; dy < SCALE; dy++) {
+        for (let dx = 0; dx < SCALE; dx++) {
+          if (binary[(y*SCALE+dy) * w + (x*SCALE+dx)]) { dark = 1; break; }
+        }
+        if (dark) break;
+      }
+      small[y * sw + x] = dark;
+    }
+  }
+
+  // Union-Find
+  const parent = new Int32Array(sw * sh).fill(-1);
+  const find = (a) => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+  const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
+
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const idx = y * sw + x;
+      if (!small[idx]) continue;
+      parent[idx] = idx;
+      if (x > 0 && small[idx - 1]) union(idx, idx - 1);
+      if (y > 0 && small[idx - sw]) union(idx, idx - sw);
+    }
+  }
+
+  // Aggregate component stats
+  const stats = new Map();
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const idx = y * sw + x;
+      if (!small[idx]) continue;
+      const root = find(idx);
+      let s = stats.get(root);
+      if (!s) { s = { minX: x, maxX: x, minY: y, maxY: y, area: 0, minSum: Infinity, maxSum: -Infinity, minDiff: Infinity, maxDiff: -Infinity, TL: null, TR: null, BL: null, BR: null }; stats.set(root, s); }
+      s.area++;
+      if (x < s.minX) s.minX = x;
+      if (x > s.maxX) s.maxX = x;
+      if (y < s.minY) s.minY = y;
+      if (y > s.maxY) s.maxY = y;
+      const sum = x + y, diff = x - y;
+      if (sum < s.minSum) { s.minSum = sum; s.TL = [x, y]; }
+      if (sum > s.maxSum) { s.maxSum = sum; s.BR = [x, y]; }
+      if (diff > s.maxDiff) { s.maxDiff = diff; s.TR = [x, y]; }
+      if (diff < s.minDiff) { s.minDiff = diff; s.BL = [x, y]; }
+    }
+  }
+
+  // ---- 3. Filter for square-ring components ----
+  const candidates = [];
+  for (const s of stats.values()) {
+    const bw = s.maxX - s.minX + 1, bh = s.maxY - s.minY + 1;
+    if (!s.TL || !s.TR || !s.BL || !s.BR) continue;
+    const sidePx = ((bw + bh) / 2) * SCALE;
+    if (sidePx < CAL.minMarkerPx || sidePx > CAL.maxMarkerPx) continue;
+    const aspect = bw / bh;
+    if (aspect < 0.70 || aspect > 1.43) continue;
+    const fill = s.area / (bw * bh);
+    // ArUco outer border is a hollow ring → fill ratio ~0.35–0.65
+    if (fill < 0.25 || fill > 0.72) continue;
+    // Upscale corner coordinates back to full resolution
+    candidates.push({
+      corners: {
+        TL: [s.TL[0] * SCALE, s.TL[1] * SCALE],
+        TR: [s.TR[0] * SCALE, s.TR[1] * SCALE],
+        BL: [s.BL[0] * SCALE, s.BL[1] * SCALE],
+        BR: [s.BR[0] * SCALE, s.BR[1] * SCALE]
+      },
+      sidePx
+    });
+  }
+
+  if (candidates.length < 4) return null;
+
+  // ---- 4. Try to match each candidate against the dictionary ----
+  const decoded = [];
+  for (const cand of candidates) {
+    const id = decodeArucoMarker(imageData, cand.corners);
+    if (id) {
+      decoded.push({ id: id.id, rotation: id.rotation, corners: cand.corners, sidePx: cand.sidePx });
+    }
+  }
+
+  // ---- 5. Keep only the best match per ID ----
+  const best = { TL: null, TR: null, BL: null, BR: null };
+  for (const d of decoded) {
+    if (!best[d.id] || d.sidePx > best[d.id].sidePx) best[d.id] = d;
+  }
+  if (!best.TL || !best.TR || !best.BL || !best.BR) return null;
+
+  // ---- 6. Sanity: the four markers must form a convex quad in TL/TR/BR/BL order ----
+  const tl = best.TL.corners, tr = best.TR.corners;
+  const bl = best.BL.corners, br = best.BR.corners;
+  const cx = (tl.TL[0] + tr.TR[0] + bl.TL[0] + br.TR[0]) / 4;
+  const cy = (tl.TL[1] + tr.TR[1] + bl.TL[1] + br.TR[1]) / 4;
+  const tlC = [(tl.TL[0] + tl.BR[0]) / 2, (tl.TL[1] + tl.BR[1]) / 2];
+  const trC = [(tr.TL[0] + tr.BR[0]) / 2, (tr.TL[1] + tr.BR[1]) / 2];
+  const blC = [(bl.TL[0] + bl.BR[0]) / 2, (bl.TL[1] + bl.BR[1]) / 2];
+  const brC = [(br.TL[0] + br.BR[0]) / 2, (br.TL[1] + br.BR[1]) / 2];
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  if (cross(tlC, trC, brC) <= 0 || cross(trC, brC, blC) <= 0) return null;
+
+  return { TL: tlC, TR: trC, BL: blC, BR: brC, raw: best };
+}
+
+/** Perspective-warp a marker, sample its 4×4 grid, and match against the dictionary. */
+function decodeArucoMarker(imageData, corners) {
+  // Canonical target size: 6×6 = 1-cell border + 4×4 grid. We sample at
+  // 12 px per cell → 72×72 sample image.
+  const CELL_PX = 12;
+  const TOTAL_CELLS = 1 + SHEET.markerGridSize + 1;   // 1 border, 4 grid, 1 border
+  const SAMPLE = TOTAL_CELLS * CELL_PX;               // 72
+  const srcPts = [corners.TL, corners.TR, corners.BR, corners.BL];
+  const dstPts = [[0,0], [SAMPLE,0], [SAMPLE,SAMPLE], [0,SAMPLE]];
+  const H = computeHomography(srcPts, dstPts);
+  if (!H) return null;
+
+  // Sample each grid cell's centre and compare against the black/white
+  // midpoint derived from the marker's own border cells (self-normalising).
+  const gridPts = [];
+  for (let gy = 0; gy < SHEET.markerGridSize; gy++) {
+    for (let gx = 0; gx < SHEET.markerGridSize; gx++) {
+      const u = (1 + gx + 0.5) * CELL_PX;
+      const v = (1 + gy + 0.5) * CELL_PX;
+      gridPts.push([u, v]);
+    }
+  }
+  // Border points (a ring of 12 samples around the very outside)
+  const borderPts = [];
+  for (let i = 0; i < 4; i++) borderPts.push([(i + 0.5) * CELL_PX, CELL_PX * 0.5]);
+  for (let i = 0; i < 4; i++) borderPts.push([SAMPLE - CELL_PX * 0.5, (i + 0.5) * CELL_PX]);
+  for (let i = 0; i < 4; i++) borderPts.push([(i + 0.5) * CELL_PX, SAMPLE - CELL_PX * 0.5]);
+  for (let i = 0; i < 4; i++) borderPts.push([CELL_PX * 0.5, (i + 0.5) * CELL_PX]);
+
+  const samplePx = (u, v) => {
+    const [px, py] = applyH(H, u, v);
+    return sampleLuminance(imageData, px, py, 2);
+  };
+
+  // Verify the border is mostly dark — rejects non-marker false positives.
+  let borderDark = 0;
+  for (const [u, v] of borderPts) {
+    if (samplePx(u, v) < 128) borderDark++;
+  }
+  if (borderDark / borderPts.length < CAL.minRingFill) return null;
+
+  // Read the 4×4 grid bits
+  const bits = new Array(16);
+  for (let i = 0; i < 16; i++) {
+    const [u, v] = gridPts[i];
+    const lum = samplePx(u, v);
+    bits[i] = lum < 128 ? 1 : 0;
+  }
+
+  // Look up the pattern under all 4 rotations
+  const key = bits.join('');
+  const match = ARUCO_LOOKUP.get(key);
+  if (!match) {
+    // Allow up to CAL.maxHamming bit errors (blur, smudge, reflection)
+    let bestId = null, bestRot = 0, bestDist = Infinity;
+    for (let r = 0; r < 4; r++) {
+      const rot = rotateBits(bits, r);
+      for (const [id, pattern] of Object.entries(ARUCO_DICT)) {
+        let dist = 0;
+        for (let i = 0; i < 16; i++) if (rot[i] !== pattern[i]) dist++;
+        if (dist < bestDist) { bestDist = dist; bestId = id; bestRot = (4 - r) % 4; }
+      }
+    }
+    if (bestDist <= CAL.maxHamming) return { id: bestId, rotation: bestRot };
+    return null;
+  }
+  return { id: match.id, rotation: match.rotation };
+}
+
+/* ========================================================================
+   BUBBLE DETECTION
+   ======================================================================== */
+
+/** Snap a sample point onto the darkest nearby blob. */
 function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
   const w = imageData.width, h = imageData.height, d = imageData.data;
   const r = Math.max(2, Math.round(searchRadiusPx));
@@ -51148,7 +51293,6 @@ function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
       if (lum < minLum) minLum = lum;
     }
   }
-
   const paperLum = sampleLuminance(imageData, cx, cy, sampleRadiusPx * 3);
   if (minLum > paperLum * 0.78) return { x: cx, y: cy, snapped: false };
 
@@ -51165,52 +51309,7 @@ function refineBubbleCenter(imageData, cx, cy, searchRadiusPx, sampleRadiusPx) {
   return { x: sx / n, y: sy / n, snapped: true };
 }
 
-  /* ========================================================================
-     QR DETECTION
-     ======================================================================== */
-  function detectQRs(imageData, maxQrs = 6) {
-    if (!window.jsQR) return [];
-    const data = new Uint8ClampedArray(imageData.data);
-    const w = imageData.width, h = imageData.height;
-    const found = [];
-    for (let i = 0; i < maxQrs; i++) {
-      let qr = null;
-      try { qr = window.jsQR(data, w, h, { inversionAttempts: 'dontInvert' }); }
-      catch (e) { break; }
-      if (!qr) break;
-      found.push(qr);
-      maskRegion(data, w, h, qr.location);
-    }
-    return found;
-  }
-
-  function maskRegion(data, w, h, loc) {
-    const pts = [loc.topLeftCorner, loc.topRightCorner, loc.bottomLeftCorner, loc.bottomRightCorner];
-    const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-    const minX = Math.max(0, Math.floor(Math.min(...xs)) - 3);
-    const maxX = Math.min(w - 1, Math.ceil(Math.max(...xs)) + 3);
-    const minY = Math.max(0, Math.floor(Math.min(...ys)) - 3);
-    const maxY = Math.min(h - 1, Math.ceil(Math.max(...ys)) + 3);
-    for (let y = minY; y <= maxY; y++) {
-      const rowStart = y * w * 4;
-      for (let x = minX; x <= maxX; x++) {
-        const i = rowStart + x * 4;
-        data[i] = data[i+1] = data[i+2] = 255;
-      }
-    }
-  }
-
-  function qrCenter(qr) {
-    const L = qr.location;
-    return [
-      (L.topLeftCorner.x + L.topRightCorner.x + L.bottomLeftCorner.x + L.bottomRightCorner.x) / 4,
-      (L.topLeftCorner.y + L.topRightCorner.y + L.bottomLeftCorner.y + L.bottomRightCorner.y) / 4
-    ];
-  }
-
-  /* ========================================================================
-     BUBBLE DETECTION — all improvements applied here
-     ======================================================================== */
+/** Read one question's answer by sampling all its bubbles. */
 function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThresh) {
   const bubbleR = Math.max(2, Math.round((SHEET.bubbleDiaMM * CAL.sampleRadiusMult) / mmPerPx));
   const searchR = Math.max(bubbleR + 2,
@@ -51221,39 +51320,31 @@ function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThr
     if (px0 < 0 || py0 < 0 || px0 >= imageData.width || py0 >= imageData.height) {
       return { lum: 255, ring: 255, ratio: 1, fill: 0, valid: false };
     }
-
-    // Snap the sample point onto the actual dark blob.
     const refined = refineBubbleCenter(imageData, px0, py0, searchR, bubbleR);
     const px = refined.x, py = refined.y;
 
     const inner = sampleLuminance(imageData, px, py, bubbleR);
-    const ring  = sampleRing(imageData, px, py,
-                             bubbleR * CAL.ringInner,
-                             bubbleR * CAL.ringOuter);
+    const ring  = sampleRing(imageData, px, py, bubbleR * CAL.ringInner, bubbleR * CAL.ringOuter);
     const ratio = ring > 0 ? inner / ring : 1;
     const fillThresh = Math.min(otsuThresh, ring * 0.75);
     const fill = fillFraction(imageData, px, py, bubbleR, fillThresh);
-
-    return { lum: inner, ring, ratio, fill, valid: true, snapped: refined.snapped };
+    return { lum: inner, ring, ratio, fill, valid: true, snapped: refined.snapped, x: px, y: py };
   });
 
   const valid = metrics.filter(m => m.valid);
   if (!valid.length) return { choice: null, confidence: 0, metrics };
 
   const ratios = valid.map(m => m.ratio).sort((a, b) => a - b);
-  const sortedRatios = [...ratios];
-  const darkest  = sortedRatios[0];
-  const second   = sortedRatios[1] !== undefined ? sortedRatios[1] : darkest;
-  const median   = sortedRatios[Math.floor(sortedRatios.length / 2)];
+  const darkest = ratios[0];
+  const second = ratios[1] !== undefined ? ratios[1] : darkest;
+  const median = ratios[Math.floor(ratios.length / 2)];
 
   const belowMedian = darkest < median * CAL.markedRatio;
   const belowSecond = second > 0 && darkest < second * CAL.gapRatio;
-
-  const darkestIdx  = metrics.findIndex(m => m.valid && m.ratio === darkest);
+  const darkestIdx = metrics.findIndex(m => m.valid && m.ratio === darkest);
   const darkestFill = darkestIdx >= 0 ? metrics[darkestIdx].fill : 0;
 
-  let choice = null;
-  let confidence = 0;
+  let choice = null, confidence = 0;
 
   const markedIdx = [];
   metrics.forEach((m, i) => {
@@ -51266,25 +51357,92 @@ function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThr
   if (darkestIdx >= 0 && belowMedian && belowSecond) {
     if (darkestFill >= CAL.fillStrong) {
       choice = darkestIdx;
-      const rGap  = ((median * CAL.markedRatio) - darkest) / Math.max(0.01, median * CAL.markedRatio);
-      const rGap2 = ((second * CAL.gapRatio) - darkest)     / Math.max(0.01, second * CAL.gapRatio);
-      const fGap  = (darkestFill - CAL.fillStrong) / Math.max(0.01, 1 - CAL.fillStrong);
+      const rGap = ((median * CAL.markedRatio) - darkest) / Math.max(0.01, median * CAL.markedRatio);
+      const rGap2 = ((second * CAL.gapRatio) - darkest) / Math.max(0.01, second * CAL.gapRatio);
+      const fGap = (darkestFill - CAL.fillStrong) / Math.max(0.01, 1 - CAL.fillStrong);
       confidence = Math.min(1, rGap * 0.4 + rGap2 * 0.3 + fGap * 0.3);
     } else if (darkestFill >= CAL.fillAmbiguous) {
-      choice = darkestIdx;
-      confidence = 0.4;
+      choice = darkestIdx; confidence = 0.4;
     }
   }
-
   return { choice, confidence, metrics };
 }
 
-  /* ========================================================================
-     LIBRARY LOADING
-     ======================================================================== */
-  function loadJsQR() {
-    return new Promise(resolve => {
-      if (window.jsQR) return resolve(true);
+
+/* ========================================================================
+   PAYLOAD QR — single QR in the footer
+   ======================================================================== */
+function readPayloadQR(imageData, Hm, W, H) {
+  if (!window.jsQR) return null;
+
+  // Match the renderer's calculation exactly.
+  const qrLeft = SHEET.widthMM - SHEET.payloadQrRightGapMM - SHEET.payloadQrSizeMM;
+  const qrTop  = SHEET.payloadQrTopMM;
+  const size   = SHEET.payloadQrSizeMM;
+
+  // Project the QR's four sheet-corners into image space.
+  const corners = [
+    [qrLeft,        qrTop],
+    [qrLeft + size, qrTop],
+    [qrLeft + size, qrTop + size],
+    [qrLeft,        qrTop + size]
+  ].map(([x, y]) => applyH(Hm, x, y));
+
+  const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+  const x1 = Math.min(W - 1, Math.ceil(Math.max(...xs)));
+  const y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+  if (cw < 40 || ch < 40) return null;   // QR is at least ~40 px on the shortest side
+
+  // Re-sample into a fixed 320×320 crop. 320 px / 37 modules ≈ 8.6 px/module —
+  // well above jsQR's minimum. Sampling is done by nearest-neighbour on the
+  // perspective-corrected coordinate, so the crop is not just a rectangle
+  // cut from the frame.
+  const OUT = 320;
+  const tmp = new ImageData(OUT, OUT);
+  for (let v = 0; v < OUT; v++) {
+    for (let u = 0; u < OUT; u++) {
+      // Bilinear interpolation in (u,v) across the projected QR quad.
+      const uu = u / (OUT - 1), vv = v / (OUT - 1);
+      // Bilinear weights across the quad's 4 corners (TL, TR, BR, BL)
+      const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
+      const topX = tl[0] + (tr[0] - tl[0]) * uu;
+      const topY = tl[1] + (tr[1] - tl[1]) * uu;
+      const botX = bl[0] + (br[0] - bl[0]) * uu;
+      const botY = bl[1] + (br[1] - bl[1]) * uu;
+      const sx = topX + (botX - topX) * vv;
+      const sy = topY + (botY - topY) * vv;
+
+      const xi = Math.max(0, Math.min(imageData.width - 1, sx | 0));
+      const yi = Math.max(0, Math.min(imageData.height - 1, sy | 0));
+      const si = (yi * imageData.width + xi) * 4;
+      const di = (v * OUT + u) * 4;
+      tmp.data[di]   = imageData.data[si];
+      tmp.data[di+1] = imageData.data[si+1];
+      tmp.data[di+2] = imageData.data[si+2];
+      tmp.data[di+3] = 255;
+    }
+  }
+
+  let qr = null;
+  try { qr = window.jsQR(tmp.data, OUT, OUT, { inversionAttempts: 'attemptBoth' }); }
+  catch (e) { return null; }
+  if (!qr || !qr.data) return null;
+  try { return JSON.parse(qr.data); } catch (e) { return null; }
+}
+
+/* ========================================================================
+   PAYLOAD HELPERS
+   ======================================================================== */
+async function ensureLibs() {
+  if (!window.qrcode && typeof Pages._loadQRCodeLib === 'function') {
+    const ok = await Pages._loadQRCodeLib();
+    if (!ok) return false;
+  }
+  if (!window.jsQR) {
+    const ok = await new Promise(resolve => {
       const src = './vendor/jsQR.js';
       if (document.querySelector(`script[src="${src}"]`)) {
         const t = setInterval(() => { if (window.jsQR) { clearInterval(t); resolve(true); } }, 50);
@@ -51292,61 +51450,58 @@ function detectAnswerForQuestion(H, questionBubbles, imageData, mmPerPx, otsuThr
         return;
       }
       const s = document.createElement('script');
-      s.src = src;
-      s.onload = () => resolve(!!window.jsQR);
+      s.src = src; s.onload = () => resolve(!!window.jsQR);
       s.onerror = () => resolve(false);
       document.head.appendChild(s);
     });
+    if (!ok) return false;
   }
+  return true;
+}
 
-  async function ensureLibs() {
-    if (!window.qrcode) {
-      const ok = await (Pages._loadQRCodeLib ? Pages._loadQRCodeLib() : Promise.resolve(false));
-      if (!ok) return false;
-    }
-    if (!window.jsQR) {
-      const ok = await loadJsQR();
-      if (!ok) return false;
-    }
-    return true;
-  }
-
-/* Render one QR code as an SVG string WITH a white quiet zone.
-   jsQR (and every real-world QR reader) requires at least a 2-module
-   quiet zone around the code. `qrcodejs`'s createSvgTag signature has
-   changed between releases, so we defensively wrap the SVG in a small
-   white-padded <div> instead of relying on a `margin` option. This works
-   whether the library honours it or not. */
 function makeQrSvg(payload) {
   const qr = window.qrcode(0, 'M');
   qr.addData(payload);
   qr.make();
   const inner = qr.createSvgTag({ cellSize: 2, margin: 0, scalable: true });
-  return `
-    <div style="
-      width:100%;height:100%;
-      box-sizing:border-box;
-      padding:10%;
-      background:#fff;
-      display:flex;align-items:center;justify-content:center;
-    ">${inner}</div>`;
+  return `<div style="width:100%;height:100%;box-sizing:border-box;padding:8%;background:#fff;display:flex;align-items:center;justify-content:center;">${inner}</div>`;
 }
 
-  /* Renders ONE half-sheet (148.5 × 210 mm) — no page breaks inside.
-     Two of these are wrapped in an `.omr-page` to form a full A4 landscape
-     page. The sheet's own `.omr-sheet` class is preserved so the OMR
-     scanner and any external callers keep finding it. */
-  /* Renders ONE half-sheet (148.5 × 210 mm) — no page breaks inside.
-     Two of these are wrapped in an `.omr-page` to form a full A4 landscape
-     page. The sheet's own `.omr-sheet` class is preserved so the OMR
-     scanner and any external callers keep finding it. */
+/* ========================================================================
+   SHEET RENDERING — ArUco markers instead of corner QRs
+   ======================================================================== */
+function renderArucoMarkerSVG(id) {
+  const bits = ARUCO_DICT[id];
+  if (!bits) return '';
+  const N = 1 + SHEET.markerGridSize + 1;      // 6 cells
+  let cells = '';
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let filled;
+      if (y === 0 || y === N - 1 || x === 0 || x === N - 1) {
+        filled = true;                          // black border ring
+      } else {
+        const gx = x - 1, gy = y - 1;
+        filled = bits[gy * SHEET.markerGridSize + gx] === 1;
+      }
+      if (filled) {
+        cells += `<rect x="${x}" y="${y}" width="1" height="1" fill="#000"/>`;
+      }
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${N} ${N}"
+               shape-rendering="crispEdges"
+               style="width:100%;height:100%;display:block;background:#fff;">
+            <rect width="${N}" height="${N}" fill="#fff"/>
+            ${cells}
+          </svg>`;
+}
+
 function renderSheetHTML(assessment, learner, questionCount) {
   const esc = Utils.esc;
   const cls = State.activeClass;
   const anchors = anchorCenters();
   const bubbles = bubblePositions(questionCount);
-
-  // ---- NEW: resolve the form version (A/B/C). Default 'A' ----
   const version = (assessment.omrFormVersion || 'A').toUpperCase();
 
   const payload = JSON.stringify({
@@ -51354,211 +51509,182 @@ function renderSheetHTML(assessment, learner, questionCount) {
     l: learner ? learner.lrn : '',
     n: questionCount,
     c: SHEET.choiceCount,
-    v: version                             // ← NEW: form version
+    v: version
   });
 
   const mmX = (mm) => (mm / SHEET.widthMM)  * 100;
   const mmY = (mm) => (mm / SHEET.heightMM) * 100;
+  const mmW = (mm) => (mm / SHEET.widthMM)  * 100;
+  const mmH = (mm) => (mm / SHEET.heightMM) * 100;
 
-  const anchorQR = (payloadText, sheetX, sheetY) => {
-    const s = SHEET.anchorSizeMM;
+  /* ---- ArUco corner markers ---- */
+  const markerHTML = ['TL','TR','BL','BR'].map(name => {
+    const [x, y] = anchors[name];
+    const s = SHEET.markerSizeMM;
     return `<div style="position:absolute;
-                        left:${mmX(sheetX - s / 2)}%;
-                        top:${mmY(sheetY - s / 2)}%;
-                        width:${(s / SHEET.widthMM) * 100}%;
-                        height:${(s / SHEET.heightMM) * 100}%;">
-      ${makeQrSvg(payloadText)}
+                        left:${mmX(x - s/2)}%;
+                        top:${mmY(y - s/2)}%;
+                        width:${mmW(s)}%;height:${mmH(s)}%;">
+      ${renderArucoMarkerSVG(name)}
     </div>`;
-  };
+  }).join('');
 
-  // ---- NEW: edge timing marks ---------------------------------------
-  // Sixteen small black rectangles along the top edge and bottom edge.
-  // The scanner reads them the same way a bar-code reader reads a
-  // timing track — one sample per tick gives an exact mm-per-pixel
-  // scale on that axis, independent of the corner QRs.
+  /* ---- Edge timing marks ---- */
   const tickHTML = (() => {
     const usableW = SHEET.widthMM - 2 * SHEET.tickInsetMM;
     const step = usableW / SHEET.tickCount;
     let out = '';
     for (let i = 0; i < SHEET.tickCount; i++) {
       const cx = SHEET.tickInsetMM + step * (i + 0.5);
-      const left   = mmX(cx - SHEET.tickWidthMM / 2);
-      const width  = (SHEET.tickWidthMM / SHEET.widthMM) * 100;
-      const topH   = (SHEET.tickLengthMM / SHEET.heightMM) * 100;
-
-      // Top edge tick
-      out += `<div style="position:absolute;
-                          left:${left}%;
-                          top:${mmY(SHEET.tickInsetMM)}%;
-                          width:${width}%;
-                          height:${topH}%;
-                          background:#000;"></div>`;
-      // Bottom edge tick
-      out += `<div style="position:absolute;
-                          left:${left}%;
+      const left = mmX(cx - SHEET.tickWidthMM / 2);
+      const wPct = mmW(SHEET.tickWidthMM);
+      const hPct = mmH(SHEET.tickLengthMM);
+      out += `<div style="position:absolute;left:${left}%;top:${mmY(SHEET.tickInsetMM)}%;
+                          width:${wPct}%;height:${hPct}%;background:#000;"></div>`;
+      out += `<div style="position:absolute;left:${left}%;
                           top:${mmY(SHEET.heightMM - SHEET.tickInsetMM - SHEET.tickLengthMM)}%;
-                          width:${width}%;
-                          height:${topH}%;
-                          background:#000;"></div>`;
+                          width:${wPct}%;height:${hPct}%;background:#000;"></div>`;
     }
     return out;
   })();
 
-  const headerHTML = `
+  /* ---- Header text block ---- */
+  const header = `
     <div style="position:absolute;
-                left:${mmX(SHEET.marginMM + SHEET.anchorSizeMM + 2)}%;
-                top:4mm;
-                width:82mm;
-                font-family:Arial,sans-serif;">
-      <div style="font-size:3.6mm;font-weight:700;line-height:1.2;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                left:${mmX(SHEET.headerLeftMM)}%;
+                top:${mmY(SHEET.headerTopMM)}%;
+                width:${mmW(SHEET.headerWidthMM)}%;
+                height:${mmH(SHEET.headerHeightMM)}%;
+                font-family:Arial,Helvetica,sans-serif;
+                color:#111;">
+      <div style="font-size:4.5mm;font-weight:800;line-height:1.1;
+                  letter-spacing:0.1px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                  max-width:100%;">
         ${esc(assessment.title || 'Assessment')}
       </div>
-      <div style="font-size:2.6mm;color:#444;margin-top:0.6mm;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}${cls && cls.subject ? ' · ' + esc(cls.subject) : ''} · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
+      <div style="font-size:2.8mm;color:#444;margin-top:1.4mm;line-height:1.3;">
+        ${esc(cls ? cls.gradeLevel + ' – ' + cls.section : '')}${
+          cls && cls.subject ? ' · ' + esc(cls.subject) : ''
+        } · SY ${esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}
       </div>
-      <div style="font-size:2.8mm;margin-top:2.2mm;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        <strong>Name:</strong> ${esc(learner ? Utils.fullName(learner) : '')}
+      <div style="font-size:3.2mm;margin-top:2.4mm;line-height:1.3;
+                  display:flex;gap:4mm;">
+        <span style="flex:1;white-space:nowrap;overflow:hidden;">
+          <strong>Name:</strong>&nbsp;${esc(learner ? Utils.fullName(learner) : '')}
+        </span>
       </div>
-      <div style="font-size:2.6mm;margin-top:1.2mm;white-space:nowrap;">
-        <strong>LRN:</strong> ${esc(learner ? (learner.lrn || '') : '')}
-        &nbsp;·&nbsp;
-        <strong>Score:</strong> ________ / ${assessment.maxScore || questionCount}
-        <span style="display:inline-block;margin-left:4mm;padding:0.4mm 2mm;
-                     border:0.3mm solid #222;border-radius:1mm;
-                     font-weight:800;font-size:2.6mm;">FORM ${esc(version)}</span>
+      <div style="font-size:3.0mm;margin-top:1.6mm;line-height:1.3;
+                  display:flex;gap:4mm;align-items:baseline;">
+        <span><strong>LRN:</strong>&nbsp;${esc(learner ? (learner.lrn || '') : '')}</span>
+        <span><strong>Score:</strong>&nbsp;________</span>
+        <span style="padding:0.3mm 2mm;border:0.3mm solid #222;
+                     border-radius:1mm;font-weight:800;font-size:2.7mm;">
+          FORM ${esc(version)}
+        </span>
       </div>
     </div>`;
 
-  const pqr = SHEET.payloadQrSizeMM;
-  const pqrLeft = SHEET.widthMM - SHEET.marginMM - SHEET.anchorSizeMM - 2 - pqr;
-  const payloadQRHTML = `
+  /* ---- Payload QR (26 mm, top-right, clear of the TR marker) ---- */
+  const qrLeft = SHEET.widthMM - SHEET.payloadQrRightGapMM - SHEET.payloadQrSizeMM;
+  const qrTop  = SHEET.payloadQrTopMM;
+  const payloadQR = `
     <div style="position:absolute;
-                left:${mmX(pqrLeft)}%;
-                top:${mmY(SHEET.payloadQrTopMM)}%;
-                width:${(pqr / SHEET.widthMM) * 100}%;
-                height:${(pqr / SHEET.heightMM) * 100}%;
-                padding:1mm;
-                box-sizing:border-box;
-                background:#fff;
-                border:0.2mm solid #ddd;
-                border-radius:1mm;">
+                left:${mmX(qrLeft)}%;top:${mmY(qrTop)}%;
+                width:${mmW(SHEET.payloadQrSizeMM)}%;
+                height:${mmH(SHEET.payloadQrSizeMM)}%;
+                padding:0.4mm;box-sizing:border-box;
+                background:#fff;">
       ${makeQrSvg(payload)}
     </div>`;
 
+  /* ---- Column-letter labels ---- */
   const usedCols = questionCount <= SHEET.maxRowsPerColumn       ? 1
                  : questionCount <= SHEET.maxRowsPerColumn * 2   ? 2
                  : SHEET.maxColumns;
-  const colInnerWidth = SHEET.numberWidthMM
-                      + SHEET.choiceCount * SHEET.bubblePitchMM
-                      + 2;
-  const totalWidth  = usedCols * colInnerWidth + (usedCols - 1) * SHEET.columnGapMM;
-  const contentLeft = (SHEET.widthMM - totalWidth) / 2;
-  const lettersY    = SHEET.headerTopMM - 4;
+  const colWidth = SHEET.numberWidthMM
+                 + (SHEET.choiceCount - 1) * SHEET.bubblePitchMM
+                 + SHEET.bubbleDiaMM
+                 + 1.8;
+  const totalW = usedCols * colWidth + (usedCols - 1) * SHEET.columnGapMM;
+  const contentLeft = (SHEET.widthMM - totalW) / 2;
 
   let lettersHTML = '';
   for (let ci = 0; ci < usedCols; ci++) {
-    const colLeft = contentLeft + ci * (colInnerWidth + SHEET.columnGapMM);
-    const bubbleStartX = colLeft + SHEET.numberWidthMM;
+    const colLeft = contentLeft + ci * (colWidth + SHEET.columnGapMM);
+    const bubbleStartX = colLeft + SHEET.numberWidthMM + SHEET.bubblePitchMM / 2;
     'ABCDE'.split('').forEach((L, i) => {
-      const x = bubbleStartX + i * SHEET.bubblePitchMM + SHEET.bubblePitchMM / 2;
+      const x = bubbleStartX + i * SHEET.bubblePitchMM;
       lettersHTML += `<div style="position:absolute;
-                                  left:${mmX(x)}%;
-                                  top:${mmY(lettersY)}%;
+                                  left:${mmX(x)}%;top:${mmY(SHEET.lettersRowMM)}%;
                                   transform:translate(-50%,-50%);
-                                  font-size:2.8mm;
-                                  font-weight:800;
+                                  font-size:2.9mm;font-weight:800;
                                   font-family:Arial,sans-serif;
-                                  color:#333;">${L}</div>`;
+                                  color:#333;letter-spacing:0.2px;">${L}</div>`;
     });
   }
 
+  /* ---- Bubbles ---- */
   const bubblesHTML = bubbles.map(b => {
-    const dPctX = (SHEET.bubbleDiaMM / SHEET.widthMM)  * 100;
-    const dPctY = (SHEET.bubbleDiaMM / SHEET.heightMM) * 100;
-
-    const bubbleRow = b.choices.map(([x, y]) =>
+    const dX = mmW(SHEET.bubbleDiaMM);
+    const dY = mmH(SHEET.bubbleDiaMM);
+    const row = b.choices.map(([x, y]) =>
       `<div style="position:absolute;
-                   left:${mmX(x)}%;
-                   top:${mmY(y)}%;
-                   width:${dPctX}%;
-                   height:${dPctY}%;
+                   left:${mmX(x)}%;top:${mmY(y)}%;
+                   width:${dX}%;height:${dY}%;
                    transform:translate(-50%,-50%);
-                   border:0.28mm solid #222;
-                   border-radius:50%;
-                   box-sizing:border-box;
-                   background:#fff;"></div>`
+                   border:0.3mm solid #1a1a1a;border-radius:50%;
+                   box-sizing:border-box;background:#fff;"></div>`
     ).join('');
-
-    const numLabel = `<div style="position:absolute;
-                                 left:${mmX(b.numberX)}%;
-                                 top:${mmY(b.numberY)}%;
-                                 transform:translate(-100%,-50%);
-                                 font-size:2.9mm;
-                                 font-weight:700;
-                                 text-align:right;
-                                 padding-right:1mm;
-                                 font-variant-numeric:tabular-nums;
-                                 font-family:Arial,sans-serif;">${b.q + 1}.</div>`;
-
-    return numLabel + bubbleRow;
+    const num = `<div style="position:absolute;
+                             left:${mmX(b.numberX)}%;top:${mmY(b.numberY)}%;
+                             transform:translate(-100%,-50%);
+                             font-size:2.9mm;font-weight:700;
+                             text-align:right;padding-right:1.2mm;
+                             font-variant-numeric:tabular-nums;
+                             font-family:Arial,sans-serif;color:#111;">${b.q + 1}.</div>`;
+    return num + row;
   }).join('');
 
   return `
     <div class="omr-sheet" style="position:relative;
                                   width:${SHEET.widthMM}mm;
                                   height:${SHEET.heightMM}mm;
-                                  background:#fff;
-                                  color:#000;
+                                  background:#fff;color:#000;
                                   font-family:Arial,sans-serif;
-                                  overflow:hidden;
-                                  box-sizing:border-box;">
-      ${anchorQR('KLAZ-OMR-TL', anchors.TL[0], anchors.TL[1])}
-      ${anchorQR('KLAZ-OMR-TR', anchors.TR[0], anchors.TR[1])}
-      ${anchorQR('KLAZ-OMR-BL', anchors.BL[0], anchors.BL[1])}
-      ${anchorQR('KLAZ-OMR-BR', anchors.BR[0], anchors.BR[1])}
+                                  overflow:hidden;box-sizing:border-box;">
+      ${markerHTML}
       ${tickHTML}
-      ${headerHTML}
-      ${payloadQRHTML}
+      ${header}
+      ${payloadQR}
       ${lettersHTML}
       ${bubblesHTML}
     </div>`;
 }
 
-  /* Prints answer sheets in A4 LANDSCAPE, two sheets per page.
-     Learners are grouped in pairs (top-left + top-right); the final page
-     pads with a blank half-sheet when the count is odd. */
-  async function printSheets(assessmentId) {
-    const a = await DB.get('assessments', assessmentId);
-    if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+/* ========================================================================
+   PRINT PIPELINE — 2 half-sheets per A4 landscape page
+   ======================================================================== */
+async function printSheets(assessmentId) {
+  const a = await DB.get('assessments', assessmentId);
+  if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+  if (!a.questions || !a.questions.length) {
+    UI.toast('Add questions before printing answer sheets.', 'warning'); return;
+  }
+  const qCount = a.questions.length;
+  if (qCount > SHEET.maxQuestions) {
+    UI.toast(
+      `Sheets support up to ${SHEET.maxQuestions} items. This assessment has ${qCount}. ` +
+      `Please split it into two shorter assessments.`,
+      'warning', 6500
+    );
+    return;
+  }
+  const ok = await ensureLibs();
+  if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
-    if (!a.questions || !a.questions.length) {
-      UI.toast('Add questions before printing answer sheets.', 'warning');
-      return;
-    }
-
-    const qCount = a.questions.length;
-    if (qCount > SHEET.maxQuestions) {
-      UI.toast(
-        `Sheets support up to ${SHEET.maxQuestions} items. ` +
-        `This assessment has ${qCount}. Please split it into two shorter assessments.`,
-        'warning', 6500
-      );
-      return;
-    }
-
-    const ok = await ensureLibs();
-    if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
-
-    const learners = State.learners.filter(Utils.isActiveLearner);
-    if (!learners.length) {
-      UI.toast('No active learners in this class.', 'warning');
-      return;
-    }
-
-    const pageCount = Math.ceil(learners.length / 2);
+  const learners = State.learners.filter(Utils.isActiveLearner);
+  if (!learners.length) { UI.toast('No active learners in this class.', 'warning'); return; }
 
   UI.modal({
     title: 'Print Answer Sheets',
@@ -51569,15 +51695,16 @@ function renderSheetHTML(assessment, learner, questionCount) {
         <div>
           Choose a form version. Learners on <strong>different versions</strong>
           see the questions in a different order, so copying is far less useful.
-          Each sheet's payload QR carries the version letter and the scanner
-          looks up the matching answer key automatically.
+          The scanner reads the version letter from the payload QR automatically.
         </div>
       </div>
       <div class="grid grid-3 mb-16">
         ${['A','B','C'].map(v => `
-          <label class="cl-print-option" data-omr-form="${v}"
-                style="cursor:pointer;padding:14px;border:2px solid var(--border);border-radius:10px;text-align:center;transition:all .15s;">
-            <input type="radio" name="omr-form" value="${v}" ${v === 'A' ? 'checked' : ''} style="display:none;">
+          <label data-omr-form="${v}"
+                 style="cursor:pointer;padding:14px;border:2px solid var(--border);
+                        border-radius:10px;text-align:center;transition:all .15s;">
+            <input type="radio" name="omr-form" value="${v}"
+                   ${v === 'A' ? 'checked' : ''} style="display:none;">
             <div style="font-size:22px;font-weight:900;">FORM ${v}</div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
               ${v === 'A' ? 'Original order' : 'Shuffled order'}
@@ -51587,29 +51714,27 @@ function renderSheetHTML(assessment, learner, questionCount) {
       </div>
       <p class="text-sm text-muted" style="margin:0;">
         ${learners.length} active learner${learners.length === 1 ? '' : 's'} ·
-        ${pageCount} A4 landscape page${pageCount === 1 ? '' : 's'} ·
+        ${Math.ceil(learners.length / 2)} A4 landscape page${Math.ceil(learners.length / 2) === 1 ? '' : 's'} ·
         <strong>${qCount}</strong> items per sheet.
       </p>`,
     footer: `
       <button class="btn btn-outline" data-close>Cancel</button>
-      <button class="btn btn-primary" id="omr-form-go">${icon('printer')} Generate Sheets</button>
+      <button class="btn btn-primary" id="omr-form-go">
+        ${icon('printer')} Generate Sheets
+      </button>
     `,
     onOpen: (overlay, close) => {
-      // Visual radio selection
       overlay.querySelectorAll('[data-omr-form]').forEach(card => {
         card.onclick = () => {
           overlay.querySelectorAll('[data-omr-form]').forEach(c => {
-            c.classList.remove('active');
             c.style.borderColor = 'var(--border)';
             c.style.background  = '';
           });
-          card.classList.add('active');
           card.style.borderColor = 'var(--deped-blue)';
           card.style.background  = 'var(--light-blue)';
           card.querySelector('input').checked = true;
         };
       });
-      // Preselect Form A visually
       overlay.querySelector('[data-omr-form="A"]').click();
 
       overlay.querySelector('#omr-form-go').onclick = () => {
@@ -51619,21 +51744,13 @@ function renderSheetHTML(assessment, learner, questionCount) {
       };
     }
   });
-  }
+}
 
-  /* ------------------------------------------------------------------------
-   _buildAndPrintSheets — the sheet generation loop, extracted so the
-   form-version picker modal can call it with a version letter.
-   ------------------------------------------------------------------------ */
 function _buildAndPrintSheets(assessment, learners, qCount, version) {
-  // Persist the version on the assessment so the scanner can find it
-  // even if a printed sheet's QR is damaged.
   assessment.omrFormVersion = version;
+  assessment.omrSheetVersion = 2;   // ArUco sheet format
   DB.put('assessments', assessment).catch(() => {});
 
-  // Build a version-shuffled question order for B/C forms.
-  // The scanner uses the same seeded shuffle to look up the correct
-  // answer for each question position.
   if (version !== 'A') {
     assessment._omrShuffle = _seededShuffle(qCount, `form-${version}-${assessment.id}`);
   } else {
@@ -51644,7 +51761,7 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
   for (let i = 0; i < learners.length; i += 2) {
     const left  = learners[i];
     const right = learners[i + 1] || null;
-    const leftSheet  = renderSheetHTML(assessment, left, qCount);
+    const leftSheet = renderSheetHTML(assessment, left, qCount);
     const rightSheet = right
       ? renderSheetHTML(assessment, right, qCount)
       : '<div class="omr-sheet omr-sheet-blank" style="width:148.5mm;height:210mm;background:#fff;"></div>';
@@ -51675,7 +51792,7 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
     `<div style="padding:0;margin:0;">${pagesHTML.join('')}</div>`;
 
   App.logActivity(
-    `Answer sheets (FORM ${version}) generated for "${assessment.title}" ` +
+    `Answer sheets (FORM ${version}, ArUco) generated for "${assessment.title}" ` +
     `(${learners.length} learners, ${Math.ceil(learners.length / 2)} pages)`,
     'Assessments'
   );
@@ -51689,19 +51806,13 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
     }, 1500);
   });
 }
-/* ------------------------------------------------------------------------
-   _seededShuffle — deterministic Fisher–Yates shuffle seeded from a
-   string. Same seed → same order, so a Form B sheet printed today and
-   a Form B sheet printed next week have the identical question order.
-   ------------------------------------------------------------------------ */
+
 function _seededShuffle(n, seed) {
-  // FNV-1a hash → 32-bit seed
   let h = 2166136261 >>> 0;
   for (let i = 0; i < seed.length; i++) {
     h ^= seed.charCodeAt(i);
     h = Math.imul(h, 16777619) >>> 0;
   }
-  // xorshift32 PRNG
   const rng = () => {
     h ^= h << 13; h >>>= 0;
     h ^= h >> 17;
@@ -51715,43 +51826,34 @@ function _seededShuffle(n, seed) {
   }
   return arr;
 }
-  /* ========================================================================
-     SHARED SCANNER HELPERS (audio, preferences)
-     ======================================================================== */
-  let _audioCtx = null;
-  /* One shared AudioContext (a new one per scanner session leaked contexts, and
-     iOS only allows sound that was primed inside a user gesture). */
-  function primeAudio() {
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return null;
-      if (!_audioCtx || _audioCtx.state === 'closed') _audioCtx = new Ctx();
-      if (_audioCtx.state === 'suspended') _audioCtx.resume();
-      return _audioCtx;
-    } catch (e) { return null; }
-  }
-  function omrPref(key, def) {
-    try { const v = localStorage.getItem('klazassist.omr.' + key); return v === null ? def : v === '1'; }
-    catch (e) { return def; }
-  }
-  function setOmrPref(key, on) {
-    try { localStorage.setItem('klazassist.omr.' + key, on ? '1' : '0'); } catch (e) {}
-  }
 
-  /* ========================================================================
-     SCANNER
-     ======================================================================== */
+/* ========================================================================
+   SCANNER — mobile fullscreen + desktop modal, shared detection pipeline
+   ======================================================================== */
+let _audioCtx = null;
+function primeAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!_audioCtx || _audioCtx.state === 'closed') _audioCtx = new Ctx();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    return _audioCtx;
+  } catch (e) { return null; }
+}
+function omrPref(key, def) {
+  try { const v = localStorage.getItem('klazassist.omr.' + key); return v === null ? def : v === '1'; }
+  catch (e) { return def; }
+}
+function setOmrPref(key, on) {
+  try { localStorage.setItem('klazassist.omr.' + key, on ? '1' : '0'); } catch (e) {}
+}
+
 function openScanner(assessmentId) {
-  // iOS/Safari only allow sound to start inside a user gesture, so prime the
-  // shared AudioContext right here, before any await.
   const audio = primeAudio();
 
   (async () => {
     await loadCalibration();
 
-        /* Resolve the active theme's palette so the canvas overlay matches the
-      rest of the UI. We read the *computed* values because getComputedStyle
-      resolves the CSS custom properties to real colors. */
     const THEME = (() => {
       const s = getComputedStyle(document.documentElement);
       const v = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
@@ -51769,7 +51871,6 @@ function openScanner(assessmentId) {
     const ok = await ensureLibs();
     if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
-    // Base answer key, in the ORIGINAL question order.
     const baseAnswerKey = (a.questions || []).map(q => {
       const type = (q.type || '').toLowerCase();
       if (type !== 'multiple choice') return null;
@@ -51779,10 +51880,6 @@ function openScanner(assessmentId) {
       return idx >= 0 ? idx : null;
     });
 
-    /* Resolve the answer key for a given form version. Form A = the
-      original order. Forms B and C re-order questions according to the
-      same deterministic shuffle used at print time, so the answer for
-      POSITION i on the printed sheet is baseAnswerKey[shuffled[i]]. */
     function resolveAnswerKey(version) {
       if (!version || version === 'A') return baseAnswerKey;
       const shuffled = _seededShuffle(baseAnswerKey.length, `form-${version}-${a.id}`);
@@ -51792,7 +51889,7 @@ function openScanner(assessmentId) {
     const session = {
       assessment: a,
       resolveAnswerKey,
-      answerKey: baseAnswerKey,        // will be swapped per-sheet once version is read
+      answerKey: baseAnswerKey,
       scanned: [],
       recentScans: new Map(),
       pendingConfirm: new Map(),
@@ -51804,11 +51901,10 @@ function openScanner(assessmentId) {
       found: false, procMs: 120, geom: null, ov: null, ovTimer: null,
       lastCenters: null, torchOn: false, zoomIdx: 0, wakeLock: null,
       dupShownAt: new Map(), allDoneShown: false,
+      _pendingSig: null, _pendingVotes: 0,
       prefs: { sound: omrPref('sound', true), haptics: omrPref('haptics', true) }
     };
 
-    /* Working resolutions. QR detection runs at WORK_LONG; once a sheet is locked
-       the bubbles are sampled from a (reused) higher-resolution canvas. */
     const WORK_LONG = 1280;
     const HI_LONG   = 1920;
 
@@ -51823,7 +51919,6 @@ function openScanner(assessmentId) {
 
     let overlay, closeScanner;
     let pushedHistory = false, onPop = null, ro = null;
-
     const $ = (sel) => overlay.querySelector(sel);
 
     /* ══════════════════════════════════════════════════════════════════
@@ -51872,11 +51967,9 @@ function openScanner(assessmentId) {
           </div>
 
           <div class="zg-flash" id="omr-flash"></div>
-
           <div class="zg-card" id="zg-card" hidden role="status" aria-live="polite"></div>
-
           <div class="zg-status-pill" id="omr-status-pill" role="status" aria-live="polite">
-            <div class="zg-status-main" id="omr-status-main">Align squares in viewfinders</div>
+            <div class="zg-status-main" id="omr-status-main">Align all four ArUco markers</div>
             <div class="zg-status-sub" id="omr-status-sub">${Utils.esc(assessLabel)} · ${Utils.esc(classLabel)}</div>
           </div>
 
@@ -51892,8 +51985,8 @@ function openScanner(assessmentId) {
               <h4>Scan like a pro</h4>
               <ul>
                 <li>Lay the sheet <b>flat</b> in good light.</li>
-                <li>Fit <b>all four corner squares</b> inside the dark boxes.</li>
-                <li>Hold still for a second — it beeps and buzzes when graded.</li>
+                <li>Fit <b>all four corner markers</b> inside the guides.</li>
+                <li>Hold still — it beeps and buzzes when graded.</li>
                 <li>Tap the <b>list</b> (top right) to review uncertain answers.</li>
               </ul>
               <button type="button" class="zg-btn primary" id="zg-coach-ok">Got it</button>
@@ -51917,13 +52010,12 @@ function openScanner(assessmentId) {
       document.body.appendChild(overlay);
       document.body.classList.add('zg-scanner-open');
 
-      // Android back button / swipe-back closes the scanner instead of leaving the app.
       try {
         history.pushState({ klazScanner: true }, '');
         pushedHistory = true;
         onPop = () => {
           pushedHistory = false;
-          if (session.sheetOpen) {            // back closes an open sheet first
+          if (session.sheetOpen) {
             try { history.pushState({ klazScanner: true }, ''); pushedHistory = true; } catch (e) {}
             closeSheet();
           } else {
@@ -51950,9 +52042,11 @@ function openScanner(assessmentId) {
       $('#zg-torch').onclick = () => toggleTorch();
       $('#zg-zoom').onclick  = () => cycleZoom();
       const coachOk = $('#zg-coach-ok');
-      if (coachOk) coachOk.onclick = () => { setOmrPref('coach', true); const c = $('#zg-coach'); if (c) c.remove(); };
+      if (coachOk) coachOk.onclick = () => {
+        setOmrPref('coach', true);
+        const c = $('#zg-coach'); if (c) c.remove();
+      };
 
-      // Tap the preview to re-focus (supported browsers only).
       $('#omr-video-wrap').addEventListener('click', (e) => {
         if (e.target.closest('button, .zg-card, .zg-coach')) return;
         refocus();
@@ -51962,11 +52056,10 @@ function openScanner(assessmentId) {
         ro = new ResizeObserver(() => sizeOverlay());
         ro.observe($('#omr-video-wrap'));
       }
-
-    /* ══════════════════════════════════════════════════════════════════
-       DESKTOP — existing modal scanner
-       ══════════════════════════════════════════════════════════════════ */
     } else {
+      /* ════════════════════════════════════════════════════════════════
+         DESKTOP — modal scanner
+         ════════════════════════════════════════════════════════════════ */
       const modal = UI.modal({
         title: 'Scan Answer Sheets · ' + (a.title || ''),
         size: 'modal-lg',
@@ -51975,7 +52068,6 @@ function openScanner(assessmentId) {
             <div class="qr-video-wrap" id="omr-video-wrap">
               <video id="omr-video" playsinline muted autoplay></video>
               <canvas id="omr-canvas" style="display:none;"></canvas>
-
               <div class="qr-sheet-guide" aria-hidden="true">
                 <div class="qr-reticle">
                   <span class="qr-reticle-corner tl"></span>
@@ -51984,11 +52076,9 @@ function openScanner(assessmentId) {
                   <span class="qr-reticle-corner br"></span>
                 </div>
               </div>
-
               <div class="qr-flash" id="omr-flash"></div>
               <div class="qr-video-status" id="omr-status">Starting camera…</div>
             </div>
-
             <div class="qr-stats-row">
               <div class="qr-stat">
                 <span class="qr-stat-label">Scanned</span>
@@ -52002,7 +52092,6 @@ function openScanner(assessmentId) {
                 <div class="qr-progress-bar"><div id="omr-progress-fill" style="width:0%"></div></div>
               </div>
             </div>
-
             <div class="qr-scan-list-wrap">
               <div class="qr-scan-list-head">
                 <span>Graded sheets</span>
@@ -52010,19 +52099,17 @@ function openScanner(assessmentId) {
               </div>
               <div class="qr-scan-list" id="omr-list">
                 <div class="qr-scan-empty">
-                  Point the camera at a printed answer sheet. Align all four corner
-                  QR codes in view. Each sheet is graded automatically and can be
-                  reviewed if any answer is uncertain.
+                  Point the camera at a printed answer sheet. Align all four ArUco
+                  corner markers in view. Each sheet is graded automatically.
                 </div>
               </div>
             </div>
-
             <div class="alert alert-info" style="font-size:12px;margin:0;">
               ${icon('info')}
               <div>
                 <strong>Tips:</strong> good lighting, entire sheet inside the frame,
-                steady hands, no shadows on the corner QR codes. Hold the sheet
-                still for ~1 second so the scan can confirm.
+                steady hands, no shadows on the corner markers. Hold still for
+                ~1 second so the scan can confirm.
               </div>
             </div>
           </div>`,
@@ -52048,9 +52135,6 @@ function openScanner(assessmentId) {
     session.ctx    = session.canvas.getContext('2d', { willReadFrequently: true });
     sizeOverlay();
 
-    /* ----------------------------------------------------------------
-       Lifecycle: tab hidden / phone locked → release camera; come back → resume
-       ---------------------------------------------------------------- */
     const onVisibility = () => {
       if (session.closed) return;
       if (document.hidden) {
@@ -52082,9 +52166,6 @@ function openScanner(assessmentId) {
       }
     }
 
-    /* ----------------------------------------------------------------
-       Wake lock — keep the screen on while scanning a stack of sheets
-       ---------------------------------------------------------------- */
     async function acquireWake() {
       try {
         if (!('wakeLock' in navigator) || session.closed || session.wakeLock) return;
@@ -52097,9 +52178,6 @@ function openScanner(assessmentId) {
       session.wakeLock = null;
     }
 
-    /* ----------------------------------------------------------------
-       Camera lifecycle
-       ---------------------------------------------------------------- */
     async function startCamera() {
       if (session.closed || session.stream || session.starting) return;
       session.starting = true;
@@ -52138,7 +52216,7 @@ function openScanner(assessmentId) {
           };
         }
         acquireWake();
-        setStatus('Align squares in viewfinders');
+        setStatus('Align all four ArUco markers');
         startDecodeLoop();
       } catch (e) {
         session.stream = null;
@@ -52165,7 +52243,6 @@ function openScanner(assessmentId) {
       let caps = {};
       try { caps = (track && track.getCapabilities) ? track.getCapabilities() : {}; } catch (e) {}
       session.caps = caps || {};
-      // Best effort: continuous autofocus makes close-range sheets far sharper.
       try {
         if (caps.focusMode && caps.focusMode.includes('continuous')) {
           await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
@@ -52194,7 +52271,10 @@ function openScanner(assessmentId) {
         session.torchOn = !!on;
       } catch (e) { session.torchOn = false; }
       const b = overlay.querySelector('#zg-torch');
-      if (b) { b.classList.toggle('on', session.torchOn); b.setAttribute('aria-pressed', String(session.torchOn)); }
+      if (b) {
+        b.classList.toggle('on', session.torchOn);
+        b.setAttribute('aria-pressed', String(session.torchOn));
+      }
     }
     function toggleTorch() { if (session.track && session.caps.torch) applyTorch(!session.torchOn); }
 
@@ -52225,10 +52305,6 @@ function openScanner(assessmentId) {
       } catch (e) {}
     }
 
-    /* ----------------------------------------------------------------
-       Decode loop — adaptive: never more than ~50% CPU duty so the UI
-       (buttons, sheets) stays responsive, and faster once a sheet is in view.
-       ---------------------------------------------------------------- */
     function startDecodeLoop() {
       if (session.timer) clearTimeout(session.timer);
       const tick = () => {
@@ -52239,14 +52315,14 @@ function openScanner(assessmentId) {
         try { processFrame(); } catch (e) { console.warn('[OMR] frame error:', e); }
         const spent = performance.now() - t0;
         session.procMs = session.procMs * 0.7 + spent * 0.3;
-        const floor = session.found ? 70 : 150;
+        const floor = session.found ? 55 : 110;
         session.timer = setTimeout(tick, Math.max(floor, Math.round(session.procMs * 0.8)));
       };
       tick();
     }
 
     /* ----------------------------------------------------------------
-       Live overlay — outlines the detected sheet and the answers it read
+       Live overlay helpers
        ---------------------------------------------------------------- */
     function sizeOverlay() {
       const cv = overlay.querySelector('#zg-overlay');
@@ -52264,7 +52340,6 @@ function openScanner(assessmentId) {
       session.ov.ctx.clearRect(0, 0, session.ov.cv.width, session.ov.cv.height);
     }
 
-    /* Maps working-canvas pixels → overlay canvas pixels (video is object-fit: cover). */
     function overlayMapper() {
       const g = session.geom, ov = session.ov;
       if (!g || !ov || !ov.w || !ov.h) return null;
@@ -52286,7 +52361,10 @@ function openScanner(assessmentId) {
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       if (quadPts && quadPts.length === 4) {
         ctx.beginPath();
-        quadPts.forEach((p, i) => { const [x, y] = m.pt(p[0], p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        quadPts.forEach((p, i) => {
+          const [x, y] = m.pt(p[0], p[1]);
+          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        });
         ctx.closePath();
         ctx.lineWidth = 3 * session.ov.dpr;
         ctx.strokeStyle = color;
@@ -52301,10 +52379,14 @@ function openScanner(assessmentId) {
           const r = k.r * m.scale;
           ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r);
           ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r);
-          ctx.lineWidth = 2.5 * session.ov.dpr; ctx.strokeStyle = k.color; ctx.stroke();
+          ctx.lineWidth = 2.5 * session.ov.dpr;
+          ctx.strokeStyle = k.color;
+          ctx.stroke();
         } else {
           ctx.arc(x, y, Math.max(3, k.r * m.scale), 0, Math.PI * 2);
-          ctx.lineWidth = 2.5 * session.ov.dpr; ctx.strokeStyle = k.color; ctx.stroke();
+          ctx.lineWidth = 2.5 * session.ov.dpr;
+          ctx.strokeStyle = k.color;
+          ctx.stroke();
         }
       });
       if (session.ovTimer) clearTimeout(session.ovTimer);
@@ -52312,16 +52394,14 @@ function openScanner(assessmentId) {
     }
 
     /* ----------------------------------------------------------------
-       Frame processing
+       Frame processing — ArUco pipeline
        ---------------------------------------------------------------- */
     function noSheet() {
       session.found = false;
       session.lastCenters = null;
       clearOverlay();
-      setStatus('Align squares in viewfinders');
+      setStatus('Align all four ArUco markers');
     }
-
-    const quadOf = (anchors) => ['TL', 'TR', 'BR', 'BL'].map(k => qrCenter(anchors[k]));
 
     function processFrame() {
       const v = session.video;
@@ -52336,8 +52416,7 @@ function openScanner(assessmentId) {
       let img;
       try { img = session.ctx.getImageData(0, 0, W, Hh); } catch (e) { return; }
       session.geom = { W, H: Hh, vw, vh };
-      
-      // ---- NEW: reject blurry / badly-exposed frames before any heavy work ----
+
       const quality = frameQuality(img);
       if (!quality.ok) {
         session.found = false;
@@ -52347,113 +52426,59 @@ function openScanner(assessmentId) {
         return;
       }
 
-      // QR codes decode at any orientation, and the labelled corners give the
-      // sheet pose, so a single pass is enough (no 4× rotation retries).
-      const qrs = detectQRs(img, 12);
-      if (!qrs.length) { noSheet(); return; }
-      session.found = true;
+      // ---- ArUco detection ----
+      const anchors = detectArucoMarkers(img);
 
-      const anchors = { TL: null, TR: null, BL: null, BR: null };
-      let payload = null;
-      for (const qr of qrs) {
-        const text = String(qr.data || '').trim();
-        if (ANCHOR_PAYLOADS[text]) { anchors[ANCHOR_PAYLOADS[text]] = qr; continue; }
-        if (text.startsWith('{')) {
-          try { const p = JSON.parse(text); if (p && p.e) payload = p; } catch (e) {}
-        }
-      }
-
-      const haveN = ['TL', 'TR', 'BL', 'BR'].filter(n => anchors[n]).length;
-      // ---- Reflect per-corner lock state on the viewfinder squares ----
+      // Update viewfinder lock indicators
       const vf = {
         TL: overlay.querySelector('.zg-viewfinder.tl'),
         TR: overlay.querySelector('.zg-viewfinder.tr'),
         BL: overlay.querySelector('.zg-viewfinder.bl'),
         BR: overlay.querySelector('.zg-viewfinder.br')
       };
-      ['TL','TR','BL','BR'].forEach(name => {
-        const el = vf[name];
-        if (!el) return;
-        el.classList.toggle('ready', !!anchors[name]);
-      });
-      if (haveN < 4) {
-        if (haveN === 0) { noSheet(); return; }
-        drawOverlay(null, THEME.warning, ['TL','TR','BL','BR'].filter(n => anchors[n]).map(n => {
-          const c = qrCenter(anchors[n]);
-          return { x: c[0], y: c[1], r: 14, color: THEME.warning };
-        }));
-        setStatus(`Found ${haveN} of 4 corners — show every corner`, 'warn');
+
+      if (!anchors) {
+        noSheet();
+        Object.values(vf).forEach(el => el && el.classList.remove('ready'));
         return;
       }
 
-      // Mirror per-corner detection onto the four viewfinder squares.
-      const vfEls = {
-        TL: overlay.querySelector('.zg-viewfinder.tl'),
-        TR: overlay.querySelector('.zg-viewfinder.tr'),
-        BL: overlay.querySelector('.zg-viewfinder.bl'),
-        BR: overlay.querySelector('.zg-viewfinder.br')
-      };
-      ['TL', 'TR', 'BL', 'BR'].forEach(name => {
-        const el = vfEls[name];
-        if (el) el.classList.toggle('ready', !!anchors[name]);
+      session.found = true;
+      ['TL','TR','BL','BR'].forEach(name => {
+        if (vf[name]) vf[name].classList.add('ready');
       });
 
-      const quad = quadOf(anchors);
+      const quad = [anchors.TL, anchors.TR, anchors.BR, anchors.BL];
+
+      // ---- Sheet-coord anchors ----
       const sheetAnchors = anchorCenters();
       const srcPts = [sheetAnchors.TL, sheetAnchors.TR, sheetAnchors.BL, sheetAnchors.BR];
-      const dstPts = [qrCenter(anchors.TL), qrCenter(anchors.TR), qrCenter(anchors.BL), qrCenter(anchors.BR)];
+      const dstPts = [anchors.TL, anchors.TR, anchors.BL, anchors.BR];
 
-      // Corner squares touching the frame edge are usually clipped → unreliable.
+      // Corner-clip check
       const edge = Math.max(4, Math.round(Math.max(W, Hh) * 0.01));
-      const clipped = ['TL', 'TR', 'BL', 'BR'].some(n => {
-        const L = anchors[n].location;
-        return [L.topLeftCorner, L.topRightCorner, L.bottomLeftCorner, L.bottomRightCorner]
-          .some(p => p.x < edge || p.y < edge || p.x > W - edge || p.y > Hh - edge);
-      });
+      const clipped = dstPts.some(p =>
+        p[0] < edge || p[1] < edge || p[0] > W - edge || p[1] > Hh - edge
+      );
       if (clipped) {
         drawOverlay(quad, THEME.warning);
-        setStatus('Move back — a corner is cut off', 'warn');
+        setStatus('Move back — a marker is cut off', 'warn');
         return;
       }
 
-      // Motion gate: motion blur is the #1 cause of misread bubbles.
+      // Motion gate
       const now = performance.now();
       const norm = Math.max(W, Hh);
       const prev = session.lastCenters;
       let moving = false;
       if (prev && now - prev.t < 700) {
         const md = Math.max(...dstPts.map((p, i) => Math.hypot(p[0] - prev.pts[i][0], p[1] - prev.pts[i][1]))) / norm;
-        moving = md >  0.035;;
+        moving = md > 0.035;
       }
       session.lastCenters = { t: now, pts: dstPts };
       if (moving) {
         drawOverlay(quad, '#f59e0b');
         setStatus('Hold steady…', 'warn');
-        return;
-      }
-
-      if (!payload) {
-        drawOverlay(quad, '#f59e0b');
-        setStatus('Reading sheet code — hold steady…', 'warn');
-        return;
-      }
-      if (payload.e !== session.assessment.id) {
-        drawOverlay(quad, THEME.danger);
-        setStatus('Sheet is for a different exam', 'warn');
-        return;
-      }
-      // ---- Resolve the per-form answer key from the payload ----
-      const sheetVersion = (payload.v || 'A').toUpperCase();
-      const sheetKey     = session.resolveAnswerKey(sheetVersion);
-      if (sheetKey.length !== baseAnswerKey.length) {
-        drawOverlay(quad, THEME.danger);
-        setStatus(`Form ${sheetVersion} key mismatch — reprint sheets`, 'err');
-        return;
-      }
-      session.answerKey = sheetKey;
-      if (payload.n && payload.n !== baseAnswerKey.length) {
-        drawOverlay(quad, THEME.danger);
-        setStatus(`Exam now has ${baseAnswerKey.length} items, sheet has ${payload.n} — reprint sheets`, 'err');
         return;
       }
 
@@ -52466,8 +52491,33 @@ function openScanner(assessmentId) {
         return;
       }
 
-      // Sample bubbles from a higher-resolution frame when the camera offers one
-      // (reused canvas — no per-frame allocation of a full-size canvas).
+      // ---- Payload QR ----
+      const payload = readPayloadQR(img, H, W, Hh);
+      if (!payload) {
+        drawOverlay(quad, '#f59e0b');
+        setStatus('Reading sheet code — hold steady…', 'warn');
+        return;
+      }
+      if (payload.e !== session.assessment.id) {
+        drawOverlay(quad, THEME.danger);
+        setStatus('Sheet is for a different exam', 'warn');
+        return;
+      }
+      const sheetVersion = (payload.v || 'A').toUpperCase();
+      const sheetKey = session.resolveAnswerKey(sheetVersion);
+      if (sheetKey.length !== baseAnswerKey.length) {
+        drawOverlay(quad, THEME.danger);
+        setStatus(`Form ${sheetVersion} key mismatch — reprint sheets`, 'err');
+        return;
+      }
+      session.answerKey = sheetKey;
+      if (payload.n && payload.n !== baseAnswerKey.length) {
+        drawOverlay(quad, THEME.danger);
+        setStatus(`Exam now has ${baseAnswerKey.length} items — reprint sheets`, 'err');
+        return;
+      }
+
+      // ---- High-res bubble sampling ----
       let sample = img, f = 1;
       const kHi = Math.min(1, HI_LONG / Math.max(vw, vh));
       if (kHi > k * 1.15) {
@@ -52483,11 +52533,16 @@ function openScanner(assessmentId) {
         try { sample = session.hiCtx.getImageData(0, 0, HW, HH); f = HW / W; }
         catch (e) { sample = img; f = 1; }
       }
-      const Hs = [[H[0][0]*f, H[0][1]*f, H[0][2]*f],
-                  [H[1][0]*f, H[1][1]*f, H[1][2]*f],
-                  [H[2][0],   H[2][1],   H[2][2]]];
+      const Hs = [
+        [H[0][0]*f, H[0][1]*f, H[0][2]*f],
+        [H[1][0]*f, H[1][1]*f, H[1][2]*f],
+        [H[2][0],   H[2][1],   H[2][2]]
+      ];
 
-      const anchorDistMM = Math.hypot(sheetAnchors.TR[0] - sheetAnchors.TL[0], sheetAnchors.TR[1] - sheetAnchors.TL[1]);
+      const anchorDistMM = Math.hypot(
+        sheetAnchors.TR[0] - sheetAnchors.TL[0],
+        sheetAnchors.TR[1] - sheetAnchors.TL[1]
+      );
       const pixelDist = Math.hypot(dstPts[1][0] - dstPts[0][0], dstPts[1][1] - dstPts[0][1]);
       const mmPerPxWork = pixelDist > 0 ? (anchorDistMM / pixelDist) : 0.15;
       const mmPerPx = mmPerPxWork / f;
@@ -52503,8 +52558,7 @@ function openScanner(assessmentId) {
       const positions = bubblePositions(questionCount);
 
       const perQuestion = [];
-      let filledCount = 0;
-      let ambiguousCount = 0;
+      let filledCount = 0, ambiguousCount = 0;
       const marks = [];
       const bubbleRwork = (SHEET.bubbleDiaMM * 0.5) / mmPerPxWork;
 
@@ -52514,21 +52568,18 @@ function openScanner(assessmentId) {
         if (res.choice !== null && res.confidence > 0 && res.confidence < 0.6) ambiguousCount++;
         perQuestion.push(res);
 
-        // Annotate every bubble the scanner considered a possible mark —
-        // not just the winner. This lets the teacher see, at a glance, why
-        // a sheet was read the way it was.
         pos.choices.forEach(([bx, by], ci) => {
           const [px, py] = applyH(H, bx, by);
           const isChosen = res.choice === ci;
-          const metric   = res.metrics && res.metrics[ci];
-          const isDark   = metric && metric.valid && metric.ratio < 0.85;
-          if (!isChosen && !isDark) return;          // blank bubble, skip
+          const metric = res.metrics && res.metrics[ci];
+          const isDark = metric && metric.valid && metric.ratio < 0.85;
+          if (!isChosen && !isDark) return;
           marks.push({
             x: px, y: py,
             r: bubbleRwork * (isChosen ? 1.35 : 0.95),
             color: isChosen
               ? (res.confidence >= 0.6 ? THEME.success : THEME.warning)
-              : 'rgba(220,53,69,0.55)'               // dark but not chosen
+              : 'rgba(220,53,69,0.55)'
           });
         });
 
@@ -52541,6 +52592,7 @@ function openScanner(assessmentId) {
       }
       drawOverlay(quad, THEME.success, marks);
 
+      // ---- Learner match ----
       let learner = null;
       if (payload.l) {
         learner = State.learners.find(l => String(l.lrn || '').trim() === String(payload.l).trim());
@@ -52569,43 +52621,32 @@ function openScanner(assessmentId) {
         return;
       }
 
-      // Votes: the same reading on consecutive frames. A mostly-blank sheet (absent
-      // or low-answered learner) is allowed, but needs a longer hold to confirm.
+      // ---- Multi-frame confirmation ----
       const sparse = filledCount / Math.max(1, questionCount) < 0.4;
       const needVotes = CAL.confirmFrames + (sparse ? 1 : 0);
       const signature = perQuestion.map(p => p.choice === null ? (p.multiple ? 'm' : 'x') : p.choice).join(',');
-      const pending = session.pendingConfirm.get(learner.id) || { signature: null, votes: 0 };
-      if (pending.signature === signature) {
-        pending.votes++;
-      } else if (pending.signature === null) {
-        pending.signature = signature;
-        pending.votes = 1;
+
+      if (session._pendingSig === signature) {
+        session._pendingVotes++;
       } else {
-        // Signature changed — but only reset the streak if the change is
-        // substantial. One differing question out of 40 is likely noise, not
-        // a real change of position.
-        const prev = pending.signature.split(',');
-        const curr = signature.split(',');
-        let diffs = 0;
-        for (let i = 0; i < Math.max(prev.length, curr.length); i++) {
-          if (prev[i] !== curr[i]) diffs++;
-        }
-        const threshold = Math.max(1, Math.floor(questionCount * 0.05));
-        if (diffs > threshold) {
-          pending.signature = signature;
-          pending.votes = 1;
-        } else {
-          pending.votes++;
-        }
+        session._pendingSig = signature;
+        session._pendingVotes = 1;
       }
 
       session.recentScans.set(learner.id, t);
-      session.pendingConfirm.delete(learner.id);
-      gradeAndCommit(learner, perQuestion, ambiguousCount);
+
+      if (session._pendingVotes >= needVotes) {
+        session._pendingVotes = 0;
+        session._pendingSig = null;
+        gradeAndCommit(learner, perQuestion, ambiguousCount);
+      } else {
+        drawOverlay(quad, THEME.warning);
+        setStatus(`Confirming… (${session._pendingVotes}/${needVotes})`, 'warn');
+      }
     }
 
     /* ----------------------------------------------------------------
-       Grade + persist
+       Grade + commit
        ---------------------------------------------------------------- */
     function gradeAndCommit(learner, perQuestion, ambiguousCount) {
       let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
@@ -52645,8 +52686,7 @@ function openScanner(assessmentId) {
       const percentage = gradable ? Math.round(((correct + ambiguous) / gradable) * 100) : 0;
 
       const result = {
-        learner,
-        answers: detail,
+        learner, answers: detail,
         correct: correct + ambiguous,
         incorrect, blank, ambiguous, multiple,
         score, percentage,
@@ -52654,13 +52694,11 @@ function openScanner(assessmentId) {
         prev: null, saving: null
       };
 
-      // Saved in the background, but undo/rescan await `result.saving`, so a fast
-      // undo can no longer race the write and leave a ghost result behind.
       result.saving = (async () => {
         try {
           const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', learner.id))
             .find(r => r.assessmentId === session.assessment.id);
-          result.prev = existing ? JSON.parse(JSON.stringify(existing)) : null;   // so undo can restore it
+          result.prev = existing ? JSON.parse(JSON.stringify(existing)) : null;
           const rec = existing || {
             id: Utils.uid('r-'), learnerId: learner.id,
             assessmentId: session.assessment.id,
@@ -52709,7 +52747,7 @@ function openScanner(assessmentId) {
     }
 
     /* ----------------------------------------------------------------
-       Undo / rescan
+       Undo / review
        ---------------------------------------------------------------- */
     async function removeResult(result) {
       if (!result) return;
@@ -52721,7 +52759,7 @@ function openScanner(assessmentId) {
       try { await result.saving; } catch (e) {}
       try {
         if (result.prev) {
-          await DB.put('assessmentResults', result.prev);          // restore what was there before the scan
+          await DB.put('assessmentResults', result.prev);
         } else {
           const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
             .find(r => r.assessmentId === session.assessment.id);
@@ -52734,8 +52772,6 @@ function openScanner(assessmentId) {
       const last = session.scanned[session.scanned.length - 1];
       if (!last) return;
       await removeResult(last);
-      // Undo means "discard": don't instantly re-grade the same sheet that is still
-      // in front of the camera. (Rescan, by contrast, re-grades immediately.)
       session.recentScans.set(last.learner.id, Date.now());
       const who = last.learner.firstName || Utils.fullName(last.learner);
       setStatus(`Undid scan for ${who}`, 'warn');
@@ -52744,9 +52780,6 @@ function openScanner(assessmentId) {
       App.logActivity(`OMR scan undone: ${Utils.fullName(last.learner)}`, 'Assessments');
     }
 
-    /* ----------------------------------------------------------------
-       Review: effective score recomputation (shared by desktop + mobile)
-       ---------------------------------------------------------------- */
     const isFlagged = (p) =>
       p.correct !== null && p.override === undefined &&
       (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
@@ -52818,7 +52851,7 @@ function openScanner(assessmentId) {
        ---------------------------------------------------------------- */
     let _stText = '', _stKind = '';
     function setStatus(text, kind) {
-      if (text === _stText && (kind || '') === _stKind) return;     // avoid DOM churn every frame
+      if (text === _stText && (kind || '') === _stKind) return;
       _stText = text; _stKind = kind || '';
       const mainEl = overlay.querySelector('#omr-status-main');
       if (mainEl) {
@@ -52866,7 +52899,6 @@ function openScanner(assessmentId) {
       } catch (e) {}
     }
 
-    /* Result card (mobile): who was just scanned + one-tap actions. */
     let cardTimer = null;
     function hideCard() {
       const el = overlay.querySelector('#zg-card');
@@ -52894,28 +52926,25 @@ function openScanner(assessmentId) {
       cardTimer = setTimeout(hideCard, ms);
     }
 
-    /* ----------------------------------------------------------------
-       renderList — updates whichever UI is present
-       ---------------------------------------------------------------- */
     function renderList() {
       const countEl = overlay.querySelector('#zg-count');
       const undoBtn = overlay.querySelector('#omr-undo');
       if (countEl) countEl.textContent = String(session.scanned.length);
       if (undoBtn) undoBtn.disabled = session.scanned.length === 0;
 
-      const list       = overlay.querySelector('#omr-list');
-      const dCountEl   = overlay.querySelector('#omr-count');
-      const fillEl     = overlay.querySelector('#omr-progress-fill');
-      const summaryEl  = overlay.querySelector('#omr-summary');
+      const list = overlay.querySelector('#omr-list');
+      const dCountEl = overlay.querySelector('#omr-count');
+      const fillEl = overlay.querySelector('#omr-progress-fill');
+      const summaryEl = overlay.querySelector('#omr-summary');
       if (!list) return;
 
       const total = Math.max(1, totalLearners);
       if (dCountEl) dCountEl.textContent = String(session.scanned.length);
-      if (fillEl)   fillEl.style.width = Math.min(100, Math.round((session.scanned.length / total) * 100)) + '%';
+      if (fillEl) fillEl.style.width = Math.min(100, Math.round((session.scanned.length / total) * 100)) + '%';
 
       if (!session.scanned.length) {
         list.innerHTML = `<div class="qr-scan-empty">
-          Point the camera at a printed answer sheet. Align all four corner QR codes in view.
+          Point the camera at a printed answer sheet. Align all four ArUco corner markers in view.
           Each sheet is graded automatically and can be reviewed if any answer is uncertain.
         </div>`;
         if (summaryEl) summaryEl.textContent = '';
@@ -52930,9 +52959,7 @@ function openScanner(assessmentId) {
         const pct = r.percentage;
         const color = pct >= 85 ? 'var(--success)' : pct >= 70 ? 'var(--deped-blue)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
         const fl = flaggedCount(r);
-        const ambTag = fl
-          ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${fl} uncertain</span>`
-          : '';
+        const ambTag = fl ? `<span class="badge badge-warning" style="font-size:9px;margin-left:4px;">${fl} uncertain</span>` : '';
         return `<div class="qr-scan-row">
           <div class="qr-scan-avatar">${Utils.avatarHTML(r.learner, 30, 11)}</div>
           <div class="qr-scan-body">
@@ -52958,9 +52985,9 @@ function openScanner(assessmentId) {
       });
     }
 
-    /* ══════════════════════════════════════════════════════════════════
-       MOBILE bottom sheets
-       ══════════════════════════════════════════════════════════════════ */
+    /* ----------------------------------------------------------------
+       Mobile bottom sheets
+       ---------------------------------------------------------------- */
     function openSheet({ title, body, footer = '', onClose = null, tall = false }) {
       const sheet = $('#zg-sheet'), backdrop = $('#zg-backdrop');
       $('#zg-sheet-title').textContent = title;
@@ -52975,7 +53002,7 @@ function openScanner(assessmentId) {
       requestAnimationFrame(() => { sheet.classList.add('open'); backdrop.classList.add('open'); });
       session.sheetOnClose = onClose;
       session.sheetOpen = true;
-      session.paused = true;          // stop decoding while the teacher is reading/editing
+      session.paused = true;
       hideCard();
       return { body: bodyEl, foot };
     }
@@ -52984,7 +53011,9 @@ function openScanner(assessmentId) {
       if (!session.sheetOpen) return;
       const sheet = $('#zg-sheet'), backdrop = $('#zg-backdrop');
       sheet.classList.remove('open'); backdrop.classList.remove('open');
-      setTimeout(() => { if (!session.sheetOpen) { sheet.hidden = true; backdrop.hidden = true; } }, 240);
+      setTimeout(() => {
+        if (!session.sheetOpen) { sheet.hidden = true; backdrop.hidden = true; }
+      }, 240);
       session.sheetOpen = false;
       session.paused = false;
       session.lastCenters = null;
@@ -53035,7 +53064,7 @@ function openScanner(assessmentId) {
 
     function showReviewSheet(result) {
       if (!result) return;
-      const edits = new Map();                 // question index → number | null
+      const edits = new Map();
       let filter = flaggedCount(result) ? 'flag' : 'all';
       const eff = (p) => edits.has(p.q) ? edits.get(p.q) : (p.override !== undefined ? p.override : p.detected);
       const letters = 'ABCDE';
@@ -53064,7 +53093,6 @@ function openScanner(assessmentId) {
         const shown = filter === 'flag' ? flagged : graded;
         const tops = bodyEl.scrollTop;
 
-        // Live score preview from pending edits
         let c = 0;
         graded.forEach(p => { const e = eff(p); if (e !== null && e === p.key) c++; });
         const pct = graded.length ? Math.round((c / graded.length) * 100) : 0;
@@ -53178,7 +53206,11 @@ function openScanner(assessmentId) {
 
       bodyEl.querySelectorAll('[data-group="sens"] button').forEach(b => {
         b.onclick = async () => {
-          const map = { strict: { markedRatio: 0.45, fillStrong: 0.75 }, balanced: { markedRatio: DEFAULT_CALIBRATION.markedRatio, fillStrong: DEFAULT_CALIBRATION.fillStrong }, lenient: { markedRatio: 0.65, fillStrong: 0.5 } };
+          const map = {
+            strict:   { markedRatio: 0.45, fillStrong: 0.75 },
+            balanced: { markedRatio: DEFAULT_CALIBRATION.markedRatio, fillStrong: DEFAULT_CALIBRATION.fillStrong },
+            lenient:  { markedRatio: 0.65, fillStrong: 0.5 }
+          };
           await saveCalibration(map[b.dataset.v]);
           bodyEl.querySelectorAll('[data-group="sens"] button').forEach(x => x.classList.toggle('on', x === b));
         };
@@ -53239,11 +53271,9 @@ function openScanner(assessmentId) {
               <div class="text-xs text-muted">${result.correct} correct · ${result.incorrect} wrong · ${result.blank} blank${result.ambiguous ? ' · ' + result.ambiguous + ' uncertain' : ''}</div>
             </div>
           </div>
-
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(26px,1fr));gap:4px;margin-bottom:14px;">
             ${dots}
           </div>
-
           <div class="alert alert-info" style="font-size:12px;">
             ${icon('info')}
             <div>
@@ -53252,7 +53282,6 @@ function openScanner(assessmentId) {
               <strong>amber</strong> = uncertain, <strong>grey</strong> = blank.
             </div>
           </div>
-
           <div id="omr-review-detail"></div>
         `,
         footer: `
@@ -53363,7 +53392,7 @@ function openScanner(assessmentId) {
     }
 
     /* ----------------------------------------------------------------
-       Calibration modal (advanced)
+       Calibration modal
        ---------------------------------------------------------------- */
     function openCalibrationModal() {
       const m = UI.modal({
@@ -53383,7 +53412,7 @@ function openScanner(assessmentId) {
             <label>Mark detection sensitivity: <span id="omr-cal-marked-val">${CAL.markedRatio.toFixed(2)}</span></label>
             <input type="range" min="0.30" max="0.80" step="0.01" value="${CAL.markedRatio}"
                    id="omr-cal-marked" class="noise-slider" style="width:100%;">
-            <small class="text-muted">Lower = stricter (fewer false marks). Higher = more lenient.</small>
+            <small class="text-muted">Lower = stricter. Higher = more lenient.</small>
           </div>
 
           <div class="form-group">
@@ -53397,21 +53426,25 @@ function openScanner(assessmentId) {
             <label>Confident fill fraction: <span id="omr-cal-fill-val">${CAL.fillStrong.toFixed(2)}</span></label>
             <input type="range" min="0.40" max="0.90" step="0.01" value="${CAL.fillStrong}"
                    id="omr-cal-fill" class="noise-slider" style="width:100%;">
-            <small class="text-muted">Higher = requires more complete shading before treating as confident.</small>
+          </div>
+
+          <div class="form-group">
+            <label>Max ArUco bit errors: <span id="omr-cal-ham-val">${CAL.maxHamming}</span></label>
+            <input type="range" min="0" max="4" step="1" value="${CAL.maxHamming}"
+                   id="omr-cal-ham" class="noise-slider" style="width:100%;">
+            <small class="text-muted">Higher tolerates smudged or blistered markers.</small>
           </div>
 
           <div class="form-group">
             <label>Frames to confirm: <span id="omr-cal-frames-val">${CAL.confirmFrames}</span></label>
             <input type="range" min="1" max="4" step="1" value="${CAL.confirmFrames}"
                    id="omr-cal-frames" class="noise-slider" style="width:100%;">
-            <small class="text-muted">More frames = fewer false grades but slower confirmation.</small>
           </div>
 
           <div class="form-group">
             <label>Max alignment error (px): <span id="omr-cal-rms-val">${CAL.maxReprojErrPx.toFixed(1)}</span></label>
             <input type="range" min="1.5" max="8" step="0.5" value="${CAL.maxReprojErrPx}"
                    id="omr-cal-rms" class="noise-slider" style="width:100%;">
-            <small class="text-muted">Higher = accepts sheets photographed at an angle.</small>
           </div>
 
           <div class="divider"></div>
@@ -53428,16 +53461,17 @@ function openScanner(assessmentId) {
         `
       });
 
-      const bind = (id, valId, key, fmt) => {
+      const bind = (id, valId, fmt) => {
         const input = m.overlay.querySelector(id);
         const valEl = m.overlay.querySelector(valId);
         input.oninput = () => { valEl.textContent = fmt(input.value); };
       };
-      bind('#omr-cal-marked', '#omr-cal-marked-val', 'markedRatio', v => Number(v).toFixed(2));
-      bind('#omr-cal-gap',    '#omr-cal-gap-val',    'gapRatio',    v => Number(v).toFixed(2));
-      bind('#omr-cal-fill',   '#omr-cal-fill-val',   'fillStrong',  v => Number(v).toFixed(2));
-      bind('#omr-cal-frames', '#omr-cal-frames-val', 'confirmFrames', v => v);
-      bind('#omr-cal-rms',    '#omr-cal-rms-val',    'maxReprojErrPx', v => Number(v).toFixed(1));
+      bind('#omr-cal-marked', '#omr-cal-marked-val', v => Number(v).toFixed(2));
+      bind('#omr-cal-gap',    '#omr-cal-gap-val',    v => Number(v).toFixed(2));
+      bind('#omr-cal-fill',   '#omr-cal-fill-val',   v => Number(v).toFixed(2));
+      bind('#omr-cal-ham',    '#omr-cal-ham-val',    v => v);
+      bind('#omr-cal-frames', '#omr-cal-frames-val', v => v);
+      bind('#omr-cal-rms',    '#omr-cal-rms-val',    v => Number(v).toFixed(1));
 
       m.overlay.querySelector('[data-close]').onclick = m.close;
 
@@ -53452,6 +53486,7 @@ function openScanner(assessmentId) {
           markedRatio:    Number(m.overlay.querySelector('#omr-cal-marked').value),
           gapRatio:       Number(m.overlay.querySelector('#omr-cal-gap').value),
           fillStrong:     Number(m.overlay.querySelector('#omr-cal-fill').value),
+          maxHamming:     Number(m.overlay.querySelector('#omr-cal-ham').value),
           confirmFrames:  Number(m.overlay.querySelector('#omr-cal-frames').value),
           maxReprojErrPx: Number(m.overlay.querySelector('#omr-cal-rms').value)
         });
@@ -53485,7 +53520,7 @@ function openScanner(assessmentId) {
       }
 
       const errEl = overlay.querySelector('#zg-error');
-      if (errEl) {                                   // mobile: keep the video + header, offer a retry
+      if (errEl) {
         errEl.innerHTML = `
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
             <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
@@ -53519,24 +53554,7 @@ function openScanner(assessmentId) {
   })();
 }
 
-/* ---- Resolve active theme colors for canvas drawing ----
-   CSS variables can't be passed to a canvas context; we read them
-   once when the scanner opens so the overlay matches whatever theme
-   is active (light / dark / navy / noir / sepia / deped-green). */
-const THEME = (() => {
-  const s = getComputedStyle(document.documentElement);
-  const v = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
-  return {
-    success: v('--success',      '#198754'),
-    warning: v('--warning',      '#F59E0B'),
-    danger:  v('--danger',       '#DC3545'),
-    gold:    v('--accent-gold',  '#F7C948'),
-    blue:    v('--deped-blue',   '#0038A8'),
-    cyan:    v('--accent-cyan',  '#06B6D4')
-  };
-})();
-
-  return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
+return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCalibration };
 })();
 
 window.AnswerSheetOMR = AnswerSheetOMR;
