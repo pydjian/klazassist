@@ -51154,10 +51154,14 @@ function detectArucoMarkers(imageData) {
     const sidePx = ((bw + bh) / 2) * SCALE;
     if (sidePx < CAL.minMarkerPx || sidePx > CAL.maxMarkerPx) continue;
     const aspect = bw / bh;
-    if (aspect < 0.70 || aspect > 1.43) continue;
+    // ±33 % aspect tolerance to allow for moderate viewing angles.
+    if (aspect < 0.65 || aspect > 1.54) continue;
     const fill = s.area / (bw * bh);
-    // ArUco outer border is a hollow ring → fill ratio ~0.35–0.65
-    if (fill < 0.25 || fill > 0.72) continue;
+    // An ArUco marker's black outer ring is 20 of 36 cells (0.556 fill).
+    // When grid bits attach to the ring, fill climbs to ~0.90. A solid
+    // black square would be 1.0 and is rejected by the upper bound.
+    if (fill < 0.35 || fill > 0.95) continue;
+    
     // Upscale corner coordinates back to full resolution
     candidates.push({
       corners: {
@@ -51169,7 +51173,11 @@ function detectArucoMarkers(imageData) {
       sidePx
     });
   }
-
+    // ── Debug: publish component/candidate counts to the active session ──
+  if (typeof State !== 'undefined' && State._omrSessionRef) {
+    State._omrSessionRef._dbgComponents = stats.size;
+    State._omrSessionRef._dbgCandidates = candidates.length;
+  }
   if (candidates.length < 4) return null;
 
   // ---- 4. Try to match each candidate against the dictionary ----
@@ -51848,6 +51856,8 @@ function setOmrPref(key, on) {
   try { localStorage.setItem('klazassist.omr.' + key, on ? '1' : '0'); } catch (e) {}
 }
 
+
+
 function openScanner(assessmentId) {
   const audio = primeAudio();
 
@@ -51904,6 +51914,38 @@ function openScanner(assessmentId) {
       _pendingSig: null, _pendingVotes: 0,
       prefs: { sound: omrPref('sound', true), haptics: omrPref('haptics', true) }
     };
+
+        // ── Debug HUD ─────────────────────────────────────────────────────────
+    // Enable with:  window.__OMR_DEBUG = true   (in DevTools console)
+    // Displays live component/candidate/decoded counts over the camera feed.
+    State._omrSessionRef = session;
+
+    function updateDebugHUD() {
+      if (!window.__OMR_DEBUG) {
+        const existing = document.getElementById('omr-debug-hud');
+        if (existing) existing.remove();
+        return;
+      }
+      let hud = document.getElementById('omr-debug-hud');
+      if (!hud) {
+        const host = overlay.querySelector('#omr-video-wrap') || overlay;
+        hud = document.createElement('div');
+        hud.id = 'omr-debug-hud';
+        hud.style.cssText =
+          'position:absolute;top:8px;left:8px;z-index:99;' +
+          'font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+          'color:#0f0;background:rgba(0,0,0,.78);' +
+          'padding:6px 10px;border-radius:6px;white-space:pre;' +
+          'pointer-events:none;letter-spacing:.3px;';
+        host.appendChild(hud);
+      }
+      hud.textContent =
+        'components  ' + (session._dbgComponents || 0) + '\n' +
+        'candidates  ' + (session._dbgCandidates || 0) + '\n' +
+        'decoded     ' + (session._dbgDecoded    || 0) + '\n' +
+        'found       ' + (session.found ? 'yes' : 'no') + '\n' +
+        'quality     ' + (session._dbgQuality    || '—');
+    }
 
     const WORK_LONG = 1280;
     const HI_LONG   = 1920;
@@ -52429,12 +52471,17 @@ function openScanner(assessmentId) {
       // ---- ArUco detection ----
       const anchors = detectArucoMarkers(img);
 
+            // ── Debug HUD update ──
+      session._dbgDecoded = anchors ? 4 : 0;
+      session._dbgQuality = quality.ok ? 'ok' : 'reject';
+      updateDebugHUD();
+
       // Update viewfinder lock indicators
       const vf = {
-        TL: overlay.querySelector('.zg-viewfinder.tl'),
-        TR: overlay.querySelector('.zg-viewfinder.tr'),
-        BL: overlay.querySelector('.zg-viewfinder.bl'),
-        BR: overlay.querySelector('.zg-viewfinder.br')
+        TL: overlay.querySelector('.zg-viewfinder.tl, .qr-reticle-corner.tl'),
+        TR: overlay.querySelector('.zg-viewfinder.tr, .qr-reticle-corner.tr'),
+        BL: overlay.querySelector('.zg-viewfinder.bl, .qr-reticle-corner.bl'),
+        BR: overlay.querySelector('.zg-viewfinder.br, .qr-reticle-corner.br')
       };
 
       if (!anchors) {
