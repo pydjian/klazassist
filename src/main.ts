@@ -51280,9 +51280,14 @@ function decodeArucoMarker(imageData, corners) {
   const CELL_PX = 12;
   const TOTAL_CELLS = 1 + SHEET.markerGridSize + 1;   // 1 border, 4 grid, 1 border
   const SAMPLE = TOTAL_CELLS * CELL_PX;               // 72
-  const srcPts = [corners.TL, corners.TR, corners.BR, corners.BL];
-  const dstPts = [[0,0], [SAMPLE,0], [SAMPLE,SAMPLE], [0,SAMPLE]];
-  const H = computeHomography(srcPts, dstPts);
+  // The rest of the scanner uses the convention H(local) = image, and
+  // applyH(H, local) yields image coordinates. Match that here: build H
+  // so it maps SAMPLE space → IMAGE space. (Previously the arguments
+  // were reversed, which made applyH return coordinates outside the
+  // marker and rejected every candidate.)
+  const srcPts = [corners.TL, corners.TR, corners.BR, corners.BL];   // image px
+  const dstPts = [[0,0], [SAMPLE,0], [SAMPLE,SAMPLE], [0,SAMPLE]];   // sample px
+  const H = computeHomography(dstPts, srcPts);
   if (!H) return null;
 
   // Sample each grid cell's centre and compare against the black/white
