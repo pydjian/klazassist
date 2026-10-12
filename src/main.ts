@@ -53559,6 +53559,207 @@ return { printSheets, openScanner, SHEET, anchorCenters, bubblePositions, loadCa
 
 window.AnswerSheetOMR = AnswerSheetOMR;
 
+/* ============================================================================
+   AnswerSheetOMR.diagnose()
+   ----------------------------------------------------------------------------
+   Runs a battery of layout checks against the current SHEET geometry and
+   opens a printable debug sheet with every element outlined and labelled.
+   Open the DevTools console and run:
+       AnswerSheetOMR.diagnose()
+   ============================================================================ */
+AnswerSheetOMR.diagnose = function () {
+  const failures = [];
+  const warnings = [];
+  const passes   = [];
+  const pass = (m) => passes.push(m);
+  const warn = (m) => warnings.push(m);
+  const fail = (m) => failures.push(m);
+
+  /* ----------------------------------------------------------------
+     1. Every rendered element must sit inside the sheet.
+     ---------------------------------------------------------------- */
+  const anchors = AnswerSheetOMR.anchorCenters();
+  const markerSize = AnswerSheetOMR.SHEET.markerSizeMM;
+  for (const [name, [cx, cy]] of Object.entries(anchors)) {
+    const x0 = cx - markerSize / 2, y0 = cy - markerSize / 2;
+    const x1 = cx + markerSize / 2, y1 = cy + markerSize / 2;
+    if (x0 < 0 || y0 < 0 || x1 > AnswerSheetOMR.SHEET.widthMM || y1 > AnswerSheetOMR.SHEET.heightMM) {
+      fail(`ArUco ${name} marker escapes the sheet: (${x0},${y0})–(${x1},${y1})`);
+    }
+  }
+  if (!failures.length) pass('All four ArUco markers fit inside the sheet.');
+
+  /* ----------------------------------------------------------------
+     2. Payload QR must clear both the header and the TR marker.
+     ---------------------------------------------------------------- */
+  const S = AnswerSheetOMR.SHEET;
+  const qrLeft  = S.widthMM - S.payloadQrRightGapMM - S.payloadQrSizeMM;
+  const qrRight = qrLeft + S.payloadQrSizeMM;
+  const qrTop   = S.payloadQrTopMM;
+  const qrBot   = qrTop + S.payloadQrSizeMM;
+
+  const trLeft = S.widthMM - S.markerInsetMM - S.markerSizeMM;
+  const trTop  = S.markerInsetMM;
+  const trBot  = S.markerInsetMM + S.markerSizeMM;
+
+  if (qrRight > trLeft)          fail(`QR right edge (${qrRight}) overlaps TR marker left edge (${trLeft})`);
+  else if (trLeft - qrRight < 1) warn(`QR is only ${(trLeft - qrRight).toFixed(2)} mm from TR marker (want ≥ 1 mm)`);
+  else                           pass(`QR clears TR marker by ${(trLeft - qrRight).toFixed(2)} mm.`);
+
+  if (qrBot > trBot + 2)         warn(`QR bottom (${qrBot}) extends well below TR marker bottom (${trBot})`);
+  else                           pass(`QR vertical extent overlaps header rows as intended.`);
+
+  const headerRight = S.headerLeftMM + S.headerWidthMM;
+  if (headerRight > qrLeft)      fail(`Header right edge (${headerRight}) overlaps QR left edge (${qrLeft})`);
+  else if (qrLeft - headerRight < 3) warn(`Header-QR gap only ${(qrLeft - headerRight).toFixed(2)} mm (want ≥ 3 mm)`);
+  else                           pass(`Header–QR gap is ${(qrLeft - headerRight).toFixed(2)} mm.`);
+
+  /* ----------------------------------------------------------------
+     3. Question grid must fit between the header and the bottom markers.
+     ---------------------------------------------------------------- */
+  const gridTop = S.gridTopMM;
+  const maxRow  = S.maxRowsPerColumn - 1;
+  const gridBot = gridTop + maxRow * S.rowHeightMM + S.bubbleDiaMM / 2;
+  const blMarkerTop = S.heightMM - S.markerInsetMM - S.markerSizeMM;
+
+  if (gridBot > blMarkerTop) fail(`Grid bottom (${gridBot.toFixed(2)}) overlaps BL/BR markers (top ${blMarkerTop})`);
+  else                       pass(`Grid bottom is ${(blMarkerTop - gridBot).toFixed(2)} mm above the bottom markers.`);
+
+  /* ----------------------------------------------------------------
+     4. Column layout for 3 columns must fit within the sheet.
+     ---------------------------------------------------------------- */
+  const colWidth = S.numberWidthMM
+                 + (S.choiceCount - 1) * S.bubblePitchMM
+                 + S.bubbleDiaMM + 1.8;
+  for (const cols of [1, 2, 3]) {
+    const totalW = cols * colWidth + (cols - 1) * S.columnGapMM;
+    const left   = (S.widthMM - totalW) / 2;
+    const right  = left + totalW;
+    if (left < S.markerInsetMM + S.markerSizeMM) {
+      warn(`${cols}-col layout starts at x=${left.toFixed(2)} — near the left markers (${S.markerInsetMM + S.markerSizeMM})`);
+    } else if (right > S.widthMM - S.markerInsetMM - S.markerSizeMM) {
+      warn(`${cols}-col layout ends at x=${right.toFixed(2)} — near the right markers`);
+    } else {
+      pass(`${cols}-column layout spans x=${left.toFixed(2)} to ${right.toFixed(2)} mm.`);
+    }
+  }
+
+  /* ----------------------------------------------------------------
+     5. QR module size at realistic camera resolutions.
+     ---------------------------------------------------------------- */
+  const payloadSample = JSON.stringify({
+    e: 'a-0123456789', l: '136012345678', n: 40, c: 5, v: 'A'
+  });
+  // QR version 5 at ECC-M = 37 modules (this is what a ~60-char payload needs).
+  const QR_MODULES = 37;
+  const moduleMM   = S.payloadQrSizeMM / QR_MODULES;
+
+  const resol = [
+    { label: 'SD phone (854 px)',       px: 854 },
+    { label: 'HD phone (1280 px)',      px: 1280 },
+    { label: 'FHD phone (1920 px)',     px: 1920 },
+    { label: '4K phone (3840 px)',      px: 3840 }
+  ];
+  for (const r of resol) {
+    const pxPerMM = r.px / S.widthMM;
+    const pxPerModule = moduleMM * pxPerMM;
+    if (pxPerModule < 2.5) fail(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — too small for jsQR`);
+    else if (pxPerModule < 3.5) warn(`  ${r.label}: ${pxPerModule.toFixed(1)} px/module — marginal`);
+    else                        pass(`${r.label}: ${pxPerModule.toFixed(1)} px/module — reliable.`);
+  }
+
+  /* ----------------------------------------------------------------
+     6. Bubble pitch must exceed bubble diameter (no touching).
+     ---------------------------------------------------------------- */
+  const pitch = S.bubblePitchMM, dia = S.bubbleDiaMM;
+  const gap = pitch - dia;
+  if (gap < 1.0) fail(`Bubble gap only ${gap.toFixed(2)} mm — bubbles may touch`);
+  else           pass(`Bubble gap is ${gap.toFixed(2)} mm (pitch ${pitch} mm, Ø ${dia} mm).`);
+
+  /* ----------------------------------------------------------------
+     Report + open the debug sheet
+     ---------------------------------------------------------------- */
+  const total = passes.length + warnings.length + failures.length;
+  console.log(
+    `%c[OMR diagnose] ${passes.length}/${total} passed · ${warnings.length} warn · ${failures.length} fail`,
+    `font-weight:bold;color:${failures.length ? '#DC3545' : warnings.length ? '#F59E0B' : '#198754'};font-size:13px;`
+  );
+  failures.forEach(m => console.error('  ✗ ' + m));
+  warnings.forEach(m => console.warn ('  ! ' + m));
+  passes  .forEach(m => console.log  ('  ✓ ' + m));
+
+  // Render the debug sheet into the print area so it can be visually verified.
+  const a = { title: 'Layout Diagnostic', maxScore: 40, omrFormVersion: 'A', id: '__diag__' };
+  const dummyLearner = { lrn: '136012345678', firstName: 'Juan', middleName: 'R.', lastName: 'Dela Cruz', photo: '' };
+  const sheet = renderSheetHTML(a, dummyLearner, 40);
+
+  // Wrap in an outline-only overlay that draws every declared element boundary.
+  const dbg = document.getElementById('print-area') || document.body;
+  dbg.innerHTML = `
+    <div style="padding:20px;background:#e5e7eb;">
+      <h2 style="font-family:Arial;font-size:14px;margin:0 0 10px;">
+        OMR Layout Diagnostic · ${passes.length}/${total} checks passed
+      </h2>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;">
+        <div style="position:relative;width:148.5mm;height:210mm;background:#fff;
+                    box-shadow:0 4px 24px rgba(0,0,0,.15);">
+          ${sheet}
+          <!-- marker outlines -->
+          ${Object.entries(anchorCenters()).map(([n,[x,y]]) => {
+            const s = SHEET.markerSizeMM;
+            const px = ((x - s/2) / SHEET.widthMM)  * 100;
+            const py = ((y - s/2) / SHEET.heightMM) * 100;
+            const pw = (s / SHEET.widthMM)  * 100;
+            const ph = (s / SHEET.heightMM) * 100;
+            return `<div style="position:absolute;left:${px}%;top:${py}%;
+                                width:${pw}%;height:${ph}%;
+                                border:0.5mm solid red;box-sizing:border-box;
+                                pointer-events:none;"></div>`;
+          }).join('')}
+          <!-- QR outline -->
+          <div style="position:absolute;
+                      left:${(qrLeft / SHEET.widthMM) * 100}%;
+                      top:${(qrTop / SHEET.heightMM) * 100}%;
+                      width:${(S.payloadQrSizeMM / SHEET.widthMM) * 100}%;
+                      height:${(S.payloadQrSizeMM / SHEET.heightMM) * 100}%;
+                      border:0.5mm solid blue;box-sizing:border-box;
+                      pointer-events:none;"></div>
+          <!-- header outline -->
+          <div style="position:absolute;
+                      left:${(S.headerLeftMM / SHEET.widthMM) * 100}%;
+                      top:${(S.headerTopMM / SHEET.heightMM) * 100}%;
+                      width:${(S.headerWidthMM / SHEET.widthMM) * 100}%;
+                      height:${(S.headerHeightMM / SHEET.heightMM) * 100}%;
+                      border:0.5mm dashed green;box-sizing:border-box;
+                      pointer-events:none;"></div>
+        </div>
+        <div style="font-family:Arial;font-size:12px;max-width:340px;line-height:1.6;">
+          <strong>Legend</strong><br>
+          <span style="color:red;">■</span> ArUco markers<br>
+          <span style="color:blue;">■</span> Payload QR (${S.payloadQrSizeMM} mm)<br>
+          <span style="color:green;">┄</span> Header text block<br>
+          <br>
+          <strong>QR module size:</strong> ${moduleMM.toFixed(3)} mm / module<br>
+          <strong>Camera resolution → px/module:</strong><br>
+          ${resol.map(r => `&nbsp;&nbsp;• ${r.label}: ${(moduleMM * (r.px / S.widthMM)).toFixed(1)} px`).join('<br>')}
+          <br><br>
+          <button onclick="window.print()" style="padding:8px 16px;font:600 13px Arial;
+                  background:#0038A8;color:#fff;border:none;border-radius:6px;cursor:pointer;">
+            Print diagnostic sheet
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  // Return a machine-readable summary so the caller can branch on it.
+  return {
+    passed:  passes.length,
+    warned:  warnings.length,
+    failed:  failures.length,
+    details: { passes, warnings, failures }
+  };
+};
+
 /* ── QR Attendance Scanner entry point ─────────────────────────────── */
 Pages.openAttendanceScanner = function () {
   const content = document.getElementById('content');
@@ -56818,20 +57019,7 @@ document.addEventListener('DOMContentLoaded', () => {
     Presenter.initLearnerWindow();
     return;
   }
-    /* ==========================================================================
-     PWA — service worker + install prompt
-     ========================================================================== */
 
-  // Register the service worker so the app works offline once cached.
-  // Skipped inside the learner/presenter window — that view doesn't need
-  // its own SW registration.
-  if ('serviceWorker' in navigator && !Presenter.isLearnerWindow()) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').catch(e =>
-        console.warn('[SW] Registration failed:', e)
-      );
-    });
-  }
 
   // Capture the browser's install prompt so we can offer our own button.
   let _deferredInstallPrompt = null;

@@ -7428,6 +7428,9 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
     --text: #000 !important;
     --card: #fff !important;
     --border: #ccc !important;
+    --deped-blue: #000 !important;
+    --secondary-blue: #333 !important;
+    --accent-gold: #666 !important;
   }
 }
 /* ============================================================================
@@ -12311,46 +12314,6 @@ body.zg-scanner-open {
   display: block;
 }
 
-/* ----------------------------------------------------------------------------
-   Four corner viewfinders — sized and positioned to match the printed A5
-   anchor QR codes.
-
-   The printed sheet is A5 portrait (148.5 × 210 mm) with each corner anchor
-   QR code centred 11.5 mm from the sheet edges.  That is:
-        11.5 / 148.5  →  7.74 % in from left/right
-        11.5 / 210    →  5.48 % in from top/bottom
-
-   When a properly framed sheet fills a portrait camera feed, those anchors
-   appear at roughly 8 % horizontal and 10–14 % vertical inset from the frame
-   edges (the exact value depends on the phone's aspect ratio).  The
-   viewfinders below sit at those proportional insets — the user simply
-   aligns each printed QR code inside its matching square.
-   ---------------------------------------------------------------------------- */
-.zg-viewfinder {
-  position: absolute;
-  width: 14%;
-  height: 9%;
-  pointer-events: none;
-  z-index: 3;
-
-  background: rgba(15, 23, 42, 0.42);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
-
-  border: 2.5px solid var(--accent-gold, #F7C948);
-  border-radius: 6px;
-
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.10) inset,
-    0 0 14px rgba(247, 201, 72, 0.55),
-    0 0 30px rgba(247, 201, 72, 0.20);
-
-  transition:
-    border-color 0.25s ease,
-    background   0.25s ease,
-    box-shadow   0.25s ease;
-}
-
 /* ============================================================================
    CORNER VIEWFINDERS
    ----------------------------------------------------------------------------
@@ -14118,26 +14081,6 @@ body.zg-scanner-open #toast-container {
   width: min(92%, calc(72dvh * 148.5 / 210));
   height: auto;
   max-width: 92%;
-}
-.zg-viewfinder {
-  position: absolute;
-  width: 12.79%;
-  height: 9.05%;
-  border: 2px solid var(--accent-gold, #F7C948);
-  border-radius: 5px;
-  background: rgba(15, 23, 42, .12);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.65) inset, 0 0 0 2px rgba(0,0,0,.35);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-.zg-viewfinder.tl { top: 1.905%; left: 2.694%; right: auto; bottom: auto; }
-.zg-viewfinder.tr { top: 1.905%; right: 2.694%; left: auto; bottom: auto; }
-.zg-viewfinder.bl { bottom: 1.905%; left: 2.694%; right: auto; top: auto; }
-.zg-viewfinder.br { bottom: 1.905%; right: 2.694%; left: auto; top: auto; }
-.zg-viewfinder.ready {
-  border-color: var(--success, #198754);
-  background: rgba(25, 135, 84, .16);
-  box-shadow: 0 0 0 1px rgba(255,255,255,.8) inset, 0 0 0 2px rgba(25,135,84,.45);
 }
 
 /* Desktop guide uses the same paper geometry as the mobile scanner. */
