@@ -214,6 +214,22 @@ const SF9_LEARNING_AREAS = {
     'Physical Education and Health'
   ]
 };
+
+/* ============================================================================
+   GRADE LEVELS — canonical dropdown source
+   ----------------------------------------------------------------------------
+   The list below is the only set KlazAssist ever needs to recognise. Every
+   downstream parser (resolveWeightKey, resolveSf9Band, getGradingMode) uses
+   `Grade N` prefix matching, so the exact casing here is the single source of
+   truth for what the UI presents and what gets stored.
+   ============================================================================ */
+const GRADE_LEVELS = [
+  'Kindergarten',
+  'Grade 1', 'Grade 2', 'Grade 3',
+  'Grade 4', 'Grade 5', 'Grade 6',
+  'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10',
+  'Grade 11', 'Grade 12'
+];
 /* MAPEH is the average of its two sub-areas. The sub-areas remain enterable
    (they come from different subject teachers), but MAPEH itself is
    auto-computed, read-only, and is the only MAPEH-related value included
@@ -1053,46 +1069,57 @@ const GradingEngine = {
     return !!(this._overrides && this._overrides[policyVersion]);
   },
 
-  /** Existing resolvePolicy — MODIFY the return value to merge overrides. */
   resolvePolicy(context = {}) {
     const sy = context.schoolYear
       || (typeof State !== 'undefined' ? State.schoolYear : null)
       || CONFIG.DEFAULT_SCHOOL_YEAR;
+
+    const gradeLevel = context.gradeLevel
+      || (typeof State !== 'undefined' && State.activeClass ? State.activeClass.gradeLevel : null);
+
     let base;
     if (sy >= '2027-2028')      base = GRADING_POLICIES['ZERO-BASED-2027'];
     else if (sy >= '2026-2027') base = GRADING_POLICIES['DO015-2026'];
     else                        base = GRADING_POLICIES['LEGACY-DO8-2015'];
 
     const override = this._overrides && this._overrides[base.version];
-    if (!override) return base;
+    let merged = base;
 
-    // Shallow-clone so we never mutate the master GRADING_POLICIES object
-    const merged = Object.assign({}, base);
+    if (override) {
+      // Shallow-clone so we never mutate the master GRADING_POLICIES object
+      merged = Object.assign({}, base);
 
-    // Merge weight overrides key by key
-    if (override.weights && typeof override.weights === 'object') {
-      merged.weights = Object.assign({}, base.weights || {});
-      Object.keys(override.weights).forEach(key => {
-        if (override.weights[key]) {
-          merged.weights[key] = Object.assign({}, override.weights[key]);
-        }
-      });
+      // Merge weight overrides key by key
+      if (override.weights && typeof override.weights === 'object') {
+        merged.weights = Object.assign({}, base.weights || {});
+        Object.keys(override.weights).forEach(key => {
+          if (override.weights[key]) {
+            merged.weights[key] = Object.assign({}, override.weights[key]);
+          }
+        });
+      }
+
+      // Replace the transmutation table or disable it entirely
+      if (override.transmutation === null) {
+        merged.transmutation = null;
+      } else if (override.transmutation && typeof override.transmutation === 'object') {
+        merged.transmutation = {
+          version: (base.transmutation && base.transmutation.version || base.version) + '-OVERRIDE',
+          label:   override.transmutation.label || 'Custom Transmutation Table',
+          table:   Array.isArray(override.transmutation.table)
+                    ? override.transmutation.table.map(b => ({ min: +b.min, max: +b.max, reported: +b.reported }))
+                    : (base.transmutation ? base.transmutation.table : [])
+        };
+      }
     }
 
-    // Replace the transmutation table or disable it entirely
-    if (override.transmutation === null) {
-      merged.transmutation = null;
-    } else if (override.transmutation && typeof override.transmutation === 'object') {
-      merged.transmutation = {
-        version: (base.transmutation && base.transmutation.version || base.version) + '-OVERRIDE',
-        label:   override.transmutation.label || 'Custom Transmutation Table',
-        table:   Array.isArray(override.transmutation.table)
-                   ? override.transmutation.table.map(b => ({ min: +b.min, max: +b.max, reported: +b.reported }))
-                   : (base.transmutation ? base.transmutation.table : [])
-      };
-    }
-
-    return merged;
+    // Stamp the grading mode on the *returned* object only. The master
+    // registry entry stays untouched, so a Grade 2 class and a Grade 1 class
+    // can resolve the same policy object but receive different modes.
+    // Clone once so we never write `gradingMode` back to the shared registry.
+    const result = Object.assign({}, merged);
+    result.gradingMode = this.getGradingMode(gradeLevel, result);
+    return result;
   },
 
   /** Determine which key-stage/subject weight key applies. */
@@ -1121,6 +1148,29 @@ const GradingEngine = {
       }
     }
     return 'KS2_CORE';
+  },
+    /**
+   * Determine whether a grade level reports descriptively or numerically.
+   *
+   * Per DO 015, s. 2026:
+   *   • SY 2026-2027: Kindergarten and Grade 1 report descriptively.
+   *                   Grades 2-3 report numerically (KS1_CORE/SKILL weights
+   *                   still apply, transmutation still applies).
+   *   • SY 2027-2028+: verify against the order's implementing guidance.
+   *
+   * Returns 'descriptive' or 'numerical'. Never returns null.
+   */
+  getGradingMode(gradeLevel, policy) {
+    const g = String(gradeLevel || '').toLowerCase().trim();
+
+    // Kindergarten / Grade 1 → descriptive under DO 015, s. 2026
+    if (/^(k|kinder|kindergarten|grade\s*1|g1)\b/.test(g)) {
+      // Only applies to the DO015-2026 policy. Legacy DO 8 classes and the
+      // placeholder ZERO-BASED-2027 policy keep their own rules.
+      if (policy && policy.version === 'DO015-2026') return 'descriptive';
+    }
+
+    return 'numerical';
   },
   calculatePercentageScore(raw, highest) {
     const r = Number(raw), h = Number(highest);
@@ -5320,7 +5370,10 @@ toggleTheme() {
     for (const cls of State.classes) {
       if (cls.gradingPolicyVersion) continue; // already migrated
       const sy = cls.schoolYear || State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
-      const policy = GradingEngine.resolvePolicy({ schoolYear: sy });
+      const policy = GradingEngine.resolvePolicy({
+        schoolYear: sy,
+        gradeLevel: cls.gradeLevel
+      });
       cls.gradingPolicyVersion = policy.version;
       cls.termModel = policy.termModel;
       if (policy.version === 'LEGACY-DO8-2015') {
@@ -6187,7 +6240,7 @@ async openAssignAssessmentModal(assessmentId) {
             schoolHead: document.getElementById('wz-head').value.trim()
           };
         } else if (step === 4) {
-          const grade = document.getElementById('wz-cls-grade').value.trim();
+          const grade = Pages.readGradeLevel(m.overlay, 'wz-cls-grade');
           const section = document.getElementById('wz-cls-section').value.trim();
           if (!grade || !section) { UI.toast('Grade Level and Section are required', 'warning'); return false; }
           wizardData.class = {
@@ -6235,7 +6288,7 @@ async openAssignAssessmentModal(assessmentId) {
       } else if (step === 4) {
         html += `<h2 style="font-size:18px;margin-bottom:6px;">Create Your First Class</h2>
           <p class="text-muted text-sm mb-16">You can create more classes later.</p>
-          <div class="form-row"><div class="form-group"><label>Grade Level <span class="req">*</span></label><input class="form-control" id="wz-cls-grade" placeholder="e.g. Grade 9"></div>
+          <div class="form-row"><div class="form-group"><label>Grade Level <span class="req">*</span></label>${Pages.gradeLevelSelectHTML('wz-cls-grade', '')}</div>
           <div class="form-group"><label>Section <span class="req">*</span></label><input class="form-control" id="wz-cls-section" placeholder="e.g. Saint Matthew"></div></div>
           <div class="form-row"><div class="form-group"><label>Subject</label><input class="form-control" id="wz-cls-subject" placeholder="e.g. TLE"></div>
           <div class="form-group"><label>Room</label><input class="form-control" id="wz-cls-room" placeholder="e.g. Room 201"></div></div>
@@ -6269,6 +6322,9 @@ async openAssignAssessmentModal(assessmentId) {
         body.querySelector('#wz-sample').onclick = () => App.finishWizard(true);
         body.querySelector('#wz-skip').onclick = () => App.finishWizard(false, true);
       }
+      if (step === 4) {
+        Pages.wireGradeLevelSelect(m.overlay, 'wz-cls-grade');
+      }
     };
 
     this._wizardData = () => wizardData;
@@ -6292,7 +6348,10 @@ async openAssignAssessmentModal(assessmentId) {
         await DB.put('schools', s);
       }
       if (data.class) {
-        const policy = GradingEngine.resolvePolicy({ schoolYear: data.class.schoolYear });
+        const policy = GradingEngine.resolvePolicy({
+          schoolYear: data.class.schoolYear,
+          gradeLevel: data.class.gradeLevel
+        });
         const isLegacy = policy.version === 'LEGACY-DO8-2015';
         const weightKey = isLegacy ? 'DEFAULT' : GradingEngine.resolveWeightKey(data.class.gradeLevel, data.class.subject, null);
         const c = Object.assign({
@@ -6326,7 +6385,7 @@ async openAssignAssessmentModal(assessmentId) {
     const body = `
       <div class="form-row">
         <div class="form-group"><label>Grade Level <span class="req">*</span></label>
-          <input class="form-control" id="cf-grade" value="${existing ? Utils.attr(existing.gradeLevel) : ''}" placeholder="e.g. Grade 9"></div>
+                  ${Pages.gradeLevelSelectHTML('cf-grade', existing ? existing.gradeLevel : '')}</div>
         <div class="form-group"><label>Section <span class="req">*</span></label>
           <input class="form-control" id="cf-section" value="${existing ? Utils.attr(existing.section) : ''}" placeholder="e.g. Saint Claire"></div>
       </div>
@@ -6389,6 +6448,7 @@ async openAssignAssessmentModal(assessmentId) {
                <button class="btn btn-primary" id="cf-save">${existing ? 'Save Changes' : 'Create Class'}</button>`
     });
     const el = (sel) => m.overlay.querySelector(sel);
+    Pages.wireGradeLevelSelect(m.overlay, 'cf-grade');
 
     const updateLegacyTotal = () => {
       const ww = Number(el('#cf-ww').value) || 0, pt = Number(el('#cf-pt').value) || 0, qa = Number(el('#cf-qa').value) || 0;
@@ -6402,11 +6462,14 @@ async openAssignAssessmentModal(assessmentId) {
     };
     const refreshPreview = () => {
       const sy = el('#cf-sy').value.trim() || State.schoolYear;
-      const grade = el('#cf-grade').value.trim();
+      const grade = Pages.readGradeLevel(m.overlay, 'cf-grade');
       const subject = el('#cf-subject').value.trim();
       const isSHS = /grade 11|grade 12/i.test(grade);
       el('#cf-shsclass-wrap').style.display = isSHS ? 'block' : 'none';
-      const policy = GradingEngine.resolvePolicy({ schoolYear: sy });
+      const policy = GradingEngine.resolvePolicy({
+        schoolYear: sy,
+        gradeLevel: grade
+      });
       const isLegacy = policy.version === 'LEGACY-DO8-2015';
       el('#cf-legacy-weights').style.display = isLegacy ? 'block' : 'none';
       el('#cf-override-wrap').style.display = isLegacy ? 'none' : 'block';
@@ -6435,12 +6498,15 @@ async openAssignAssessmentModal(assessmentId) {
 
     m.overlay.querySelector('[data-cancel]').onclick = m.close;
     m.overlay.querySelector('#cf-save').onclick = async () => {
-      const grade = el('#cf-grade').value.trim();
+      const grade = Pages.readGradeLevel(m.overlay, 'cf-grade');
       const section = el('#cf-section').value.trim();
       if (!grade || !section) { UI.toast('Grade Level and Section are required', 'warning'); return; }
       const sy = el('#cf-sy').value.trim() || State.schoolYear;
       const subject = el('#cf-subject').value.trim();
-      const policy = GradingEngine.resolvePolicy({ schoolYear: sy });
+      const policy = GradingEngine.resolvePolicy({
+        schoolYear: sy,
+        gradeLevel: grade
+      });
       const isLegacy = policy.version === 'LEGACY-DO8-2015';
       const isSHS = /grade 11|grade 12/i.test(grade);
 
@@ -10305,6 +10371,8 @@ const BEHAVIOR_STATUSES = {
    PAGES
    ============================================================================ */
   const Pages = {
+
+  _gbFocusIntent: null,
 
     /* ============================================================================
     TEACHING LOAD — time helpers
@@ -15078,8 +15146,15 @@ async gradebook(root) {
     return;
   }
   const cls = State.activeClass;
-  const policy = GRADING_POLICIES[cls.gradingPolicyVersion] || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
-  const isLegacy = policy.version === 'LEGACY-DO8-2015';
+    // Always go through resolvePolicy so the returned object carries
+    // `gradingMode`. The versioned registry alone does not stamp it, and
+    // resolvePolicy already honours `GradingEngine._overrides` internally,
+    // so teacher customizations are still applied.
+    const policy = GradingEngine.resolvePolicy({
+      schoolYear: cls.schoolYear,
+      gradeLevel: cls.gradeLevel
+    });
+    const isLegacy = policy.version === 'LEGACY-DO8-2015';
 
   if (isLegacy) return this.gradebookLegacy(root, cls);
 
@@ -15235,6 +15310,7 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, colum
 
     const avgPct = (list, lr) =>
       list.length ? Utils.avg(list.map(a => lr[a.id] ? (lr[a.id].percentage || 0) : 0)) : 0;
+    const descriptive = policy.gradingMode === 'descriptive';
 
     let html = '';
     const computations = {};
@@ -15280,9 +15356,38 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, colum
       row += st2.map((a, idx) => cellFor(a, idx === 0, 'ex', true)).join('');
       row += te.map((a,  idx) => cellFor(a, idx === 0, 'ex', true)).join('');
 
+      // ── Initial Grade (always present) ──
+      // The internal numeric score. In descriptive mode this is the value the
+      // descriptor is looked up against, so it stays on screen in both modes.
       row += `<td class="gb-computed gb-start-summary">${hasAny ? ig : '—'}</td>`;
-      row += `<td class="gb-final-cell"><span class="grade-badge ${hasAny ? (reportedGrade >= policy.passingGrade ? 'grade-satisfactory' : 'grade-didnot') : ''}">${hasAny ? reportedGrade : '—'}</span></td>`;
-      row += `<td class="text-xs" style="text-align:center;">${Utils.esc(descriptor.label)}</td>`;
+
+      // ── Reported Grade (numerical mode only) ──
+      // Descriptive grading has no transmuted number. Omitting the cell here is
+      // what keeps the body cell count aligned with _gbBuildColumns's header
+      // count when the Reported column is dropped.
+      if (!descriptive) {
+        row += `<td class="gb-final-cell"><span class="grade-badge ${hasAny ? (reportedGrade >= policy.passingGrade ? 'grade-satisfactory' : 'grade-didnot') : ''}">${hasAny ? reportedGrade : '—'}</span></td>`;
+      }
+
+      // ── Descriptor / Rating ──
+      // Numerical: a small caption to the right of the Reported grade.
+      // Descriptive: the primary outcome for the learner, so it gets the badge
+      // treatment. Class name is derived from the descriptor label so the CSS
+      // in Step 9 styles each band (advancing, benchmarking, …) distinctly.
+      if (descriptive) {
+        if (hasAny && descriptor && descriptor.label && descriptor.label !== '—') {
+          const descClass = 'grade-' + String(descriptor.label).replace(/\s+/g, '-').toLowerCase();
+          row += `<td style="text-align:center;"><span class="grade-badge ${descClass}">${Utils.esc(descriptor.label)}</span></td>`;
+        } else {
+          row += `<td style="text-align:center;"><span class="text-muted">—</span></td>`;
+        }
+      } else {
+        row += `<td class="text-xs" style="text-align:center;">${Utils.esc(descriptor.label)}</td>`;
+      }
+
+      // ── Row actions ──
+      // Unchanged. The "View Computation" modal still opens in both modes — see
+      // the caveat below for the one cosmetic detail it still shows.
       row += `<td style="text-align:center;"><button class="icon-btn" title="View Computation" data-view-comp="${Utils.attr(l.id)}">${icon('analysis')}</button></td>`;
       row += `</tr>`;
 
@@ -15350,35 +15455,84 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, colum
     /* ---- Bind score-cell editing ---- */
     body.querySelectorAll('td.gb-score[contenteditable="true"]').forEach(td => {
       td.addEventListener('blur', async () => {
-        const learnerId = td.dataset.learner;
+        const learnerId    = td.dataset.learner;
         const assessmentId = td.dataset.assessment;
-        const max = Number(td.dataset.max) || 100;
-        const val = td.textContent.trim();
-        const num = val === '' ? null : Number(val);
+        const max          = Number(td.dataset.max) || 100;
+        const val          = td.textContent.trim();
+        const num          = val === '' ? null : Number(val);
+
         if (num !== null && (isNaN(num) || num < 0 || num > max)) {
           UI.toast(`Score must be between 0 and ${max}`, 'warning');
+          Pages._gbFocusIntent = null;          // abandon any pending move
           App.navigate('gradebook');
           return;
         }
+
         const existingAll = await DB.getAll('assessmentResults');
-        let rec = existingAll.find(r => r.learnerId === learnerId && r.assessmentId === assessmentId);
+        let rec = existingAll.find(r =>
+          r.learnerId === learnerId && r.assessmentId === assessmentId
+        );
         if (!rec) {
           rec = {
             id: Utils.uid('r-'), learnerId, assessmentId,
             classId: cls.id, score: 0, maxScore: max, percentage: 0
           };
         }
-        rec.score = num || 0;
-        rec.maxScore = max;
+        rec.score      = num || 0;
+        rec.maxScore   = max;
         rec.percentage = GradingEngine.calculatePercentageScore(rec.score, rec.maxScore);
-        rec.updatedAt = new Date().toISOString();
+        rec.updatedAt  = new Date().toISOString();
         await DB.put('assessmentResults', rec);
-        App.logActivity('Grade entered for ' + Utils.fullName(State.learners.find(l => l.id === learnerId) || {}), 'Grading');
+        App.logActivity(
+          'Grade entered for ' +
+          Utils.fullName(State.learners.find(l => l.id === learnerId) || {}),
+          'Grading'
+        );
         App.showAutosave('saved');
+
+        // ── Move focus instead of re-rendering, if a keyboard move is pending ──
+        const intent = Pages._gbFocusIntent;
+        if (intent && document.body.contains(intent)) {
+          Pages._gbFocusIntent = null;
+          intent.focus();
+          try {
+            const rng = document.createRange();
+            rng.selectNodeContents(intent);          // select-all so typing replaces
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(rng);
+          } catch (_) {}
+          return;                                    // ← skip App.navigate()
+        }
+
         App.navigate('gradebook');
       });
+
       td.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); td.blur(); }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+
+        const row = td.closest('tr');
+        const direction = e.shiftKey ? -1 : 1;
+        let sibling = direction === 1
+          ? row.nextElementSibling
+          : row.previousElementSibling;
+
+        // Skip rows that have no editable cells (defensive)
+        while (sibling && !sibling.querySelector('td.gb-score[contenteditable="true"]')) {
+          sibling = direction === 1
+            ? sibling.nextElementSibling
+            : sibling.previousElementSibling;
+        }
+        if (!sibling) { td.blur(); return; }         // first/last row → just save
+
+        const nextTd = sibling.querySelector(
+          `td.gb-score[contenteditable="true"][data-assessment="${CSS.escape(td.dataset.assessment)}"]`
+        );
+        if (!nextTd) { td.blur(); return; }
+
+        Pages._gbFocusIntent = nextTd;
+        td.blur();                                    // triggers save → focus move
       });
     });
 
@@ -15400,46 +15554,137 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, colum
 
 /* ---------- Gradebook sheet: column model + rendering helpers ---------- */
 
-_gbBuildColumns(ww, pt, st1, st2, te) {
+_gbBuildColumns(ww, pt, st1, st2, te, opts = {}) {
+  // Descriptive mode (KS1 under DO 015, s. 2026): Kindergarten and
+  // Grade 1 report a descriptor label per learning area rather than a
+  // transmuted number. The Reported column is dropped, and the trailing
+  // summary column is relabelled to match the DepEd report card wording.
+  // The Initial Grade is retained because it is the internal numeric
+  // value from which the descriptor is derived.
+  const descriptive = opts.descriptive === true;
+
   const cols = [];
-  cols.push({ id: 'idx',  label: '#',       width: 44,  cat: 'meta',    sticky: 1 });
-  cols.push({ id: 'name', label: 'Learner', width: 200, cat: 'meta',    sticky: 2 });
 
+  // ── Meta (sticky) columns ──
+  cols.push({ id: 'idx',  label: '#',       width: 44,  cat: 'meta', sticky: 1 });
+  cols.push({ id: 'name', label: 'Learner', width: 200, cat: 'meta', sticky: 2 });
+
+  // ── Written/Oral Works ──
   ww.forEach((a, i) => cols.push({
-    id: `ww-${a.id}`, label: `WW${i+1}`, sub: a.title || '',
-    width: 68, cat: 'ww', editable: true,
-    assessmentId: a.id, maxScore: a.maxScore || 100
+    id: `ww-${a.id}`,
+    label: `WW${i + 1}`,
+    sub: a.title || '',
+    width: 68,
+    cat: 'ww',
+    editable: true,
+    assessmentId: a.id,
+    maxScore: a.maxScore || 100
   }));
+
+  // ── Product/Performance Tasks ──
   pt.forEach((a, i) => cols.push({
-    id: `pt-${a.id}`, label: `PT${i+1}`, sub: a.title || '',
-    width: 68, cat: 'pt', editable: true,
-    assessmentId: a.id, maxScore: a.maxScore || 100
+    id: `pt-${a.id}`,
+    label: `PT${i + 1}`,
+    sub: a.title || '',
+    width: 68,
+    cat: 'pt',
+    editable: true,
+    assessmentId: a.id,
+    maxScore: a.maxScore || 100
   }));
 
-  // Examinations summary column
-  cols.push({ id: 'ex-summary', label: 'EX', sub: 'Exam %', width: 72, cat: 'ex' });
+  // ── Examinations summary (combined ST1 + ST2 + TE percentage) ──
+  // Present in both modes: the Examinations component still feeds the
+  // initial grade even when the output is expressed as a descriptor.
+  cols.push({
+    id: 'ex-summary',
+    label: 'EX',
+    sub: 'Exam %',
+    width: 72,
+    cat: 'ex'
+  });
 
-  // ST1 / ST2 / TE sub-columns (hidden by default via CSS)
+  // ── Examinations sub-columns (hidden by default via CSS class) ──
   st1.forEach((a, i) => cols.push({
-    id: `st1-${a.id}`, label: `ST1.${i+1}`, sub: a.title || '',
-    width: 68, cat: 'ex', exSub: true, editable: true,
-    assessmentId: a.id, maxScore: a.maxScore || 100
-  }));
-  st2.forEach((a, i) => cols.push({
-    id: `st2-${a.id}`, label: `ST2.${i+1}`, sub: a.title || '',
-    width: 68, cat: 'ex', exSub: true, editable: true,
-    assessmentId: a.id, maxScore: a.maxScore || 100
-  }));
-  te.forEach((a, i) => cols.push({
-    id: `te-${a.id}`, label: `TE${i+1}`, sub: a.title || '',
-    width: 68, cat: 'ex', exSub: true, editable: true,
-    assessmentId: a.id, maxScore: a.maxScore || 100
+    id: `st1-${a.id}`,
+    label: `ST1.${i + 1}`,
+    sub: a.title || '',
+    width: 68,
+    cat: 'ex',
+    exSub: true,
+    editable: true,
+    assessmentId: a.id,
+    maxScore: a.maxScore || 100
   }));
 
-  cols.push({ id: 'initial',    label: 'Initial',    width: 72,  cat: 'summary' });
-  cols.push({ id: 'reported',   label: 'Reported',   width: 72,  cat: 'summary' });
-  cols.push({ id: 'descriptor', label: 'Descriptor', width: 130, cat: 'summary' });
-  cols.push({ id: 'actions',    label: '',           width: 44,  cat: 'actions' });
+  st2.forEach((a, i) => cols.push({
+    id: `st2-${a.id}`,
+    label: `ST2.${i + 1}`,
+    sub: a.title || '',
+    width: 68,
+    cat: 'ex',
+    exSub: true,
+    editable: true,
+    assessmentId: a.id,
+    maxScore: a.maxScore || 100
+  }));
+
+  te.forEach((a, i) => cols.push({
+    id: `te-${a.id}`,
+    label: `TE${i + 1}`,
+    sub: a.title || '',
+    width: 68,
+    cat: 'ex',
+    exSub: true,
+    editable: true,
+    assessmentId: a.id,
+    maxScore: a.maxScore || 100
+  }));
+
+  // ── Initial Grade ──
+  // Always present. It is the internal numeric score, and it is what the
+  // descriptor is looked up against in descriptive mode.
+  cols.push({
+    id: 'initial',
+    label: 'Initial',
+    width: 72,
+    cat: 'summary'
+  });
+
+  // ── Reported Grade ──
+  // Only meaningful under numerical grading. In descriptive mode there is
+  // no transmuted number — the descriptor is the reported outcome — so
+  // omitting the column prevents a phantom empty cell from confusing the
+  // teacher and from breaking the tfoot column math.
+  if (!descriptive) {
+    cols.push({
+      id: 'reported',
+      label: 'Reported',
+      width: 72,
+      cat: 'summary'
+    });
+  }
+
+  // ── Descriptor / Rating ──
+  // Column id stays `descriptor` in both modes so every downstream consumer
+  // (_gbRenderHeader, renderGradebookRowsDO015, resize persistence, column
+  // menu) keeps working unchanged. Only the visible label differs:
+  //   • numerical   → "Descriptor"   (Advancing / Benchmarking / …)
+  //   • descriptive → "Rating"       (KS1 report-card wording)
+  cols.push({
+    id: 'descriptor',
+    label: descriptive ? 'Rating' : 'Descriptor',
+    width: 130,
+    cat: 'summary'
+  });
+
+  // ── Row actions ──
+  cols.push({
+    id: 'actions',
+    label: '',
+    width: 44,
+    cat: 'actions'
+  });
 
   return cols;
 },
@@ -15457,24 +15702,67 @@ _gbRenderColgroup(columns, savedWidths) {
 _gbRenderHeader(columns) {
   const thead = document.getElementById('gb-thead');
   if (!thead) return;
+
   thead.innerHTML = `<tr>${columns.map((col, i) => {
+    thead.querySelectorAll('th[data-assessment-id]').forEach(th => {
+      th.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = Number(th.dataset.colIdx);
+        const col = columns[idx];
+        if (col && col.assessmentId) {
+          Pages._gbOpenColumnMenu(col, e.clientX, e.clientY);
+        }
+      });
+    });
+    
     const sticky = col.sticky === 1 ? ' gb-sticky-1' : col.sticky === 2 ? ' gb-sticky-2' : '';
     const cat    = ' gb-cat-' + col.cat;
     const exSub  = col.exSub ? ' gb-ex-sub' : '';
     const title  = col.sub ? ` title="${Utils.attr(col.sub)}"` : '';
+
     const subHTML = col.sub
       ? `<span class="gb-th-sub">${Utils.esc(col.sub.slice(0, 14))}${col.sub.length > 14 ? '…' : ''}</span>`
       : '';
+
     const canResize = col.id !== 'idx' && col.id !== 'name' && col.id !== 'actions';
     const handleHTML = canResize
       ? `<div class="gb-col-resize" data-col-idx="${i}" data-col-id="${Utils.attr(col.id)}" title="Drag to resize"></div>`
       : '';
-    return `<th class="${cat.trim()}${sticky}${exSub}"${title}>
+
+    // ── Column identity for the context menu ──
+    // Editable data columns carry an `assessmentId` (set in _gbBuildColumns).
+    // Summary/meta/actions columns do not, so they get no menu.
+    const colAttr = col.assessmentId
+      ? ` data-col-idx="${i}" data-assessment-id="${Utils.attr(col.assessmentId)}"`
+      : '';
+
+    return `<th class="${cat.trim()}${sticky}${exSub}"${title}${colAttr}>
       <span class="gb-th-label">${Utils.esc(col.label)}</span>
       ${subHTML}
       ${handleHTML}
     </th>`;
   }).join('')}</tr>`;
+
+  // ── Right-click menu on editable columns ──
+  // Delegated at the thead level so it survives any future re-render
+  // that swaps the inner `<tr>` without rebuilding the binding.
+  if (!thead._gbCtxBound) {
+    thead.addEventListener('contextmenu', (e) => {
+      const th = e.target.closest('th[data-assessment-id]');
+      if (!th || !thead.contains(th)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const idx = Number(th.dataset.colIdx);
+      const col = columns[idx];
+      if (!col || !col.assessmentId) return;
+
+      Pages._gbOpenColumnMenu(col, e.clientX, e.clientY);
+    });
+    thead._gbCtxBound = true;
+  }
 },
 
 _gbWireResizeHandles() {
@@ -15674,6 +15962,7 @@ _gbResetColWidths(columns) {
       </div>`;
     if (State.learners.length) this.renderGradebookRows(ww, pt, qa, weights);
   },
+
   async renderGradebookRows(ww, pt, qa, weights) {
     const body = document.getElementById('gradebook-body');
     if (!body) return;
@@ -15713,25 +16002,79 @@ _gbResetColWidths(columns) {
       </tr>`;
     });
     body.innerHTML = html;
-    body.querySelectorAll('td[contenteditable]').forEach(td => {
+    body.querySelectorAll('td[contenteditable][data-learner]').forEach(td => {
       td.addEventListener('blur', async () => {
-        const learnerId = td.dataset.learner;
+        const learnerId    = td.dataset.learner;
         const assessmentId = td.dataset.assessment;
-        const val = td.textContent.trim();
-        const num = val === '' ? null : Number(val);
+        const val          = td.textContent.trim();
+        const num          = val === '' ? null : Number(val);
+
+        if (num !== null && (isNaN(num) || num < 0 || num > 100)) {
+          UI.toast('Score must be between 0 and 100', 'warning');
+          Pages._gbFocusIntent = null;
+          this.renderGradebookRows(ww, pt, qa, weights);
+          return;
+        }
+
         const existing = await DB.getAll('assessmentResults');
-        let rec = existing.find(r => r.learnerId === learnerId && r.assessmentId === assessmentId);
-        if (!rec) rec = { id: Utils.uid('r-'), learnerId, assessmentId, classId: State.activeClass.id, score: 0, maxScore: 100, percentage: 0 };
-        rec.score = num || 0;
+        let rec = existing.find(r =>
+          r.learnerId === learnerId && r.assessmentId === assessmentId
+        );
+        if (!rec) rec = {
+          id: Utils.uid('r-'), learnerId, assessmentId,
+          classId: State.activeClass.id, score: 0, maxScore: 100, percentage: 0
+        };
+        rec.score      = num || 0;
         rec.percentage = Utils.round((rec.score / (rec.maxScore || 100)) * 100, 2);
-        rec.updatedAt = new Date().toISOString();
+        rec.updatedAt  = new Date().toISOString();
         await DB.put('assessmentResults', rec);
         App.showAutosave('saved');
+
+        const intent = Pages._gbFocusIntent;
+        if (intent && document.body.contains(intent)) {
+          Pages._gbFocusIntent = null;
+          intent.focus();
+          try {
+            const rng = document.createRange();
+            rng.selectNodeContents(intent);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(rng);
+          } catch (_) {}
+          return;
+        }
+
         this.renderGradebookRows(ww, pt, qa, weights);
       });
-      td.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); td.blur(); } });
+
+      td.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+
+        const row = td.closest('tr');
+        const direction = e.shiftKey ? -1 : 1;
+        let sibling = direction === 1
+          ? row.nextElementSibling
+          : row.previousElementSibling;
+
+        while (sibling && !sibling.querySelector('td[contenteditable][data-learner]')) {
+          sibling = direction === 1
+            ? sibling.nextElementSibling
+            : sibling.previousElementSibling;
+        }
+        if (!sibling) { td.blur(); return; }
+
+        const nextTd = sibling.querySelector(
+          `td[contenteditable][data-learner][data-assessment="${CSS.escape(td.dataset.assessment)}"]`
+        );
+        if (!nextTd) { td.blur(); return; }
+
+        Pages._gbFocusIntent = nextTd;
+        td.blur();
+      });
     });
   },
+
   openColumnModal() {
     const cls = State.activeClass;
     if (!cls) { UI.toast('Select a class first', 'warning'); return; }
@@ -23113,7 +23456,12 @@ async openLessonModal(id, prefill) {
         <div class="form-group"><label>Quarter</label><input class="form-control" id="lp-quarter" value="${existing ? Utils.attr(existing.quarter||'') : ''}"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Grade Level</label><input class="form-control" id="lp-grade" value="${existing ? Utils.attr(existing.gradeLevel||'') : Utils.attr(State.activeClass.gradeLevel||'')}"></div>
+        <div class="form-group"><label>Grade Level</label>
+          ${Pages.gradeLevelSelectHTML(
+            'lp-grade',
+            existing ? (existing.gradeLevel || '') : (State.activeClass ? State.activeClass.gradeLevel : '')
+          )}
+        </div>
         <div class="form-group"><label>Learning Area</label><input class="form-control" id="lp-area" value="${existing ? Utils.attr(existing.learningArea||'') : Utils.attr(State.activeClass.subject||'')}"></div>
       </div>
       <div class="form-group"><label>Topic</label><input class="form-control" id="lp-topic" value="${existing ? Utils.attr(existing.topic||'') : ''}"></div>
@@ -23131,6 +23479,7 @@ async openLessonModal(id, prefill) {
       title: existing ? 'Edit Lesson Plan' : 'New Lesson Plan', body, size: 'modal-xl',
       footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="lp-save">Save Lesson Plan</button>`
     });
+    Pages.wireGradeLevelSelect(m.overlay, 'lp-grade');
     m.overlay.querySelector('[data-cancel]').onclick = m.close;
     m.overlay.querySelector('#lp-save').onclick = async () => {
       const proc = {};
@@ -23139,7 +23488,7 @@ async openLessonModal(id, prefill) {
         id: existing ? existing.id : Utils.uid('lp-'), classId: State.activeClass.id,
         date: m.overlay.querySelector('#lp-date').value,
         quarter: m.overlay.querySelector('#lp-quarter').value.trim(),
-        gradeLevel: m.overlay.querySelector('#lp-grade').value.trim(),
+        gradeLevel: Pages.readGradeLevel(m.overlay, 'lp-grade'),
         learningArea: m.overlay.querySelector('#lp-area').value.trim(),
         topic: m.overlay.querySelector('#lp-topic').value.trim(),
         competency: m.overlay.querySelector('#lp-comp').value.trim(),
@@ -23242,8 +23591,16 @@ openAILessonPlanModal() {
         <div class="form-row">
           <div class="form-group"><label>Designed by Teacher/s <span class="req">*</span></label>
             <input class="form-control" id="ailp-teacher" value="${Utils.attr(teacher.fullName||(Auth._account?Auth._account.name:''))}" placeholder="e.g. Maria Santos"></div>
-          <div class="form-group"><label>Grade Level &amp; Section <span class="req">*</span></label>
-            <input class="form-control" id="ailp-grade-section" value="${Utils.attr(cls.gradeLevel && cls.section ? cls.gradeLevel + ' - ' + cls.section : (cls.gradeLevel||''))}" placeholder="e.g. Grade 7 - Sampaguita"></div>
+          <div class="form-group">
+            <label>Grade Level &amp; Section <span class="req">*</span></label>
+            <input class="form-control" id="ailp-grade-section"
+                   list="ailp-grade-options"
+                   value="${Utils.attr(cls.gradeLevel && cls.section ? cls.gradeLevel + ' - ' + cls.section : (cls.gradeLevel||''))}"
+                   placeholder="e.g. Grade 7 - Sampaguita">
+            <datalist id="ailp-grade-options">
+              ${GRADE_LEVELS.map(g => `<option value="${Utils.attr(g)}"></option>`).join('')}
+            </datalist>
+          </div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>No. of Sessions</label>
@@ -23833,7 +24190,12 @@ openLessonModalFromGenerated(plan) {
       <div class="form-group"><label>Quarter</label><input class="form-control" id="lp-quarter" value="${Utils.attr(plan.quarter||'')}"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>Grade Level</label><input class="form-control" id="lp-grade" value="${Utils.attr(plan.gradeLevel||State.activeClass.gradeLevel||'')}"></div>
+      <div class="form-group"><label>Grade Level</label>
+        ${Pages.gradeLevelSelectHTML(
+          'lp-grade',
+          plan.gradeLevel || (State.activeClass ? State.activeClass.gradeLevel : '')
+        )}
+      </div>
       <div class="form-group"><label>Learning Area</label><input class="form-control" id="lp-area" value="${Utils.attr(plan.learningArea||State.activeClass.subject||'')}"></div>
     </div>
     <div class="form-group"><label>Topic</label><input class="form-control" id="lp-topic" value="${Utils.attr(plan.topic||'')}"></div>
@@ -23867,7 +24229,7 @@ openLessonModalFromGenerated(plan) {
       id: Utils.uid('lp-'), classId: State.activeClass.id,
       date: m.overlay.querySelector('#lp-date').value,
       quarter: m.overlay.querySelector('#lp-quarter').value.trim(),
-      gradeLevel: m.overlay.querySelector('#lp-grade').value.trim(),
+      gradeLevel: Pages.readGradeLevel(m.overlay, 'lp-grade'),
       learningArea: m.overlay.querySelector('#lp-area').value.trim(),
       topic: m.overlay.querySelector('#lp-topic').value.trim(),
       contentStandards: m.overlay.querySelector('#lp-content').value.trim(),
@@ -25889,7 +26251,10 @@ _pdExportCSV(learnerData, period) {
                     const c = cellMap[d + '|' + p.id];
                     return c
                       ? `<div class="schedule-cell subject" style="background:${Utils.attr(c.color||'var(--light-blue)')};cursor:pointer;" data-sched-edit="${Utils.attr(c.id)}">
-                          <strong>${Utils.esc(c.subject||'')}</strong>${c.room ? `<div class="text-xs">${Utils.esc(c.room)}</div>` : ''}</div>`
+                                                    <strong>${Utils.esc(c.subject||'')}</strong>
+                          ${c.teacher ? `<div class="sched-teacher" title="Teacher">${Utils.esc(c.teacher)}</div>` : ''}
+                          ${c.room    ? `<div class="sched-room"    title="Room">${Utils.esc(c.room)}</div>`    : ''}
+                        </div>`
                       : `<div class="schedule-cell empty" style="cursor:pointer;" data-sched-new="1" data-sched-day="${Utils.attr(d)}" data-sched-period="${Utils.attr(p.id)}"></div>`;
                   }).join('')
                 ).join('')}
@@ -35796,8 +36161,10 @@ async sf1(root) {
       return;
     }
 
-    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
-                || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+  const policy = GradingEngine.resolvePolicy({
+      schoolYear: cls.schoolYear,
+      gradeLevel: cls.gradeLevel
+    });
     const band = resolveSf9Band(cls.gradeLevel);
     const learningAreas = SF9_LEARNING_AREAS[band];
 
@@ -40049,6 +40416,8 @@ _openPhilIriHelp() {
 
     // Compute per-subject finals and the GWA
     const rowState = {};
+    const descriptive = policy.gradingMode === 'descriptive';
+
     learningAreas.forEach(area => {
       const manual = rec.subjects[area];
       const auto = autoGradeMap[area];
@@ -40057,12 +40426,43 @@ _openPhilIriHelp() {
       const t3 = auto ? auto.term3 : manual.term3;
       const isAuto = !!auto;
       const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
-      const remarks = GradingEngine.getSubjectRemarks(final, policy.passingGrade);
-      rowState[area] = { t1, t2, t3, final, remarks, isAuto };
+
+      // In descriptive mode, the "final" the teacher sees is the descriptor
+      // label, not the numeric average. The numeric average is retained as
+      // `finalNumeric` so the general-average calculation still works.
+      let displayFinal = final;
+      let descriptorLabel = '';
+
+      if (descriptive && final !== null) {
+        const d = GradingEngine.getDescriptor(final, policy);
+        descriptorLabel = d.label;
+        displayFinal = d.label;
+      }
+
+      const remarks = descriptive
+        ? ''                                       // no Passed/Failed under descriptive grading
+        : GradingEngine.getSubjectRemarks(final, policy.passingGrade);
+
+      rowState[area] = {
+        t1, t2, t3,
+        final: displayFinal,        // what the SF9 table renders
+        finalNumeric: final,        // what the general-average math uses
+        descriptor: descriptorLabel,
+        remarks,
+        isAuto
+      };
     });
-    const generalAverage = GradingEngine.calculateGeneralAverageFromFinals(
-      Object.values(rowState).map(r => r.final)
+    // Use the numeric finals for the math in both modes. In descriptive mode
+    // `r.final` is a string, so mixing it into the average would corrupt the result.
+    const generalAverageNumeric = GradingEngine.calculateGeneralAverageFromFinals(
+      Object.values(rowState).map(r => r.finalNumeric)
     );
+
+    const generalAverage = descriptive
+      ? (generalAverageNumeric !== null
+          ? GradingEngine.getDescriptor(generalAverageNumeric, policy).label
+          : null)
+      : generalAverageNumeric;
 
     // Auto-compute attendance from the Attendance module
     const allAtt = (await DB.getAll('attendance')).filter(a => a.learnerId === learner.id && a.classId === cls.id);
@@ -40120,8 +40520,10 @@ _openPhilIriHelp() {
                   <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="1" value="${Utils.attr(r.t1)}" ${lock}></td>
                   <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="2" value="${Utils.attr(r.t2)}" ${lock}></td>
                   <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="3" value="${Utils.attr(r.t3)}" ${lock}></td>
-                  <td style="text-align:center;"><strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? r.final : '—'}</strong></td>
-                  <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">${r.remarks || '—'}</td>
+                  <td style="text-align:center;">
+                    <strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? Utils.esc(String(r.final)) : '—'}</strong>
+                  </td>
+                  <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}</td>
                 </tr>`;
               }).join('')}
               <tr style="background:var(--light-blue);">
@@ -40205,18 +40607,29 @@ _openPhilIriHelp() {
       </div>
     `;
 
-    /* ---------- Live grade recomputation ---------- */
     container.querySelectorAll('.sf9-input').forEach(inp => {
       inp.addEventListener('input', () => {
         const area = inp.dataset.area;
         const all = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
         const t1 = all[0].value, t2 = all[1].value, t3 = all[2].value;
-        const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
-        const remarks = GradingEngine.getSubjectRemarks(final, policy.passingGrade);
+        const finalNumeric = GradingEngine.calculateSubjectFinal(t1, t2, t3);
+
+        let finalDisplay, remarks;
+        if (descriptive) {
+          finalDisplay = finalNumeric !== null
+            ? GradingEngine.getDescriptor(finalNumeric, policy).label
+            : '—';
+          remarks = '';
+        } else {
+          finalDisplay = finalNumeric !== null ? finalNumeric : '—';
+          remarks = GradingEngine.getSubjectRemarks(finalNumeric, policy.passingGrade);
+        }
+
         const finalEl = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
         const remEl   = container.querySelector(`.sf9-remarks[data-area="${CSS.escape(area)}"]`);
-        if (finalEl) finalEl.textContent = final !== null ? final : '—';
+        if (finalEl) finalEl.textContent = finalDisplay;
         if (remEl)   remEl.textContent = remarks || '—';
+
         Pages._recomputeSf9Gwa(container, learningAreas, policy);
       });
     });
@@ -40284,18 +40697,31 @@ _openPhilIriHelp() {
     State._sf9LastRender = { rec, rowState, generalAverage, attendanceRows, attTotals, learningAreas, policy, band };
   },
 
-  /* ---------- Recompute the GWA live as the teacher types ---------- */
   _recomputeSf9Gwa(container, learningAreas, policy) {
-    const finals = learningAreas.map(area => {
-      const el = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
-      const v = el ? Number(el.textContent) : NaN;
-      return isNaN(v) ? null : v;
-    }).filter(n => n !== null);
-    const gwa = GradingEngine.calculateGeneralAverageFromFinals(finals);
-    const gwaEl = container.querySelector('#sf9-gwa');
+    const descriptive = policy.gradingMode === 'descriptive';
+
+    // Read the cached numeric finals from the last render rather than
+    // re-parsing the DOM, which in descriptive mode contains a string label.
+    const cached = (State._sf9LastRender && State._sf9LastRender.rowState) || {};
+    const numericFinals = learningAreas
+      .map(area => cached[area] ? cached[area].finalNumeric : null)
+      .filter(n => n !== null);
+
+    const gwaNumeric = GradingEngine.calculateGeneralAverageFromFinals(numericFinals);
+
+    const gwaEl  = container.querySelector('#sf9-gwa');
     const gwaRem = container.querySelector('#sf9-gwa-remarks');
-    if (gwaEl) gwaEl.textContent = gwa !== null ? gwa : '—';
-    if (gwaRem) gwaRem.textContent = GradingEngine.getSubjectRemarks(gwa, policy.passingGrade) || '—';
+
+    if (descriptive) {
+      const label = gwaNumeric !== null
+        ? GradingEngine.getDescriptor(gwaNumeric, policy).label
+        : '—';
+      if (gwaEl)  gwaEl.textContent  = label;
+      if (gwaRem) gwaRem.textContent = '';
+    } else {
+      if (gwaEl)  gwaEl.textContent  = gwaNumeric !== null ? gwaNumeric : '—';
+      if (gwaRem) gwaRem.textContent = GradingEngine.getSubjectRemarks(gwaNumeric, policy.passingGrade) || '—';
+    }
   },
 
   /* ---------- Pull the latest finalized term grades for this learner ---------- */
@@ -40304,8 +40730,10 @@ _openPhilIriHelp() {
     const learner = State.learners.find(l => l.id === State._sf9LearnerId);
     if (!cls || !learner) return;
 
-    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
-                || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+    const policy = GradingEngine.resolvePolicy({
+      schoolYear: cls.schoolYear,
+      gradeLevel: cls.gradeLevel
+    });
     const tg = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
     const finalizedCount = tg.filter(g => g.status === 'finalized').length;
     UI.toast(`Found ${finalizedCount} finalized term grade${finalizedCount === 1 ? '' : 's'} in the Gradebook.`, 'info', 3500);
@@ -42184,13 +42612,7 @@ const tabs = [
     content.innerHTML = `
       <!-- ══════════════ SCHOOL YEAR ══════════════ -->
       <div class="settings-section">
-        <div class="settings-section-head" style="display:flex;align-items:flex-start;gap:14px;">
-          <div style="width:42px;height:42px;border-radius:11px;
-                      background:linear-gradient(135deg,var(--light-blue),rgba(0,87,184,0.08));
-                      color:var(--deped-blue);display:flex;align-items:center;justify-content:center;
-                      flex-shrink:0;box-shadow:0 1px 0 rgba(255,255,255,0.6) inset;">
-            ${icon('calendar')}
-          </div>
+        <div class="settings-section-head">
           <div style="flex:1;min-width:0;">
             <h3 style="margin-bottom:3px;">School Year</h3>
             <p style="margin:0;line-height:1.55;">
@@ -44215,7 +44637,7 @@ If you received this message, Web3Forms is configured correctly and you can now 
           </div>
           <div class="form-group">
             <label>Grade Level Assigned</label>
-            <input class="form-control" id="tp-grade" value="${Utils.attr(t.gradeLevel || '')}" placeholder="e.g. Grade 9">
+            ${Pages.gradeLevelSelectHTML('tp-grade', t.gradeLevel || '')}
           </div>
         </div>
         <div class="form-group">
@@ -44255,6 +44677,8 @@ If you received this message, Web3Forms is configured correctly and you can now 
         </div>
       </div>
     `;
+
+    Pages.wireGradeLevelSelect(root, 'tp-grade');          
 
     /* ============ Photo handler ============ */
     const photoWrap  = root.querySelector('#tp-photo-wrap');
@@ -44426,7 +44850,7 @@ If you received this message, Web3Forms is configured correctly and you can now 
     t.salaryGrade   = read('tp-sg');
     t.dateHired     = read('tp-hired');
     t.subjectArea   = read('tp-subj');
-    t.gradeLevel    = read('tp-grade');
+    t.gradeLevel    = Pages.readGradeLevel(document.getElementById('content'), 'tp-grade');
     t.school        = read('tp-school');
 
     // Contact
@@ -56607,6 +57031,114 @@ Pages.printBehaviorLog = async function (rows) {
   });
 };
 
+/* ────────────────────────────────────────────────────────────────
+   Gradebook column menu — right-click a gradebook header to
+   rename, open in builder, clear scores, or delete the column.
+   ──────────────────────────────────────────────────────────────── */
+Pages._gbOpenColumnMenu = function (col, clientX, clientY) {
+  document.getElementById('gb-col-menu')?.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'gb-col-menu';
+  menu.className = 'seat-ctx-menu';         // reuses existing dropdown styles
+  menu.innerHTML = `
+    <div class="ctx-head">${Utils.esc((col.sub || col.label || 'Column').slice(0, 32))}</div>
+    <button type="button" data-act="rename">${icon('edit')} Rename assessment</button>
+    <button type="button" data-act="open">${icon('settings')} Open in Builder</button>
+    <div class="ctx-divider"></div>
+    <button type="button" data-act="clear" class="danger">${icon('xCircle')} Clear scores (keep column)</button>
+    <button type="button" data-act="delete" class="danger">${icon('trash')} Delete column &amp; scores</button>
+  `;
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth  - rect.width  - 8)) + 'px';
+  menu.style.top  = Math.max(8, Math.min(clientY, window.innerHeight - rect.height - 8)) + 'px';
+
+  menu.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.onclick = async () => {
+      const act = btn.dataset.act;
+      menu.remove();
+
+      if (act === 'rename') {
+        UI.prompt({
+          title: 'Rename Assessment',
+          message: 'The new title appears as the column header.',
+          value: col.sub || '',
+          confirmText: 'Rename',
+          onConfirm: async (v) => {
+            const newTitle = String(v || '').trim();
+            if (!newTitle) return;
+            const a = await DB.get('assessments', col.assessmentId);
+            if (!a) return;
+            a.title = newTitle;
+            a.updatedAt = new Date().toISOString();
+            await DB.put('assessments', a);
+            App.logActivity(`Assessment renamed to "${newTitle}"`, 'Grading');
+            App.navigate('gradebook');
+          }
+        });
+        return;
+      }
+
+      if (act === 'open') {
+        Pages.openAssessmentModal(col.assessmentId);
+        return;
+      }
+
+      if (act === 'clear') {
+        UI.confirm({
+          title: 'Clear Scores?',
+          message: `Delete every recorded score for <strong>${Utils.esc(col.sub || col.label)}</strong>? The column stays.`,
+          confirmText: 'Clear Scores',
+          confirmClass: 'btn-warning',
+          onConfirm: async () => {
+            const rows = (await DB.getAll('assessmentResults'))
+              .filter(r => r.assessmentId === col.assessmentId);
+            if (rows.length) {
+              await DB.bulkWrite('assessmentResults', rows.map(r => r.id), 'delete');
+            }
+            App.logActivity(`Cleared ${rows.length} score(s) for "${col.sub || col.label}"`, 'Grading');
+            App.navigate('gradebook');
+          }
+        });
+        return;
+      }
+
+      if (act === 'delete') {
+        UI.confirm({
+          title: 'Delete Column?',
+          message: `Delete <strong>${Utils.esc(col.sub || col.label)}</strong> and every score recorded in it? This cannot be undone.`,
+          confirmText: 'Delete Column',
+          confirmClass: 'btn-danger',
+          onConfirm: async () => {
+            const rows = (await DB.getAll('assessmentResults'))
+              .filter(r => r.assessmentId === col.assessmentId);
+            if (rows.length) {
+              await DB.bulkWrite('assessmentResults', rows.map(r => r.id), 'delete');
+            }
+            await DB.delete('assessments', col.assessmentId);
+            App.logActivity(`Deleted gradebook column "${col.sub || col.label}" (${rows.length} scores removed)`, 'Grading');
+            App.navigate('gradebook');
+          }
+        });
+      }
+    };
+  });
+
+  const close = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('touchstart', close);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', close);
+    document.addEventListener('touchstart', close);
+  }, 0);
+};
+
 for (const k in aliases) {
   if (typeof Pages[aliases[k]] === 'function') Pages[k] = Pages[aliases[k]];
 }
@@ -56640,6 +57172,70 @@ for (const k in aliases) {
 '_pdRenderRecipientRow','_pdOpenPreviewModal','_pdSendSingle','_pdBatchSend',
 '_pdOpenHistory','_pdExportCSV'    // ← NEW
 ].forEach(fn => { if (typeof Pages[fn] !== 'function') Pages[fn] = function(){}; });
+
+/* ────────────────────────────────────────────────────────────────
+   Grade-level select — markup, wiring, and readback
+   ----------------------------------------------------------------
+   Usage:
+     1. Emit:  ${Pages.gradeLevelSelectHTML('cf-grade', currentValue)}
+     2. Wire:  Pages.wireGradeLevelSelect(m.overlay, 'cf-grade');
+     3. Read:  Pages.readGradeLevel(m.overlay, 'cf-grade');
+   ──────────────────────────────────────────────────────────────── */
+
+Pages.gradeLevelSelectHTML = function (id, selectedValue, opts = {}) {
+  const current = String(selectedValue || '').trim();
+  const isKnown = GRADE_LEVELS.includes(current);
+  const allowCustom = opts.allowCustom !== false;
+  const includeBlank = opts.includeBlank !== false;
+
+  // Preserve an existing non-canonical value (e.g. "Grade 9 - SSC") as a
+  // one-off option so editing old records never silently drops it.
+  const legacyOption = (current && !isKnown)
+    ? `<option value="${Utils.attr(current)}" selected>${Utils.esc(current)}</option>`
+    : '';
+
+  return `
+    <select class="form-control" id="${Utils.attr(id)}" data-grade-select>
+      ${includeBlank ? `<option value="" ${!current ? 'selected' : ''}>— Select grade level —</option>` : ''}
+      ${GRADE_LEVELS.map(g =>
+        `<option value="${Utils.attr(g)}" ${g === current ? 'selected' : ''}>${Utils.esc(g)}</option>`
+      ).join('')}
+      ${legacyOption}
+      ${allowCustom ? `<option value="__custom__">Custom…</option>` : ''}
+    </select>
+    ${allowCustom ? `
+      <input class="form-control" id="${Utils.attr(id)}-custom"
+             placeholder="Type the custom grade level"
+             style="margin-top:6px;display:${(current && !isKnown) ? 'block' : 'none'};"
+             value="${(current && !isKnown) ? Utils.attr(current) : ''}">
+    ` : ''}
+  `;
+};
+
+Pages.wireGradeLevelSelect = function (root, id) {
+  if (!root) return;
+  const sel = root.querySelector('#' + CSS.escape(id));
+  const custom = root.querySelector('#' + CSS.escape(id) + '-custom');
+  if (!sel || !custom) return;
+  const sync = () => {
+    const isCustom = sel.value === '__custom__';
+    custom.style.display = isCustom ? 'block' : 'none';
+    if (isCustom && document.activeElement !== custom) custom.focus();
+  };
+  sel.addEventListener('change', sync);
+  sync();
+};
+
+Pages.readGradeLevel = function (root, id) {
+  if (!root) return '';
+  const sel = root.querySelector('#' + CSS.escape(id));
+  if (!sel) return '';
+  if (sel.value === '__custom__') {
+    const custom = root.querySelector('#' + CSS.escape(id) + '-custom');
+    return custom ? custom.value.trim() : '';
+  }
+  return sel.value;
+};
 
 /* ============================================================================
    ASSESSMENT · MULTI-CLASS ASSIGNMENT HELPERS
