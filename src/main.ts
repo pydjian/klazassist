@@ -15844,6 +15844,7 @@ async assessmentBuilder(root) {
                   <button class="icon-btn" title="Assign to classes" data-assess-assign="${Utils.attr(a.id)}">${icon('users')}</button>
                   <button class="icon-btn" title="Print answer sheets" data-assess-sheets="${Utils.attr(a.id)}">${icon('grid')}</button>
                   <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('scan')}</button>
+                  <button class="icon-btn" title="Scanned papers — review, reassign, delete" data-assess-papers="${Utils.attr(a.id)}">${icon('list')}</button>
                   <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
                   <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
                   <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
@@ -15863,6 +15864,9 @@ async assessmentBuilder(root) {
     );
     root.querySelectorAll('[data-assess-scan]').forEach(el =>
       el.addEventListener('click', () => AnswerSheetOMR.openScanner(el.dataset.assessScan))
+    );
+    root.querySelectorAll('[data-assess-papers]').forEach(el =>
+      el.addEventListener('click', () => AnswerSheetOMR.openResultsManager(el.dataset.assessPapers))
     );
 },
 
@@ -52855,7 +52859,7 @@ function openScanner(assessmentId) {
       if (session._pendingVotes >= needVotes) {
         session._pendingVotes = 0;
         session._pendingSig = null;
-        gradeAndCommit(learner, perQuestion, ambiguousCount);
+        gradeAndCommit(learner, perQuestion, ambiguousCount, sheetVersion);
       } else {
         drawOverlay(quad, THEME.warning);
         setStatus(`Confirming… (${session._pendingVotes}/${needVotes})`, 'warn');
@@ -52865,7 +52869,7 @@ function openScanner(assessmentId) {
     /* ----------------------------------------------------------------
        Grade + commit
        ---------------------------------------------------------------- */
-    function gradeAndCommit(learner, perQuestion, ambiguousCount) {
+    function gradeAndCommit(learner, perQuestion, ambiguousCount, sheetVersion) {
       let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
       const detail = [];
       for (let i = 0; i < perQuestion.length; i++) {
@@ -52908,6 +52912,7 @@ function openScanner(assessmentId) {
         incorrect, blank, ambiguous, multiple,
         score, percentage,
         scannedAt: new Date().toISOString(),
+        formVersion: sheetVersion || 'A',
         prev: null, saving: null
       };
 
@@ -52927,6 +52932,7 @@ function openScanner(assessmentId) {
           rec.percentage = percentage;
           rec.omrDetails = detail;
           rec.omrScanned = true;
+          rec.omrFormVersion = sheetVersion || 'A';
           rec.updatedAt = new Date().toISOString();
           await DB.put('assessmentResults', rec);
         } catch (e) {
@@ -53398,7 +53404,38 @@ function openScanner(assessmentId) {
       list.querySelectorAll('[data-omr-review]').forEach(btn => {
         btn.onclick = (e) => {
           e.stopPropagation();
-          openReviewModal(session.scanned[Number(btn.dataset.omrReview)]);
+          const result = session.scanned[Number(btn.dataset.omrReview)];
+          if (!result) return;
+
+          const sheetKey = resolveAnswerKey(result.formVersion || 'A');
+
+          openReviewModal({
+            assessment: session.assessment,
+            answerKey:  sheetKey,
+            result,
+            onSaved: async (newData) => {
+              Object.assign(result, newData);
+              try {
+                const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', result.learner.id))
+                  .find(r => r.assessmentId === session.assessment.id);
+                if (existing) {
+                  existing.score = newData.score;
+                  existing.percentage = newData.percentage;
+                  existing.omrDetails = newData.details;
+                  existing.reviewedAt = newData.reviewedAt;
+                  existing.updatedAt = new Date().toISOString();
+                  await DB.put('assessmentResults', existing);
+                }
+              } catch (err) { console.warn('[OMR] Persist failed:', err); }
+              renderList();
+              App.logActivity(
+                `OMR review saved: ${Utils.fullName(result.learner)} — ${newData.percentage}%`,
+                'Assessments'
+              );
+            },
+            onDelete:   () => deleteResult(result),
+            onReassign: () => reassignResult(result)
+          });
         };
       });
     }
@@ -53665,172 +53702,6 @@ function openScanner(assessmentId) {
       bodyEl.querySelector('#zg-adv').onclick = () => openCalibrationModal();
     }
 
-    /* ----------------------------------------------------------------
-       Review modal — desktop
-       ---------------------------------------------------------------- */
-    function openReviewModal(result) {
-      if (!result) return;
-      const qCount = result.answers.length;
-      const dots = result.answers.map((p, i) => {
-        const color = p.status === 'correct' ? 'var(--success)'
-                    : p.status === 'incorrect' ? 'var(--danger)'
-                    : p.status === 'blank' ? 'var(--text-muted)'
-                    : (p.status === 'ambiguous' || p.status === 'multiple') ? 'var(--warning)'
-                    : 'var(--border)';
-        const title = `Q${i + 1} · ${p.status}${p.confidence ? ' (' + Math.round(p.confidence * 100) + '% confidence)' : ''}`;
-        return `<div style="width:26px;height:26px;border-radius:6px;background:${color}1a;
-                            border:2px solid ${color};
-                            display:flex;align-items:center;justify-content:center;
-                            font-size:11px;font-weight:700;color:${color};cursor:pointer;"
-                     data-omr-review-q="${i}" title="${Utils.attr(title)}">
-          ${i + 1}
-        </div>`;
-      }).join('');
-
-      const m = UI.modal({
-        title: 'Review Scan · ' + Utils.fullName(result.learner),
-        size: 'modal-lg',
-        body: `
-          <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
-            ${Utils.avatarHTML(result.learner, 44, 15)}
-            <div style="flex:1;min-width:0;">
-              <div style="font-weight:700;font-size:15px;">${Utils.esc(Utils.fullName(result.learner))}</div>
-              <div class="text-xs text-muted">LRN ${Utils.esc(result.learner.lrn || '—')}</div>
-            </div>
-            <div style="text-align:right;">
-              <div style="font-size:24px;font-weight:800;">${result.percentage}%</div>
-              <div class="text-xs text-muted">${result.correct} correct · ${result.incorrect} wrong · ${result.blank} blank${result.ambiguous ? ' · ' + result.ambiguous + ' uncertain' : ''}</div>
-            </div>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(26px,1fr));gap:4px;margin-bottom:14px;">
-            ${dots}
-          </div>
-          <div class="alert alert-info" style="font-size:12px;">
-            ${icon('info')}
-            <div>
-              Click any question number to override its detected answer.
-              <strong>Green</strong> = correct, <strong>red</strong> = wrong,
-              <strong>amber</strong> = uncertain, <strong>grey</strong> = blank.
-            </div>
-          </div>
-          <div id="omr-review-detail"></div>
-        `,
-        footer: `
-          <button class="btn btn-danger-outline" id="omr-review-delete">${icon('trash')} Delete</button>
-          <button class="btn btn-outline" id="omr-review-reassign">${icon('users')} Change learner</button>
-          <button class="btn btn-outline" data-close>Close</button>
-          <button class="btn btn-primary" id="omr-review-save">Save Changes</button>
-        `
-      });
-
-      const detailEl = m.overlay.querySelector('#omr-review-detail');
-
-      const renderDetail = (qIdx) => {
-        const p = result.answers[qIdx];
-        const key = session.answerKey[qIdx];
-        if (!p) { detailEl.innerHTML = ''; return; }
-
-        const choices = Array.isArray(session.assessment.questions[qIdx].choices)
-          ? session.assessment.questions[qIdx].choices
-          : [];
-
-        const choicesHTML = choices.map((c, i) => {
-          const clean = Utils.stripChoiceLetter(c, i);
-          const isKey = key === i;
-          const isDet = p.detected === i;
-          const isCurrent = p.override !== undefined ? p.override === i : isDet;
-          const bg = isCurrent ? 'var(--gradient-primary)' : 'var(--card)';
-          const color = isCurrent ? '#fff' : 'var(--text)';
-          const border = isKey ? '2px solid var(--success)' : '1px solid var(--border)';
-          return `<button type="button"
-                          data-omr-pick="${qIdx}-${i}"
-                          style="display:block;width:100%;text-align:left;
-                                 padding:10px 12px;margin-bottom:6px;border-radius:8px;
-                                 background:${bg};color:${color};border:${border};
-                                 cursor:pointer;font-family:inherit;font-size:13px;
-                                 font-weight:600;">
-            <span style="display:inline-block;width:20px;font-weight:800;">${String.fromCharCode(65 + i)}.</span>
-            ${Utils.esc(clean)}
-            ${isKey ? '<span style="float:right;color:var(--success);font-weight:800;">✓ key</span>' : ''}
-          </button>`;
-        }).join('');
-
-        detailEl.innerHTML = `
-          <div class="card" style="padding:14px;background:var(--bg);">
-            <div class="flex-between mb-12" style="gap:8px;flex-wrap:wrap;">
-              <strong>Q${qIdx + 1}</strong>
-              <span class="badge ${p.status === 'correct' ? 'badge-success' : p.status === 'incorrect' ? 'badge-danger' : p.status === 'ambiguous' ? 'badge-warning' : 'badge-neutral'}">
-                ${Utils.esc(p.status)}
-              </span>
-            </div>
-            <div style="font-size:13px;margin-bottom:12px;line-height:1.5;">
-              ${Utils.esc(session.assessment.questions[qIdx].text || '')}
-            </div>
-            ${choicesHTML}
-            <button type="button" data-omr-clear="${qIdx}"
-                    style="display:block;width:100%;text-align:center;
-                           padding:8px;margin-top:6px;border-radius:8px;
-                           background:transparent;color:var(--text-muted);
-                           border:1px dashed var(--border);cursor:pointer;font-family:inherit;font-size:12px;">
-              Mark as blank
-            </button>
-          </div>`;
-
-        detailEl.querySelectorAll('[data-omr-pick]').forEach(btn => {
-          btn.onclick = () => {
-            const [q, c] = btn.dataset.omrPick.split('-').map(Number);
-            result.answers[q].override = c;
-            renderDetail(q);
-            renderDots();
-          };
-        });
-        detailEl.querySelector(`[data-omr-clear="${qIdx}"]`).onclick = () => {
-          result.answers[qIdx].override = null;
-          renderDetail(qIdx);
-          renderDots();
-        };
-      };
-
-      const renderDots = () => {
-        m.overlay.querySelectorAll('[data-omr-review-q]').forEach(el => {
-          const i = Number(el.dataset.omrReviewQ);
-          const p = result.answers[i];
-          const eff = p.override !== undefined ? p.override : p.detected;
-          const correct = eff !== null && eff === session.answerKey[i];
-          const isOverridden = p.override !== undefined;
-          const color = isOverridden ? 'var(--accent-purple)'
-                      : correct ? 'var(--success)'
-                      : eff === null ? 'var(--text-muted)'
-                      : 'var(--danger)';
-          el.style.background = color + '1a';
-          el.style.borderColor = color;
-          el.style.color = color;
-        });
-      };
-
-      m.overlay.querySelectorAll('[data-omr-review-q]').forEach(el => {
-        el.onclick = () => renderDetail(Number(el.dataset.omrReviewQ));
-      });
-
-      m.overlay.querySelector('[data-close]').onclick = m.close;
-            m.overlay.querySelector('#omr-review-delete').onclick = () => {
-        m.close();
-        deleteResult(result);
-      };
-      m.overlay.querySelector('#omr-review-reassign').onclick = () => {
-        m.close();
-        reassignResult(result);
-      };
-
-      m.overlay.querySelector('#omr-review-save').onclick = async () => {
-        await commitReview(result);
-        m.close();
-        UI.toast('Reviewed score saved', 'success');
-      };
-
-      if (result.answers.length) renderDetail(0);
-      renderDots();
-    }
 
     /* ----------------------------------------------------------------
        Calibration modal
@@ -53990,20 +53861,607 @@ function openScanner(assessmentId) {
         </div>`;
     }
 
+    // Hydrate the in-memory result list from IndexedDB so the counter and
+    // results sheet reflect every sheet that has been scanned for this
+    // assessment, not just this session.
+    session.scanned = await hydrateScanResults(
+      a.id,
+      State.learners.filter(Utils.isActiveLearner)
+    );
+
     renderList();
     await startCamera();
   })();
 }
 
-return {
-  printSheets,
-  openScanner,
-  SHEET,
-  anchorCenters,
-  bubblePositions,
-  renderSheetHTML,
-  loadCalibration
-};
+  /* ======================================================================
+     Scan-result hydration
+     ----------------------------------------------------------------------
+     Rebuilds the in-memory result shape from persisted assessmentResults
+     rows that carry omrScanned: true. Called by the scanner on open and by
+     the standalone manager.
+     ====================================================================== */
+  function computeReviewCounts(details) {
+    let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
+    for (const p of details) {
+      if (p.correct === null || p.correct === undefined) continue;
+      switch (p.status) {
+        case 'correct':   correct++; break;
+        case 'ambiguous': correct++; ambiguous++; break;
+        case 'blank':     blank++;    incorrect++; break;
+        case 'multiple':  multiple++; incorrect++; break;
+        case 'incorrect': incorrect++; break;
+        default:
+          if (p.correct) correct++; else incorrect++;
+      }
+    }
+    return { correct, incorrect, blank, ambiguous, multiple };
+  }
+
+  async function hydrateScanResults(assessmentId, learners) {
+    let rows = [];
+    try {
+      const all = await DB.getAll('assessmentResults');
+      rows = all.filter(r => r.assessmentId === assessmentId && r.omrScanned);
+    } catch (e) {
+      console.warn('[OMR] Could not hydrate scan results:', e);
+      return [];
+    }
+
+    const byId = {};
+    (learners || []).forEach(l => { byId[l.id] = l; });
+
+    const out = [];
+    for (const r of rows) {
+      const learner = byId[r.learnerId];
+      if (!learner) continue;
+      const details = Array.isArray(r.omrDetails) ? r.omrDetails : [];
+      const counts = computeReviewCounts(details);
+      out.push({
+        learner,
+        answers: details,
+        ...counts,
+        score: r.score,
+        percentage: r.percentage,
+        scannedAt: r.updatedAt || r.createdAt || new Date().toISOString(),
+        reviewedAt: r.reviewedAt || null,
+        formVersion: r.omrFormVersion || 'A',
+        prev: null,
+        saving: Promise.resolve()
+      });
+    }
+    out.sort((a, b) => (a.scannedAt || '').localeCompare(b.scannedAt || ''));
+    return out;
+  }
+
+    /* ======================================================================
+     Review modal — module-scope, callable from the scanner and the manager.
+     ----------------------------------------------------------------------
+     opts = {
+       assessment, answerKey, result,
+       onSaved(newData) → Promise,   // persist reviewed changes
+       onDelete() → void,             // optional — hides Delete if omitted
+       onReassign() → void            // optional — hides Change learner if omitted
+     }
+     ====================================================================== */
+  function openReviewModal(opts) {
+    const { assessment, answerKey, result, onSaved, onDelete, onReassign } = opts || {};
+    if (!assessment || !result) return;
+
+    const pctColor = (pct) => pct >= 85 ? 'good' : pct >= 70 ? 'ok' : pct >= 50 ? 'mid' : 'low';
+    const edits = new Map();
+    let filter = result.answers.filter(p =>
+      p.correct !== null && p.override === undefined &&
+      (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+       (p.confidence > 0 && p.confidence < 0.6))
+    ).length ? 'flag' : 'all';
+
+    const eff = (p) => edits.has(p.q) ? edits.get(p.q)
+                 : (p.override !== undefined ? p.override : p.detected);
+    const letters = 'ABCDE';
+
+    const tagFor = (p) =>
+      p.status === 'multiple'   ? ['Multiple marks', 'bad'] :
+      p.status === 'blank'      ? ['Blank', 'mute'] :
+      (p.status === 'ambiguous' || (p.confidence > 0 && p.confidence < 0.6)) ? ['Uncertain', 'warn'] :
+      p.status === 'correct'    ? ['Correct', 'good'] :
+      p.status === 'incorrect'  ? ['Wrong', 'bad'] : ['Not graded', 'mute'];
+
+    const m = UI.modal({
+      title: 'Review Scan · ' + Utils.fullName(result.learner),
+      size: 'modal-lg',
+      body: '<div id="omr-review-body"></div>',
+      footer: `
+        ${onDelete   ? '<button class="btn btn-danger-outline" id="omr-review-delete">' + icon('trash') + ' Delete</button>' : ''}
+        ${onReassign ? '<button class="btn btn-outline" id="omr-review-reassign">' + icon('users') + ' Change learner</button>' : ''}
+        <button class="btn btn-outline" data-close>Close</button>
+        <button class="btn btn-primary" id="omr-review-save">Save Changes</button>
+      `
+    });
+
+    const bodyEl = m.overlay.querySelector('#omr-review-body');
+    const saveBtn = m.overlay.querySelector('#omr-review-save');
+
+    const render = () => {
+      const graded = result.answers.filter(p => p.correct !== null);
+      const flagged = graded.filter(p => {
+        if (p.override !== undefined) return false;
+        return p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+               (p.confidence > 0 && p.confidence < 0.6);
+      });
+      const shown = filter === 'flag' ? flagged : graded;
+      const tops = bodyEl.scrollTop;
+
+      let c = 0;
+      graded.forEach(p => {
+        const e = eff(p);
+        if (e !== null && e === answerKey[p.q]) c++;
+      });
+      const pct = graded.length ? Math.round((c / graded.length) * 100) : 0;
+
+      bodyEl.innerHTML = `
+        <div class="flex gap-12 mb-16" style="align-items:center;flex-wrap:wrap;">
+          ${Utils.avatarHTML(result.learner, 52, 16)}
+          <div style="flex:1;min-width:180px;">
+            <div style="font-weight:800;font-size:15px;">${Utils.esc(Utils.fullName(result.learner))}</div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(result.learner.lrn || '—')}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:26px;font-weight:800;color:var(--${pctColor(pct) === 'good' ? 'success' : pctColor(pct) === 'low' ? 'danger' : 'deped-blue'});">${pct}%</div>
+            <div class="text-xs text-muted">
+              ${graded.length} item${graded.length === 1 ? '' : 's'}
+              ${edits.size ? ` · <b style="color:#B45309;">${edits.size} change${edits.size === 1 ? '' : 's'}</b>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="rz-segment" role="tablist" style="width:100%;margin-bottom:14px;">
+          <button type="button" data-f="flag" class="${filter === 'flag' ? 'active' : ''}" style="flex:1;">
+            To review (${flagged.length})
+          </button>
+          <button type="button" data-f="all" class="${filter === 'all' ? 'active' : ''}" style="flex:1;">
+            All (${graded.length})
+          </button>
+        </div>
+
+        ${shown.length
+          ? shown.map(p => {
+              const q = assessment.questions[p.q] || {};
+              const nCh = Math.min(SHEET.choiceCount, Array.isArray(q.choices) && q.choices.length ? q.choices.length : SHEET.choiceCount);
+              const e = eff(p);
+              const [tag, tagKind] = tagFor(p);
+              const btns = Array.from({ length: nCh }, (_, i) =>
+                `<button type="button"
+                         class="zg-ch${e === i ? ' sel' : ''}${answerKey[p.q] === i ? ' key' : ''}"
+                         data-q="${p.q}" data-c="${i}"
+                         aria-pressed="${e === i}"
+                         aria-label="Question ${p.q + 1}, choice ${letters[i]}${answerKey[p.q] === i ? ', correct answer' : ''}">${letters[i]}</button>`
+              ).join('');
+              return `
+                <div class="zg-q${edits.has(p.q) ? ' edited' : ''}">
+                  <div class="zg-q-head">
+                    <b>Q${p.q + 1}</b>
+                    <span class="zg-tag ${tagKind}">${tag}</span>
+                    <span class="zg-q-key">Key ${answerKey[p.q] !== null && answerKey[p.q] !== undefined ? letters[answerKey[p.q]] : '—'}</span>
+                  </div>
+                  <div style="font-size:12.5px;color:var(--text);margin-bottom:8px;line-height:1.45;">
+                    ${Utils.esc((q.text || '').slice(0, 200))}${(q.text || '').length > 200 ? '…' : ''}
+                  </div>
+                  <div class="zg-q-choices">
+                    ${btns}
+                    <button type="button" class="zg-ch zg-ch-blank${e === null ? ' sel' : ''}"
+                            data-q="${p.q}" data-c="blank"
+                            aria-pressed="${e === null}"
+                            aria-label="Question ${p.q + 1}, blank">Blank</button>
+                  </div>
+                </div>`;
+            }).join('')
+          : `<div class="zg-empty">${filter === 'flag' ? 'Nothing uncertain — every answer was read clearly. ✅' : 'No graded questions.'}</div>`
+        }`;
+
+      bodyEl.scrollTop = tops;
+
+      bodyEl.querySelectorAll('[data-f]').forEach(b => {
+        b.onclick = () => { filter = b.dataset.f; bodyEl.scrollTop = 0; render(); };
+      });
+      bodyEl.querySelectorAll('.zg-ch').forEach(b => {
+        b.onclick = () => {
+          const qi = Number(b.dataset.q);
+          const val = b.dataset.c === 'blank' ? null : Number(b.dataset.c);
+          const original = result.answers[qi].override !== undefined
+            ? result.answers[qi].override
+            : result.answers[qi].detected;
+          if (val === original) edits.delete(qi); else edits.set(qi, val);
+          try { if (navigator.vibrate) navigator.vibrate(10); } catch (er) {}
+          render();
+        };
+      });
+      saveBtn.textContent = edits.size
+        ? `Save ${edits.size} change${edits.size === 1 ? '' : 's'}`
+        : (result.reviewedAt ? 'Done' : 'Mark reviewed');
+    };
+
+    m.overlay.querySelector('[data-close]').onclick = m.close;
+
+    const deleteBtn = m.overlay.querySelector('#omr-review-delete');
+    if (deleteBtn) deleteBtn.onclick = () => { m.close(); onDelete(); };
+
+    const reassignBtn = m.overlay.querySelector('#omr-review-reassign');
+    if (reassignBtn) reassignBtn.onclick = () => { m.close(); onReassign(); };
+
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      edits.forEach((val, qi) => { result.answers[qi].override = val; });
+
+      const details = result.answers.map(p => {
+        const key = answerKey[p.q];
+        const e = p.override !== undefined ? p.override : p.detected;
+        if (key === null || key === undefined) return { ...p, status: 'ungraded', correct: null };
+        if (e === null) return { ...p, status: 'blank', correct: false };
+        if (e === key) return { ...p, status: 'correct', correct: true };
+        return { ...p, status: 'incorrect', correct: false };
+      });
+      const counts = computeReviewCounts(details);
+      const gradable = details.filter(p => p.correct !== null).length;
+      const pointsPerItem = gradable
+        ? (assessment.maxScore || gradable) / gradable
+        : 1;
+      const score = Math.round(counts.correct * pointsPerItem);
+      const percentage = gradable ? Math.round((counts.correct / gradable) * 100) : 0;
+      const reviewedAt = new Date().toISOString();
+
+      try {
+        await onSaved({ details, ...counts, score, percentage, reviewedAt });
+        UI.toast('Reviewed score saved', 'success');
+        m.close();
+      } catch (e) {
+        console.error('[OMR] Save failed:', e);
+        UI.toast('Could not save review: ' + (e.message || ''), 'error', 5000);
+        saveBtn.disabled = false;
+      }
+    };
+
+    render();
+  }
+
+    /* ======================================================================
+     Standalone results manager
+     ====================================================================== */
+  async function openResultsManager(assessmentId) {
+    const a = await DB.get('assessments', assessmentId);
+    if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+
+    const activeLearners = State.learners.filter(Utils.isActiveLearner);
+    const totalLearners = activeLearners.length;
+
+    const m = UI.modal({
+      title: 'Scanned Papers · ' + (a.title || ''),
+      size: 'modal-xl',
+      body: `
+        <div id="omr-mgr-stats" class="grid grid-4 mb-16"></div>
+        <div id="omr-mgr-list"></div>
+      `,
+      footer: `<button class="btn btn-outline" data-close>Close</button>`
+    });
+
+    const refresh = async () => {
+      const rows = await hydrateScanResults(assessmentId, activeLearners);
+      const scannedIds = new Set(rows.map(r => r.learner.id));
+      const missing = activeLearners.filter(l => !scannedIds.has(l.id));
+      const avg = rows.length
+        ? Math.round(rows.reduce((s, r) => s + r.percentage, 0) / rows.length)
+        : 0;
+      const withFlags = rows.filter(r => {
+        if (r.reviewedAt) return false;
+        return r.answers.some(p =>
+          p.correct !== null && p.override === undefined &&
+          (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+           (p.confidence > 0 && p.confidence < 0.6))
+        );
+      }).length;
+
+      const statsEl = m.overlay.querySelector('#omr-mgr-stats');
+      statsEl.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label">Scanned</div>
+          <div class="stat-value">${rows.length}</div>
+          <div class="text-xs text-muted">of ${totalLearners} active learner${totalLearners === 1 ? '' : 's'}</div>
+        </div>
+        <div class="stat-card ${avg >= 75 ? 'accent-success' : (rows.length ? 'accent-danger' : '')}">
+          <div class="stat-label">Class average</div>
+          <div class="stat-value">${rows.length ? avg + '%' : '—'}</div>
+          <div class="text-xs text-muted">across ${rows.length} paper${rows.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="stat-card ${withFlags ? 'accent-warning' : 'accent-success'}">
+          <div class="stat-label">To review</div>
+          <div class="stat-value">${withFlags}</div>
+          <div class="text-xs text-muted">with uncertain answers</div>
+        </div>
+        <div class="stat-card ${missing.length ? 'accent-warning' : ''}">
+          <div class="stat-label">Not yet scanned</div>
+          <div class="stat-value">${missing.length}</div>
+          <div class="text-xs text-muted">${missing.length ? 'open the scanner to scan them' : 'all papers scanned'}</div>
+        </div>`;
+
+      renderManagerList(m, a, rows, refresh);
+    };
+
+    await refresh();
+  }
+
+  function renderManagerList(m, assessment, rows, onChanged) {
+    const listEl = m.overlay.querySelector('#omr-mgr-list');
+    if (!listEl) return;
+
+    if (!rows.length) {
+      listEl.innerHTML = UI.emptyState({
+        icon: 'scan',
+        title: 'No scanned papers yet',
+        message: 'Scan answer sheets from the Assessment Builder, then come back to review them here.'
+      });
+      return;
+    }
+
+    const byId = {};
+    rows.forEach(r => { byId[r.learner.id] = r; });
+
+    listEl.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table" style="font-size:12.5px;">
+          <thead>
+            <tr>
+              <th style="width:40px;">#</th>
+              <th style="width:52px;">Photo</th>
+              <th>Learner</th>
+              <th style="width:130px;">LRN</th>
+              <th style="width:90px;text-align:center;">Score</th>
+              <th style="width:80px;text-align:center;">Percent</th>
+              <th style="width:110px;text-align:center;">Scanned</th>
+              <th style="width:130px;">Status</th>
+              <th style="width:130px;text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((r, i) => {
+              const flagged = !r.reviewedAt && r.answers.some(p =>
+                p.correct !== null && p.override === undefined &&
+                (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+                 (p.confidence > 0 && p.confidence < 0.6))
+              );
+              const statusBadge = r.reviewedAt
+                ? `<span class="badge badge-success" style="font-size:10px;">Reviewed</span>`
+                : flagged
+                  ? `<span class="badge badge-warning" style="font-size:10px;">Review</span>`
+                  : `<span class="badge badge-blue" style="font-size:10px;">Auto-scored</span>`;
+              const pctColor = r.percentage >= 75 ? 'var(--success)' : 'var(--danger)';
+              return `
+                <tr>
+                  <td class="text-muted">${i + 1}</td>
+                  <td>${Utils.avatarHTML(r.learner, 32, 12)}</td>
+                  <td><strong>${Utils.esc(Utils.displayName(r.learner))}</strong></td>
+                  <td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px;">${Utils.esc(r.learner.lrn || '—')}</td>
+                  <td style="text-align:center;font-weight:700;">${r.score} / ${assessment.maxScore || 100}</td>
+                  <td style="text-align:center;font-weight:800;color:${pctColor};">${r.percentage}%</td>
+                  <td class="text-xs text-muted" style="text-align:center;">${Utils.timeAgo(r.scannedAt)}</td>
+                  <td>${statusBadge}</td>
+                  <td class="table-actions" style="justify-content:flex-end;">
+                    <button class="icon-btn" data-mgr-review="${Utils.attr(r.learner.id)}" title="Review answers">${icon('eye')}</button>
+                    <button class="icon-btn" data-mgr-reassign="${Utils.attr(r.learner.id)}" title="Change learner">${icon('users')}</button>
+                    <button class="icon-btn" data-mgr-delete="${Utils.attr(r.learner.id)}" title="Delete">${icon('trash')}</button>
+                  </td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    listEl.querySelectorAll('[data-mgr-review]').forEach(btn => {
+      btn.onclick = () => {
+        const r = byId[btn.dataset.mgrReview];
+        if (!r) return;
+        const sheetKey = computeAnswerKeyForVersion(assessment, r.formVersion || 'A');
+        openReviewModal({
+          assessment,
+          answerKey: sheetKey,
+          result: r,
+          onSaved: async (newData) => {
+            Object.assign(r, newData);
+            try {
+              const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', r.learner.id))
+                .find(x => x.assessmentId === assessment.id);
+              if (existing) {
+                existing.score = newData.score;
+                existing.percentage = newData.percentage;
+                existing.omrDetails = newData.details;
+                existing.reviewedAt = newData.reviewedAt;
+                existing.updatedAt = new Date().toISOString();
+                await DB.put('assessmentResults', existing);
+              }
+            } catch (err) { console.warn('[OMR] Persist failed:', err); }
+            await onChanged();
+            App.logActivity(`OMR review saved: ${Utils.fullName(r.learner)} — ${newData.percentage}%`, 'Assessments');
+          },
+          onDelete:   () => deleteManagerRow(assessment, r, onChanged),
+          onReassign: () => reassignManagerRow(assessment, r, onChanged)
+        });
+      };
+    });
+
+    listEl.querySelectorAll('[data-mgr-reassign]').forEach(btn => {
+      btn.onclick = () => {
+        const r = byId[btn.dataset.mgrReassign];
+        if (r) reassignManagerRow(assessment, r, onChanged);
+      };
+    });
+
+    listEl.querySelectorAll('[data-mgr-delete]').forEach(btn => {
+      btn.onclick = () => {
+        const r = byId[btn.dataset.mgrDelete];
+        if (r) deleteManagerRow(assessment, r, onChanged);
+      };
+    });
+  }
+
+  function computeAnswerKeyForVersion(assessment, version) {
+    const baseKey = (assessment.questions || []).map(q => {
+      const type = (q.type || '').toLowerCase();
+      if (type !== 'multiple choice') return null;
+      const choices = Array.isArray(q.choices) ? q.choices : [];
+      const clean = choices.map((c, i) => Utils.stripChoiceLetter(c, i));
+      const idx = clean.findIndex(c => c.toLowerCase() === String(q.answer || '').trim().toLowerCase());
+      return idx >= 0 ? idx : null;
+    });
+    if (!version || version === 'A') return baseKey;
+    const shuffled = _seededShuffle(baseKey.length, `form-${version}-${assessment.id}`);
+    return shuffled.map(origIdx => baseKey[origIdx]);
+  }
+
+  async function deleteManagerRow(assessment, row, onChanged) {
+    UI.confirm({
+      title: 'Delete this scan?',
+      message: `Remove the graded result for <strong>${Utils.esc(Utils.fullName(row.learner))}</strong>? The learner can be re-scanned later.`,
+      confirmText: 'Delete',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        try {
+          const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', row.learner.id))
+            .find(x => x.assessmentId === assessment.id);
+          if (existing) await DB.delete('assessmentResults', existing.id);
+          App.logActivity(`OMR scan deleted: ${Utils.fullName(row.learner)}`, 'Assessments');
+          UI.toast('Scan removed', 'info', 2200);
+          await onChanged();
+        } catch (e) {
+          UI.toast('Could not delete scan: ' + (e.message || ''), 'error', 5000);
+        }
+      }
+    });
+  }
+
+  function reassignManagerRow(assessment, row, onChanged) {
+    const candidates = State.learners.filter(Utils.isActiveLearner);
+    if (!candidates.length) { UI.toast('No active learners.', 'warning'); return; }
+    const currentId = row.learner.id;
+
+    const picker = UI.modal({
+      title: 'Change learner',
+      size: 'modal-lg',
+      body: `
+        <p class="text-sm text-muted mb-12">
+          Reassign the scan from
+          <strong>${Utils.esc(Utils.fullName(row.learner))}</strong>
+          to another learner. The answers and score are kept.
+        </p>
+        <div class="bh-search" style="margin-bottom:10px;">
+          ${icon('search')}
+          <input type="text" id="omr-mgr-reassign-search" placeholder="Search learners…" autocomplete="off">
+        </div>
+        <div id="omr-mgr-reassign-list" style="max-height:46vh;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+          ${candidates.map(l => `
+            <button type="button" class="omr-reassign-row"
+                    data-omr-pick="${Utils.attr(l.id)}"
+                    ${l.id === currentId ? 'disabled' : ''}
+                    style="display:flex;align-items:center;gap:10px;width:100%;
+                           padding:10px 14px;border:0;border-bottom:1px solid var(--border);
+                           background:${l.id === currentId ? 'var(--bg)' : 'var(--card)'};
+                           text-align:left;font:inherit;color:inherit;
+                           cursor:${l.id === currentId ? 'not-allowed' : 'pointer'};
+                           opacity:${l.id === currentId ? 0.55 : 1};">
+              ${Utils.avatarHTML(l, 32, 12)}
+              <span style="flex:1;min-width:0;">
+                <span style="display:block;font-weight:700;font-size:13px;">${Utils.esc(Utils.fullName(l))}</span>
+                <span class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</span>
+              </span>
+              ${l.id === currentId ? '<span class="badge badge-neutral" style="font-size:10px;">current</span>' : ''}
+            </button>`).join('')}
+        </div>
+      `,
+      footer: `<button class="btn btn-outline" data-close>Cancel</button>`
+    });
+
+    const searchEl = picker.overlay.querySelector('#omr-mgr-reassign-search');
+    const listEl   = picker.overlay.querySelector('#omr-mgr-reassign-list');
+    searchEl.addEventListener('input', () => {
+      const q = searchEl.value.trim().toLowerCase();
+      listEl.querySelectorAll('[data-omr-pick]').forEach(b => {
+        const l = candidates.find(x => x.id === b.dataset.omrPick);
+        const hay = l ? (Utils.fullName(l) + ' ' + (l.lrn || '')).toLowerCase() : '';
+        b.style.display = (!q || hay.includes(q)) ? '' : 'none';
+      });
+    });
+
+    listEl.querySelectorAll('[data-omr-pick]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const newId = btn.dataset.omrPick;
+        if (newId === currentId) return;
+        const newLearner = candidates.find(x => x.id === newId);
+        if (!newLearner) return;
+
+        const conflict = (await DB.getAllByIndex('assessmentResults', newId))
+          .find(x => x.assessmentId === assessment.id);
+
+        const proceed = async () => {
+          picker.close();
+          try {
+            const old = (await DB.getAllByIndex('assessmentResults', 'learnerId', currentId))
+              .find(x => x.assessmentId === assessment.id);
+            if (old) await DB.delete('assessmentResults', old.id);
+
+            const fresh = {
+              id: Utils.uid('r-'),
+              learnerId: newId,
+              assessmentId: assessment.id,
+              classId: State.activeClass ? State.activeClass.id : assessment.classId,
+              score: row.score,
+              maxScore: assessment.maxScore || 100,
+              percentage: row.percentage,
+              omrDetails: row.answers,
+              omrScanned: true,
+              omrFormVersion: row.formVersion || 'A',
+              omrReassignedFrom: currentId,
+              omrReassignedAt: new Date().toISOString(),
+              reviewedAt: row.reviewedAt || null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            };
+            await DB.put('assessmentResults', fresh);
+
+            App.logActivity(
+              `OMR scan reassigned: ${Utils.fullName(row.learner)} → ${Utils.fullName(newLearner)}`,
+              'Assessments'
+            );
+            UI.toast(`Reassigned to ${Utils.fullName(newLearner)}`, 'success', 2600);
+            await onChanged();
+          } catch (e) {
+            console.error('[OMR] Reassign failed:', e);
+            UI.toast('Could not reassign: ' + (e.message || ''), 'error', 5000);
+          }
+        };
+
+        if (conflict) {
+          UI.confirm({
+            title: 'Replace existing scan?',
+            message: `<strong>${Utils.esc(Utils.fullName(newLearner))}</strong> already has a scan for this assessment (${conflict.percentage}%). Reassigning will overwrite it.`,
+            confirmText: 'Replace',
+            confirmClass: 'btn-warning',
+            onConfirm: proceed
+          });
+        } else {
+          await proceed();
+        }
+      });
+    });
+  }
+  return {
+    printSheets,
+    openScanner,
+    openResultsManager,
+    SHEET,
+    anchorCenters,
+    bubblePositions,
+    renderSheetHTML,
+    loadCalibration
+  };
+  
 })();
 
 window.AnswerSheetOMR = AnswerSheetOMR;
