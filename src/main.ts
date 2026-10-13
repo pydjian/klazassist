@@ -5368,6 +5368,39 @@ toggleTheme() {
   },
   async loadNotifications() {
     State.notifications = (await DB.getSetting('notifications', [])) || [];
+
+    // Prune stale period reminders. A teaching-load notification is only
+    // useful while the period it refers to is current or imminent. Once
+    // the period has ended (or, for legacy notifications without end-time
+    // metadata, after ~90 minutes) the reminder is dropped so the panel
+    // does not show morning reminders in the evening.
+    const now      = new Date();
+    const nowMin   = now.getHours() * 60 + now.getMinutes();
+    const todayISO = Utils.todayISO();
+
+    const before = State.notifications.length;
+    State.notifications = State.notifications.filter(n => {
+      if (!n || n.module !== 'teaching-load') return true;
+
+      // Prefer exact metadata when present.
+      if (n._tlDate && typeof n._tlEndMin === 'number') {
+        if (n._tlDate < todayISO) return false;                 // yesterday or earlier
+        if (n._tlDate === todayISO && nowMin >= n._tlEndMin) {
+          return false;                                         // today, period has ended
+        }
+        return true;
+      }
+
+      // Fallback for legacy notifications that predate the metadata:
+      // keep only entries from the last 90 minutes.
+      const ageMs = now - new Date(n.timestamp || 0).getTime();
+      return ageMs < 90 * 60 * 1000;
+    });
+
+    if (State.notifications.length !== before) {
+      try { await DB.setSetting('notifications', State.notifications); } catch (e) {}
+    }
+
     this.updateNotifDot();
   },
   updateNotifDot() {
@@ -5949,10 +5982,36 @@ async openAssignAssessmentModal(assessmentId) {
     else if (type === 'lessonAI') this.navigate('lesson-planner');
     else if (type === 'examAI')   this.navigate('tos-generator');
   },
-  toggleNotifications() {
+  async toggleNotifications() {
     const panel = document.getElementById('notif-panel');
     panel.classList.toggle('show');
-    if (panel.classList.contains('show')) this.renderNotifications();
+
+    if (!panel.classList.contains('show')) return;
+
+    // Re-prune whenever the panel is opened so that a reminder created in
+    // the morning does not still appear in the evening.
+    const now      = new Date();
+    const nowMin   = now.getHours() * 60 + now.getMinutes();
+    const todayISO = Utils.todayISO();
+    const before   = State.notifications.length;
+
+    State.notifications = State.notifications.filter(n => {
+      if (!n || n.module !== 'teaching-load') return true;
+      if (n._tlDate && typeof n._tlEndMin === 'number') {
+        if (n._tlDate < todayISO) return false;
+        if (n._tlDate === todayISO && nowMin >= n._tlEndMin) return false;
+        return true;
+      }
+      const ageMs = now - new Date(n.timestamp || 0).getTime();
+      return ageMs < 90 * 60 * 1000;
+    });
+
+    if (State.notifications.length !== before) {
+      try { await DB.setSetting('notifications', State.notifications); } catch (e) {}
+    }
+
+    this.renderNotifications();
+    this.updateNotifDot();
   },
   renderNotifications() {
     const list = document.getElementById('notif-list');
@@ -15816,9 +15875,19 @@ async assessmentBuilder(root) {
     const assessments = (await DB.getAll('assessments'))
       .filter(a => Pages._assessmentAppliesToClass(a, clsIA ? clsIA.id : null));
     root.innerHTML = `
-      <div class="page-head">
-        <div><h2>Assessment Builder</h2><p>Create and manage assessments</p></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="Pages.openAssessmentModal()">${icon('edit')} New Assessment</button></div>
+        <div class="page-head">
+                <div>
+          <h2>Assessments</h2>
+          <p>Create, edit, print, and export your assessments — or let AI draft a TOS &amp; exam from your competencies.</p>
+        </div>
+                <div class="page-actions">
+          <button class="btn btn-outline" onclick="App.navigate('tos-generator')">
+            ${icon('star')} Generate with AI
+          </button>
+          <button class="btn btn-primary" onclick="Pages.openAssessmentModal()">
+            ${icon('edit')} New Assessment
+          </button>
+        </div>
       </div>
       <div class="card">
         ${assessments.length === 0
@@ -15847,7 +15916,7 @@ async assessmentBuilder(root) {
                   <button class="icon-btn" title="Scanned papers — review, reassign, delete" data-assess-papers="${Utils.attr(a.id)}">${icon('list')}</button>
                   <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
                   <button class="icon-btn" title="Export to Word" data-assess-export="${Utils.attr(a.id)}">${icon('download')}</button>
-                  <button class="icon-btn" title="Take Quiz" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
+                  <button class="icon-btn" title="Practice" data-assess-quiz="${Utils.attr(a.id)}">${icon('play')}</button>
                   <button class="icon-btn" title="Delete" data-assess-del="${Utils.attr(a.id)}">${icon('trash')}</button>
                 </td>
               </tr>`).join('')}</tbody>
@@ -16661,7 +16730,7 @@ async exportAssessmentWord(id) {
   async startQuiz(id) {
     const a = await DB.get('assessments', id);
     if (!a || !a.questions || !a.questions.length) { UI.toast('This assessment has no questions', 'warning'); return; }
-    const m = UI.modal({ title: 'Quiz Mode: ' + a.title, body: '<div id="quiz-content"></div>', size: 'modal-lg', footer: false });
+    const m = UI.modal({ title: 'Practice · ' + a.title, body: '<div id="quiz-content"></div>', size: 'modal-lg', footer: false });
     let idx = 0;
     let answers = {};
     const render = () => {
@@ -31545,8 +31614,8 @@ async quizManager(root) {
   root.innerHTML = `
     <div class="page-head">
       <div>
-        <h2>Quiz Manager</h2>
-        <p>Launch quizzes from your assessments</p>
+        <h2>Live Sessions</h2>
+        <p>Run an assessment as a practice quiz or on a projector for your whole class</p>
       </div>
       ${presenterActive ? `
         <div class="page-actions">
@@ -55049,8 +55118,8 @@ Pages._assessmentsHub = function (root) {
     stateKey: '_assessmentsHubTab',
     defaultTab: 'builder',
     tabs: [
-      { id: 'builder', label: 'Assessment Builder', icon: 'edit', render: (c) => Pages.assessmentBuilder(c) },
-      { id: 'quiz',    label: 'Quiz Manager',       icon: 'play', render: (c) => Pages.quizManager(c) }
+      { id: 'builder', label: 'Assessments',   icon: 'edit', render: (c) => Pages.assessmentBuilder(c) },
+      { id: 'quiz',    label: 'Live Sessions', icon: 'play', render: (c) => Pages.quizManager(c) }
     ]
   });
 };
