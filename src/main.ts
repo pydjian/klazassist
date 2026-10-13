@@ -53509,26 +53509,6 @@ function openScanner(assessmentId) {
       const deleteBtn   = foot.querySelector('#zg-delete');
       const saveBtn     = foot.querySelector('#zg-save');
 
-            let rescanArmed = null;
-      rescanBtn.onclick = async () => {
-        if (!rescanArmed) {
-          rescanBtn.textContent = 'Tap again to rescan';
-          rescanArmed = setTimeout(() => {
-            rescanArmed = null;
-            rescanBtn.textContent = 'Rescan';
-          }, 3000);
-          return;
-        }
-        clearTimeout(rescanArmed);
-        closeSheet();
-        await removeResult(result);
-        setStatus('Hold the sheet in view to rescan', 'warn');
-        UI.toast(
-          `Rescan ${result.learner.firstName || Utils.fullName(result.learner)}'s sheet`,
-          'info', 2500
-        );
-      };
-
       reassignBtn.onclick = () => reassignResult(result);
 
       deleteBtn.onclick = () => {
