@@ -875,6 +875,16 @@ const GRADING_POLICIES = {
     termModel: 'three-term',
     terms: ['Term 1', 'Term 2', 'Term 3'],
     passingGrade: 75,
+    // Progressive rollout of descriptive (non-numerical) grading in Key Stage 1.
+    // Keyed by the starting year of the school year.
+    //   SY 2026-2027 → Kindergarten, Grade 1
+    //   SY 2027-2028 → Kindergarten, Grade 1, Grade 2
+    //   SY 2028-2029 → Kindergarten, Grade 1, Grade 2, Grade 3
+    descriptiveGradeLevels: {
+      2026: ['Kindergarten', 'Grade 1'],
+      2027: ['Kindergarten', 'Grade 1', 'Grade 2'],
+      2028: ['Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3']
+    },
     // Internal distribution of the Examinations (EX) component.
     examinationSubstructure: { ST1: 30, ST2: 30, TE: 40 },
     // Component weights by "weight key" (key stage + subject classification).
@@ -1014,6 +1024,17 @@ const GRADING_POLICIES = {
     termModel: 'three-term',
     terms: ['Term 1', 'Term 2', 'Term 3'],
     passingGrade: 75,
+    // Per DO 015, s. 2026: "the default minimum grade to be reflected in the
+    // report card shall be 60". Applies only to zero-based grading — the
+    // transmutation-table years already floor out at 60 via the table itself.
+    minimumReportedGrade: 60,
+    // Same progressive rollout as DO015-2026. The ZERO-BASED-2027 policy is
+    // returned for SY 2027-2028 and every year after, so the rollout table
+    // spans the range of years the policy will actually govern.
+    descriptiveGradeLevels: {
+      2027: ['Kindergarten', 'Grade 1', 'Grade 2'],
+      2028: ['Kindergarten', 'Grade 1', 'Grade 2', 'Grade 3']
+    },
     weights: {
       'KS2_CORE': { WW: 20, PT: 50, EX: 30 }, 'KS3_CORE': { WW: 20, PT: 50, EX: 30 },
       'KS4_SHS_CORE': { WW: 20, PT: 50, EX: 30 }
@@ -1118,7 +1139,10 @@ const GradingEngine = {
     // can resolve the same policy object but receive different modes.
     // Clone once so we never write `gradingMode` back to the shared registry.
     const result = Object.assign({}, merged);
-    result.gradingMode = this.getGradingMode(gradeLevel, result);
+    // Pass the ACTUAL school year — the ZERO-BASED-2027 policy covers every
+    // year from SY 2027-2028 onward, so the rollout lookup must key off the
+    // caller's SY, not the policy's own effectiveSchoolYear.
+    result.gradingMode = this.getGradingMode(gradeLevel, result, sy);
     return result;
   },
 
@@ -1160,15 +1184,61 @@ const GradingEngine = {
    *
    * Returns 'descriptive' or 'numerical'. Never returns null.
    */
-  getGradingMode(gradeLevel, policy) {
+  /**
+   * Determine whether a grade level reports descriptively or numerically.
+   *
+   * DO 015, s. 2026 mandates a phased rollout of descriptive grading in
+   * Key Stage 1 (Kindergarten–Grade 3):
+   *   • SY 2026-2027 → Kindergarten, Grade 1
+   *   • SY 2027-2028 → Kindergarten, Grade 1, Grade 2
+   *   • SY 2028-2029 → Kindergarten, Grade 1, Grade 2, Grade 3
+   *
+   * @param {string} gradeLevel     The class's grade level.
+   * @param {Object} policy         A policy object from GRADING_POLICIES.
+   * @param {string} [schoolYear]   The actual SY being resolved, e.g. "2028-2029".
+   *                                If omitted, falls back to policy.effectiveSchoolYear.
+   * @returns {'descriptive'|'numerical'} Never returns null.
+   */
+  getGradingMode(gradeLevel, policy, schoolYear) {
     const g = String(gradeLevel || '').toLowerCase().trim();
 
-    // Kindergarten / Grade 1 → descriptive under DO 015, s. 2026
-    if (/^(k|kinder|kindergarten|grade\s*1|g1)\b/.test(g)) {
-      // Only applies to the DO015-2026 policy. Legacy DO 8 classes and the
-      // placeholder ZERO-BASED-2027 policy keep their own rules.
-      if (policy && policy.version === 'DO015-2026') return 'descriptive';
+    // Only DO 015, s. 2026 and later policies use descriptive grading.
+    // Legacy DO 8, s. 2015 classes always use numerical grading.
+    if (!policy ||
+        (policy.version !== 'DO015-2026' && policy.version !== 'ZERO-BASED-2027')) {
+      return 'numerical';
     }
+
+    // Resolve the school year: prefer the caller-supplied value, then fall
+    // back to the policy's own effective year.
+    const sy = schoolYear || policy.effectiveSchoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
+    const startYear = parseInt(String(sy).slice(0, 4), 10);
+    if (isNaN(startYear)) return 'numerical';
+
+    // Look up the descriptive grade levels for this school year.
+    // If the exact year is not listed, use the most recent rollout <= startYear.
+    const rollout = policy.descriptiveGradeLevels || {};
+    let descriptiveLevels = rollout[startYear];
+
+    if (!descriptiveLevels) {
+      const years = Object.keys(rollout).map(Number).sort((a, b) => b - a);
+      for (const y of years) {
+        if (y <= startYear) { descriptiveLevels = rollout[y]; break; }
+      }
+      if (!descriptiveLevels) descriptiveLevels = [];
+    }
+
+    // Normalise the grade level for comparison. Matches "K", "Kinder",
+    // "Kindergarten", "Grade 1"/"grade 1"/"g1", and equivalents for 2 and 3.
+    const isKinder = /^(k|kinder|kindergarten)\b/.test(g);
+    const isGrade1 = /^grade\s*1\b|^g1\b/.test(g);
+    const isGrade2 = /^grade\s*2\b|^g2\b/.test(g);
+    const isGrade3 = /^grade\s*3\b|^g3\b/.test(g);
+
+    if (isKinder && descriptiveLevels.includes('Kindergarten')) return 'descriptive';
+    if (isGrade1 && descriptiveLevels.includes('Grade 1'))      return 'descriptive';
+    if (isGrade2 && descriptiveLevels.includes('Grade 2'))      return 'descriptive';
+    if (isGrade3 && descriptiveLevels.includes('Grade 3'))      return 'descriptive';
 
     return 'numerical';
   },
@@ -1194,22 +1264,64 @@ const GradingEngine = {
     const ex = GradingEngine.calculateWeightedScore(components.exPct, weights.EX);
     return Utils.round(ww + pt + ex, 2);
   },
-  /** Returns { initialGrade, reportedGrade, transmutationPolicy } — never overwrites initialGrade. */
+  /**
+   * Apply transmutation to an Initial Grade.
+   *
+   * Two modes:
+   *   • Transmutation table present (SY 2026-2027 transitional) →
+   *     look up the reported grade from the table.
+   *   • No transmutation table (zero-based, SY 2027-2028 onward) →
+   *     report the Initial Grade directly, but enforce a minimum
+   *     reportable grade of 60 per DO 015, s. 2026.
+   *
+   * Never mutates the caller's input.
+   * Returns { initialGrade, reportedGrade, transmutationPolicy }.
+   */
   applyTransmutation(initialGrade, policy) {
     const ig = Number(initialGrade) || 0;
+
+    // ── Zero-based grading (no transmutation table) ──
     if (!policy || !policy.transmutation) {
-      return { initialGrade: ig, reportedGrade: Math.round(ig), transmutationPolicy: null };
+      const minimum = (policy && policy.minimumReportedGrade != null)
+        ? Number(policy.minimumReportedGrade)
+        : 60;
+
+      const rounded = Math.round(ig);
+      const reported = Math.max(minimum, rounded);
+
+      return {
+        initialGrade: ig,
+        reportedGrade: reported,
+        transmutationPolicy: null
+      };
     }
+
+    // ── Transmutation table present ──
     const table = policy.transmutation.table;
     for (const band of table) {
       if (ig >= band.min && ig <= band.max) {
-        return { initialGrade: ig, reportedGrade: band.reported, transmutationPolicy: policy.transmutation.version };
+        return {
+          initialGrade: ig,
+          reportedGrade: band.reported,
+          transmutationPolicy: policy.transmutation.version
+        };
       }
     }
-    const sorted = table.slice().sort((a,b) => a.min - b.min);
-    if (ig < sorted[0].min) return { initialGrade: ig, reportedGrade: sorted[0].reported, transmutationPolicy: policy.transmutation.version };
-    const top = sorted[sorted.length-1];
-    return { initialGrade: ig, reportedGrade: top.reported, transmutationPolicy: policy.transmutation.version };
+
+    const sorted = table.slice().sort((a, b) => a.min - b.min);
+    if (ig < sorted[0].min) {
+      return {
+        initialGrade: ig,
+        reportedGrade: sorted[0].reported,
+        transmutationPolicy: policy.transmutation.version
+      };
+    }
+    const top = sorted[sorted.length - 1];
+    return {
+      initialGrade: ig,
+      reportedGrade: top.reported,
+      transmutationPolicy: policy.transmutation.version
+    };
   },
   getDescriptor(reportedGrade, policy) {
     const g = Number(reportedGrade);
@@ -1255,6 +1367,202 @@ const GradingEngine = {
   getSubjectRemarks(finalGrade, passingGrade = 75) {
     if (finalGrade === null || finalGrade === undefined || isNaN(finalGrade)) return '';
     return Number(finalGrade) >= Number(passingGrade) ? 'Passed' : 'Failed';
+  },
+
+  /* ==========================================================================
+     SUMMER REMEDIAL CLASS (DO 015, s. 2026)
+     ========================================================================== */
+
+  /**
+   * Compute the Recomputed Final Grade (RFG).
+   *
+   * The RFG is the average of the Final Grade and the Remedial Class Mark.
+   * An RFG of 75 or higher indicates passing and qualifies the learner for
+   * promotion.
+   *
+   * @param {number} finalGrade   Final Grade at the end of the school year.
+   * @param {number} remedialMark Remedial Class Mark (RCM).
+   * @returns {number|null} The RFG, or null if inputs are invalid.
+   */
+  calculateRecomputedFinalGrade(finalGrade, remedialMark) {
+    const fg  = Number(finalGrade);
+    const rcm = Number(remedialMark);
+    if (isNaN(fg) || isNaN(rcm)) return null;
+    return Math.round((fg + rcm) / 2);
+  },
+
+  /**
+   * Determine whether a learner requires Summer Remedial Class.
+   *
+   * Learners who fail in at most two learning areas undergo SRC. Learners
+   * who fail in more than two are retained at the same grade level.
+   *
+   * @param {Object} finalGrades A map of learning area → Final Grade.
+   * @param {Object} policy      The active grading policy.
+   * @returns {{ count, areas, needsRemedial, shouldRetain }}
+   */
+  assessRemediation(finalGrades, policy) {
+    const passing = (policy && policy.passingGrade) || 75;
+    const failed  = [];
+
+    Object.entries(finalGrades || {}).forEach(([area, grade]) => {
+      const g = Number(grade);
+      if (!isNaN(g) && g < passing) failed.push(area);
+    });
+
+    return {
+      count: failed.length,
+      areas: failed,
+      needsRemedial: failed.length > 0 && failed.length <= 2,
+      shouldRetain:  failed.length > 2
+    };
+  },
+
+  /* ==========================================================================
+     PROMOTION STATUS (DO 015, s. 2026)
+     ========================================================================== */
+
+  /**
+   * Determine the learner's promotion status.
+   *
+   *   • Pass all learning areas                    → Promoted
+   *   • Fail in ≤ 2 areas (after SRC/RFG applied)  → Conditionally Promoted
+   *   • Fail in > 2 areas                          → Retained
+   *
+   * @param {Object} finalGrades    A map of learning area → Final Grade.
+   * @param {Object} policy         The active grading policy.
+   * @param {Object} [remedialMarks] Optional map of learning area → RCM.
+   * @returns {{ status, label, detail, failedAreas }}
+   */
+  getPromotionStatus(finalGrades, policy, remedialMarks) {
+    const passing = (policy && policy.passingGrade) || 75;
+    const rcm     = remedialMarks || {};
+    const failedAfterRemedial = [];
+
+    Object.entries(finalGrades || {}).forEach(([area, grade]) => {
+      const fg = Number(grade);
+      if (isNaN(fg)) return;
+
+      // If a remedial mark exists for this area, compute the RFG. A passing
+      // RFG clears the failure for promotion purposes even though the Final
+      // Grade itself remains below the passing threshold.
+      if (rcm[area] != null) {
+        const rfg = GradingEngine.calculateRecomputedFinalGrade(fg, rcm[area]);
+        if (rfg !== null && rfg >= passing) return;
+      }
+
+      if (fg < passing) failedAfterRemedial.push(area);
+    });
+
+    if (failedAfterRemedial.length === 0) {
+      return {
+        status: 'promoted',
+        label: 'Promoted',
+        detail: 'All learning areas passed.',
+        failedAreas: []
+      };
+    }
+
+    if (failedAfterRemedial.length <= 2) {
+      return {
+        status: 'conditional',
+        label: 'Conditionally Promoted',
+        detail: `Requires Summer Remedial Class in: ${failedAfterRemedial.join(', ')}.`,
+        failedAreas: failedAfterRemedial
+      };
+    }
+
+    return {
+      status: 'retained',
+      label: 'Retained',
+      detail: `Failed in ${failedAfterRemedial.length} learning areas. Retained at the same grade level.`,
+      failedAreas: failedAfterRemedial
+    };
+  },
+
+  /* ==========================================================================
+     ATTENDANCE ELIGIBILITY (DO 015, s. 2026)
+     ========================================================================== */
+
+  /**
+   * Check whether absences disqualify a learner from receiving credit.
+   *
+   * Per DO 015, s. 2026: "learners who incur absences exceeding twenty
+   * percent of the prescribed class days shall receive a failing grade and
+   * no credit, unless justified."
+   *
+   * @param {number} absenceCount    Total 'Absent' days.
+   * @param {number} totalClassDays  Prescribed class days for the term/year.
+   * @returns {{ eligible, absenceRate, threshold, message }}
+   */
+  checkAttendanceEligibility(absenceCount, totalClassDays) {
+    const absences = Number(absenceCount) || 0;
+    const total    = Number(totalClassDays) || 0;
+
+    if (total <= 0) {
+      return {
+        eligible: true,
+        absenceRate: 0,
+        threshold: 20,
+        message: 'No class days recorded.'
+      };
+    }
+
+    const rate = Utils.round((absences / total) * 100, 1);
+    const eligible = rate <= 20;
+
+    return {
+      eligible,
+      absenceRate: rate,
+      threshold: 20,
+      message: eligible
+        ? `Attendance is within the 20% limit (${rate}%).`
+        : `Absences exceed 20% of class days (${rate}%). A failing grade and no credit apply unless the school head grants an exemption.`
+    };
+  },
+
+  /* ==========================================================================
+     ACADEMIC EXCELLENCE AWARD (DO 015, s. 2026)
+     ========================================================================== */
+
+  /**
+   * Determine whether a learner qualifies for the Academic Excellence Award.
+   *
+   * Criteria: General Average of 90 or higher, with no Final Grade below 80
+   * in any learning area.
+   *
+   * @param {number} generalAverage The learner's General Average.
+   * @param {Object} finalGrades    A map of learning area → Final Grade.
+   * @returns {{ qualifies, reason }}
+   */
+  getAcademicExcellenceAward(generalAverage, finalGrades) {
+    const ga = Number(generalAverage);
+
+    if (isNaN(ga) || ga < 90) {
+      return {
+        qualifies: false,
+        reason: `General Average is ${isNaN(ga) ? '—' : ga}, below the required 90.`
+      };
+    }
+
+    const below80 = Object.entries(finalGrades || {})
+      .filter(([, g]) => {
+        const fg = Number(g);
+        return !isNaN(fg) && fg < 80;
+      })
+      .map(([area]) => area);
+
+    if (below80.length) {
+      return {
+        qualifies: false,
+        reason: `Final Grade below 80 in: ${below80.join(', ')}.`
+      };
+    }
+
+    return {
+      qualifies: true,
+      reason: 'Meets all criteria for the Academic Excellence Award.'
+    };
   },
 
 };
@@ -12681,59 +12989,222 @@ async _renderPreviousSYSection(cls) {
 },
 
 /* ---------- Feature 10 · Configurable Health Weights ---------- */
-openHealthWeightsModal() {
-  const w = State.healthWeights || { attendance: 50, grade: 50 };
-  const m = UI.modal({
-    title: 'Class Health Weights',
-    body: `
-      <p class="text-sm text-muted mb-16">Adjust how the composite <strong>Class Health</strong> score is computed on this profile. Weights are relative — they don't need to sum to 100.</p>
-      <div class="form-group">
-        <label style="display:flex;justify-content:space-between;"><span>Attendance weight</span><span id="hw-a-val">${w.attendance}</span></label>
-        <input type="range" min="0" max="100" value="${w.attendance}" id="hw-att" style="width:100%;">
-      </div>
-      <div class="form-group">
-        <label style="display:flex;justify-content:space-between;"><span>Grade weight</span><span id="hw-g-val">${w.grade}</span></label>
-        <input type="range" min="0" max="100" value="${w.grade}" id="hw-grade" style="width:100%;">
-      </div>
-      <div class="alert alert-info" style="font-size:12px;">
-        ${icon('info')}<div>Presets:</div>
-      </div>
-      <div class="flex gap-6" style="flex-wrap:wrap;">
-        <button class="btn btn-sm btn-outline" data-hw-preset="50,50">Balanced (50/50)</button>
-        <button class="btn btn-sm btn-outline" data-hw-preset="70,30">Attendance-first (70/30)</button>
-        <button class="btn btn-sm btn-outline" data-hw-preset="30,70">Academics-first (30/70)</button>
-        <button class="btn btn-sm btn-outline" data-hw-preset="100,0">Attendance only</button>
-      </div>`,
-    footer: `<button class="btn btn-outline" data-cancel>Cancel</button>
-             <button class="btn btn-primary" id="hw-save">Save</button>`
-  });
+  openHealthWeightsModal() {
+    const w = State.healthWeights || { attendance: 50, grade: 50 };
+    const m = UI.modal({
+      title: 'Class Health Weights',
+      body: `
+        <p class="text-sm text-muted mb-16">Adjust how the composite <strong>Class Health</strong> score is computed on this profile. Weights are relative — they don't need to sum to 100.</p>
+        <div class="form-group">
+          <label style="display:flex;justify-content:space-between;"><span>Attendance weight</span><span id="hw-a-val">${w.attendance}</span></label>
+          <input type="range" min="0" max="100" value="${w.attendance}" id="hw-att" style="width:100%;">
+        </div>
+        <div class="form-group">
+          <label style="display:flex;justify-content:space-between;"><span>Grade weight</span><span id="hw-g-val">${w.grade}</span></label>
+          <input type="range" min="0" max="100" value="${w.grade}" id="hw-grade" style="width:100%;">
+        </div>
+        <div class="alert alert-info" style="font-size:12px;">
+          ${icon('info')}<div>Presets:</div>
+        </div>
+        <div class="flex gap-6" style="flex-wrap:wrap;">
+          <button class="btn btn-sm btn-outline" data-hw-preset="50,50">Balanced (50/50)</button>
+          <button class="btn btn-sm btn-outline" data-hw-preset="70,30">Attendance-first (70/30)</button>
+          <button class="btn btn-sm btn-outline" data-hw-preset="30,70">Academics-first (30/70)</button>
+          <button class="btn btn-sm btn-outline" data-hw-preset="100,0">Attendance only</button>
+        </div>`,
+      footer: `<button class="btn btn-outline" data-cancel>Cancel</button>
+               <button class="btn btn-primary" id="hw-save">Save</button>`
+    });
 
-  const att = m.overlay.querySelector('#hw-att');
-  const grade = m.overlay.querySelector('#hw-grade');
-  const aVal = m.overlay.querySelector('#hw-a-val');
-  const gVal = m.overlay.querySelector('#hw-g-val');
-  att.oninput = () => { aVal.textContent = att.value; };
-  grade.oninput = () => { gVal.textContent = grade.value; };
-  m.overlay.querySelectorAll('[data-hw-preset]').forEach(b => {
-    b.onclick = () => {
-      const [a, g] = b.dataset.hwPreset.split(',').map(Number);
-      att.value = a; grade.value = g;
-      aVal.textContent = a; gVal.textContent = g;
+    const att = m.overlay.querySelector('#hw-att');
+    const grade = m.overlay.querySelector('#hw-grade');
+    const aVal = m.overlay.querySelector('#hw-a-val');
+    const gVal = m.overlay.querySelector('#hw-g-val');
+    att.oninput = () => { aVal.textContent = att.value; };
+    grade.oninput = () => { gVal.textContent = grade.value; };
+    m.overlay.querySelectorAll('[data-hw-preset]').forEach(b => {
+      b.onclick = () => {
+        const [a, g] = b.dataset.hwPreset.split(',').map(Number);
+        att.value = a; grade.value = g;
+        aVal.textContent = a; gVal.textContent = g;
+      };
+    });
+    m.overlay.querySelector('[data-cancel]').onclick = m.close;
+    m.overlay.querySelector('#hw-save').onclick = async () => {
+      const a = Number(att.value) || 0;
+      const g = Number(grade.value) || 0;
+      if (a + g === 0) { UI.toast('At least one weight must be greater than zero.', 'warning'); return; }
+      State.healthWeights = { attendance: a, grade: g };
+      await DB.setSetting('healthWeights', State.healthWeights);
+      App.logActivity('Health weights updated (' + a + '/' + g + ')', 'Settings');
+      m.close();
+      App.navigate('classprofile');
+      UI.toast('Health weights saved', 'success');
     };
-  });
-  m.overlay.querySelector('[data-cancel]').onclick = m.close;
-  m.overlay.querySelector('#hw-save').onclick = async () => {
-    const a = Number(att.value) || 0;
-    const g = Number(grade.value) || 0;
-    if (a + g === 0) { UI.toast('At least one weight must be greater than zero.', 'warning'); return; }
-    State.healthWeights = { attendance: a, grade: g };
-    await DB.setSetting('healthWeights', State.healthWeights);
-    App.logActivity('Health weights updated (' + a + '/' + g + ')', 'Settings');
-    m.close();
-    App.navigate('classprofile');
-    UI.toast('Health weights saved', 'success');
-  };
-},
+  },
+
+  /* ==========================================================================
+     SUMMER REMEDIAL CLASS — record RCM and compute RFG per failed area.
+     ========================================================================== */
+  async openRemedialClassModal(learnerId) {
+    const learner = State.learners.find(l => l.id === learnerId);
+    if (!learner) { UI.toast('Learner not found.', 'error'); return; }
+
+    const cls = State.activeClass;
+    const policy = GradingEngine.resolvePolicy({
+      schoolYear: cls.schoolYear,
+      gradeLevel: cls.gradeLevel
+    });
+
+    // Collect every subject-class in the same cohort.
+    const subjects = await Pages._findCohortSubjects(cls);
+
+    // Compute the learner's Final Grade per subject.
+    const finalGrades = {};
+    for (const s of subjects) {
+      const tgs = await DB.getAllByIndex('termGrades', 'classId', s.id);
+      const learnerTgs = tgs.filter(t => t.learnerId === learnerId && t.status === 'finalized');
+      const finals = learnerTgs.map(t => Number(t.reportedGrade)).filter(n => !isNaN(n));
+      if (finals.length) {
+        finalGrades[s.subject || 'Untitled'] = Math.round(finals.reduce((a, b) => a + b, 0) / finals.length);
+      }
+    }
+
+    const failedAreas = Object.entries(finalGrades)
+      .filter(([, g]) => g < policy.passingGrade)
+      .map(([area]) => area);
+
+    if (!failedAreas.length) {
+      UI.toast('This learner passed all learning areas. No remedial class needed.', 'success');
+      return;
+    }
+
+    // Load any saved remedial marks. Keyed by COHORT so a mark entered while
+    // signed into any subject-class is visible from every subject-class.
+    const cohortKey = Pages._cohortKey(cls);
+    const sf9Id = Pages._sf9RecordId(cohortKey, learnerId);
+    const sf9 = await DB.get('sf9Records', sf9Id).catch(() => null);
+    const existingRcm = (sf9 && sf9.remedialMarks) || {};
+
+    const m = UI.modal({
+      title: `Summer Remedial Class · ${Utils.fullName(learner)}`,
+      size: 'modal-lg',
+      body: `
+        <div class="alert alert-info mb-16">
+          ${icon('info')}
+          <div>
+            Record the Remedial Class Mark (RCM) for each failed learning area.
+            The Recomputed Final Grade (RFG) is the average of the Final Grade
+            and the RCM. A RFG of <strong>${policy.passingGrade} or higher</strong>
+            qualifies the learner for promotion.
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:13px;">
+            <thead><tr>
+              <th>Learning Area</th>
+              <th style="text-align:center;">Final Grade</th>
+              <th style="text-align:center;width:120px;">RCM</th>
+              <th style="text-align:center;">RFG</th>
+              <th style="text-align:center;">Status</th>
+            </tr></thead>
+            <tbody>
+              ${failedAreas.map(area => {
+                const fg = finalGrades[area];
+                const rcm = existingRcm[area] != null ? existingRcm[area] : '';
+                const rfg = rcm !== '' ? GradingEngine.calculateRecomputedFinalGrade(fg, rcm) : null;
+                return `<tr data-remedial-row="${Utils.attr(area)}">
+                  <td><strong>${Utils.esc(area)}</strong></td>
+                  <td style="text-align:center;">${fg}</td>
+                  <td>
+                    <input type="number" class="form-control remedial-rcm"
+                           data-area="${Utils.attr(area)}" min="0" max="100"
+                           value="${rcm}" style="text-align:center;">
+                  </td>
+                  <td class="remedial-rfg" data-area="${Utils.attr(area)}"
+                      style="text-align:center;font-weight:700;">
+                    ${rfg !== null ? rfg : '—'}
+                  </td>
+                  <td class="remedial-status" data-area="${Utils.attr(area)}"
+                      style="text-align:center;">
+                    ${rfg !== null
+                      ? (rfg >= policy.passingGrade
+                          ? '<span class="badge badge-success">Passed</span>'
+                          : '<span class="badge badge-danger">Failed</span>')
+                      : '—'}
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`,
+      footer: `
+        <button class="btn btn-outline" data-close>Cancel</button>
+        <button class="btn btn-primary" id="remedial-save">${icon('save')} Save &amp; Compute RFG</button>
+      `
+    });
+
+    // Live RFG computation.
+    m.overlay.querySelectorAll('.remedial-rcm').forEach(inp => {
+      inp.addEventListener('input', () => {
+        const area = inp.dataset.area;
+        const fg   = finalGrades[area];
+        const rcm  = Number(inp.value);
+        const rfgEl = m.overlay.querySelector(`.remedial-rfg[data-area="${CSS.escape(area)}"]`);
+        const stEl  = m.overlay.querySelector(`.remedial-status[data-area="${CSS.escape(area)}"]`);
+
+        if (inp.value === '' || isNaN(rcm)) {
+          rfgEl.textContent = '—';
+          stEl.innerHTML    = '—';
+          return;
+        }
+        const rfg = GradingEngine.calculateRecomputedFinalGrade(fg, rcm);
+        rfgEl.textContent = rfg !== null ? rfg : '—';
+        stEl.innerHTML = rfg !== null
+          ? (rfg >= policy.passingGrade
+              ? '<span class="badge badge-success">Passed</span>'
+              : '<span class="badge badge-danger">Failed</span>')
+          : '—';
+      });
+    });
+
+    m.overlay.querySelector('[data-close]').onclick = m.close;
+
+    m.overlay.querySelector('#remedial-save').onclick = async () => {
+      const marks = {};
+      m.overlay.querySelectorAll('.remedial-rcm').forEach(inp => {
+        const v = inp.value.trim();
+        if (v !== '') marks[inp.dataset.area] = Number(v);
+      });
+
+      try {
+        let rec = await DB.get('sf9Records', sf9Id) || {
+          id: sf9Id,
+          cohortKey,
+          classId: cls.id,
+          learnerId,
+          schoolYear: cls.schoolYear || State.schoolYear,
+          createdAt: new Date().toISOString()
+        };
+        rec.cohortKey         = cohortKey;
+        rec.remedialMarks     = marks;
+        rec.remedialUpdatedAt = new Date().toISOString();
+        rec.updatedAt         = rec.remedialUpdatedAt;
+        await DB.put('sf9Records', rec);
+
+        App.logActivity(`Summer Remedial Class marks saved for ${Utils.fullName(learner)}`, 'Grading');
+        UI.toast('RCM saved and RFG computed.', 'success');
+        m.close();
+        App.navigate(State.currentModule);
+      } catch (e) {
+        console.error(e);
+        UI.toast('Could not save: ' + (e.message || ''), 'error', 5000);
+      }
+    };
+  },
+
+
 
 /* ---------- Feature 11 · Historical Snapshots ---------- */
 async takeClassProfileSnapshot() {
@@ -15327,8 +15798,25 @@ async renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, colum
 
       const hasAny = ww.length || pt.length || st1.length || st2.length || te.length;
       const ig = hasAny ? GradingEngine.calculateInitialGrade({ wwPct, ptPct, exPct }, weights) : 0;
-      const { reportedGrade } = hasAny ? GradingEngine.applyTransmutation(ig, policy) : { reportedGrade: '' };
-      const descriptor = hasAny ? GradingEngine.getDescriptor(reportedGrade, policy) : { label: '—' };
+
+      // Reported grade and descriptor depend on the grading mode:
+      //   • Numerical mode   → transmute the Initial Grade, then look up
+      //                        the descriptor from the reported grade.
+      //   • Descriptive mode → skip transmutation entirely; the descriptor
+      //                        is looked up directly from the Initial Grade,
+      //                        and there is no numeric reported grade.
+      let reportedGrade = '';
+      let descriptor = { label: '—', description: '' };
+
+      if (hasAny) {
+        if (descriptive) {
+          descriptor = GradingEngine.getDescriptor(ig, policy);
+        } else {
+          const t = GradingEngine.applyTransmutation(ig, policy);
+          reportedGrade = t.reportedGrade;
+          descriptor = GradingEngine.getDescriptor(reportedGrade, policy);
+        }
+      }
 
       computations[l.id] = { wwPct, ptPct, st1Pct, st2Pct, tePct, exPct, ig, reportedGrade, descriptor };
 
@@ -33702,6 +34190,82 @@ if (State.gradeSummaryMode === 'sheet') {
     termAvgs[t] = vals.length ? Utils.round(Utils.avg(vals), 1) : null;
   });
 
+  // ── Promotion status ──
+  // Build the per-learner Final Grade map across every subject in the cohort,
+  // then ask the Grading Engine where each learner stands.
+  const promotionRows = [];
+  for (const l of State.learners) {
+    const finalGrades = {};
+    for (const s of subjects) {
+      const m = matrixBySubject[s.id][l.id];
+      if (m && m.final !== null && m.final !== undefined) {
+        finalGrades[s.subject || 'Untitled'] = m.final;
+      }
+    }
+    if (!Object.keys(finalGrades).length) continue;
+
+    // Load the learner's saved remedial marks, if any.
+    let remedialMarks = null;
+    try {
+      const sf9 = await DB.get(
+        'sf9Records',
+        `sf9-${cls.id}-${l.id}-${cls.schoolYear || State.schoolYear}`
+      );
+      if (sf9 && sf9.remedialMarks) remedialMarks = sf9.remedialMarks;
+    } catch (e) { /* no record — nothing to add */ }
+
+    const status = GradingEngine.getPromotionStatus(finalGrades, policy, remedialMarks);
+    promotionRows.push({ learner: l, status, finalGrades });
+  }
+  const promotedCount    = promotionRows.filter(p => p.status.status === 'promoted').length;
+  const conditionalCount = promotionRows.filter(p => p.status.status === 'conditional').length;
+  const retainedCount    = promotionRows.filter(p => p.status.status === 'retained').length;
+
+  const promotionStatusHTML = !promotionRows.length ? '' : `
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>Promotion Status · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</h3>
+        <span class="text-xs text-muted">${promotionRows.length} learner${promotionRows.length === 1 ? '' : 's'} with finalized grades</span>
+      </div>
+      <div class="grid grid-3 mb-12">
+        <div class="stat-card accent-success">
+          <div class="stat-icon">${icon('check')}</div>
+          <div class="stat-label">Promoted</div>
+          <div class="stat-value">${promotedCount}</div>
+        </div>
+        <div class="stat-card ${conditionalCount ? 'accent-warning' : ''}">
+          <div class="stat-icon">${icon('alert')}</div>
+          <div class="stat-label">Conditionally Promoted</div>
+          <div class="stat-value">${conditionalCount}</div>
+        </div>
+        <div class="stat-card ${retainedCount ? 'accent-danger' : ''}">
+          <div class="stat-icon">${icon('xCircle')}</div>
+          <div class="stat-label">Retained</div>
+          <div class="stat-value">${retainedCount}</div>
+        </div>
+      </div>
+      ${conditionalCount ? `
+        <div class="alert alert-warning" style="font-size:12px;">
+          ${icon('alert')}
+          <div>
+            <strong>${conditionalCount}</strong> learner${conditionalCount === 1 ? '' : 's'} need
+            Summer Remedial Class in at most 2 learning areas. Open the learner's
+            record to enter the Remedial Class Mark and compute the Recomputed Final Grade.
+            <button class="btn btn-sm btn-primary" id="gs-open-remedial" style="margin-left:8px;">
+              ${icon('edit')} Manage Remedial Class
+            </button>
+          </div>
+        </div>` : ''}
+      ${retainedCount ? `
+        <div class="alert alert-danger" style="font-size:12px;">
+          ${icon('alert')}
+          <div>
+            <strong>${retainedCount}</strong> learner${retainedCount === 1 ? '' : 's'} failed in more than
+            2 learning areas and will be retained at the same grade level.
+          </div>
+        </div>` : ''}
+    </div>`;
+
   // ── Apply filters to the roster ──
   let filteredLearners = State.learners.slice();
   if (F.query) {
@@ -33926,6 +34490,8 @@ if (State.gradeSummaryMode === 'sheet') {
       </div>
     </div>
 
+    ${promotionStatusHTML}
+
      <!-- ─── View toggle & subject selector ─── -->
     <div class="card mb-16">
       <div class="gs-view-row">
@@ -34086,6 +34652,46 @@ if (modeToggle) {
       Pages._gsOpenLearnerDetail(id, subjects, terms, matrixBySubject, policy);
     };
   });
+
+  // "Manage Remedial Class" button — opens a picker if more than one learner
+  // is conditionally promoted, or jumps straight to the single learner.
+  const remedialBtn = root.querySelector('#gs-open-remedial');
+  if (remedialBtn) {
+    remedialBtn.onclick = () => {
+      const conditional = promotionRows.filter(p => p.status.status === 'conditional');
+      if (conditional.length === 1) {
+        Pages.openRemedialClassModal(conditional[0].learner.id);
+      } else if (conditional.length > 1) {
+        // Small chooser modal.
+        const listHTML = conditional.map(p =>
+          `<button type="button" class="btn btn-outline btn-block"
+                   style="justify-content:flex-start;text-align:left;margin-bottom:6px;"
+                   data-remedial-pick="${Utils.attr(p.learner.id)}">
+             ${Utils.avatarHTML(p.learner, 28, 11)}
+             <div style="flex:1;min-width:0;margin-left:8px;">
+               <div style="font-weight:600;">${Utils.esc(Utils.fullName(p.learner))}</div>
+               <div class="text-xs text-muted">Failed in: ${Utils.esc(p.status.failedAreas.join(', '))}</div>
+             </div>
+           </button>`).join('');
+        const picker = UI.modal({
+          title: 'Select Learner for Remedial Class',
+          size: 'modal-lg',
+          body: `<p class="text-sm text-muted mb-12">
+                   ${conditional.length} learners are conditionally promoted.
+                   Pick one to record their Remedial Class Marks.
+                 </p>
+                 <div>${listHTML}</div>`,
+          footer: `<button class="btn btn-outline" data-close>Cancel</button>`
+        });
+        picker.overlay.querySelectorAll('[data-remedial-pick]').forEach(b => {
+          b.onclick = () => {
+            picker.close();
+            Pages.openRemedialClassModal(b.dataset.remedialPick);
+          };
+        });
+      }
+    };
+  }
 },
 
 /* ─── Grade Summary: CSV export ─── */
@@ -40343,6 +40949,112 @@ _openPhilIriHelp() {
   });
 },
 
+    /* ==========================================================================
+     COHORT HELPERS — treat {gradeLevel, section, SY} as the reporting unit.
+     --------------------------------------------------------------------------
+     In elementary (self-contained) classrooms, one teacher handles every
+     subject in the same section. Each subject lives in its own `class` record,
+     but a learner's report card spans the whole cohort. These helpers make
+     that distinction explicit.
+     ========================================================================== */
+
+  /** Stable, filesystem-safe key identifying a cohort. */
+  _cohortKey(cls) {
+    if (!cls) return '';
+    const gl  = String(cls.gradeLevel || '').trim();
+    const sec = String(cls.section    || '').trim();
+    const sy  = String(cls.schoolYear || (typeof State !== 'undefined' ? State.schoolYear : '') || '').trim();
+    return [gl, sec, sy]
+      .map(s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''))
+      .filter(Boolean)
+      .join('__');
+  },
+
+  /** Canonical SF9 record ID for a cohort+learner pair. */
+  _sf9RecordId(cohortKey, learnerId) {
+    return `sf9-${cohortKey}-${learnerId}`;
+  },
+
+  /** Return every subject-class in the same cohort as `cls`, sorted by subject. */
+  async _findCohortSubjects(cls) {
+    if (!cls) return [];
+    const all = await DB.getAll('classes');
+    const cohort = all.filter(c =>
+      !c.archived &&
+      c.gradeLevel === cls.gradeLevel &&
+      c.section    === cls.section &&
+      (c.schoolYear || State.schoolYear) === (cls.schoolYear || State.schoolYear)
+    );
+    return cohort.sort((a, b) => (a.subject || '').localeCompare(b.subject || ''));
+  },
+
+  /**
+   * Load the SF9 record for a cohort+learner, migrating from the old
+   * class-keyed format on first access. Always returns a valid record.
+   */
+  async _loadOrCreateSf9Record(cohortKey, learner, schoolYear, cls) {
+    const newId = Pages._sf9RecordId(cohortKey, learner.id);
+
+    // 1 · Try the canonical cohort-keyed record.
+    let rec = await DB.get('sf9Records', newId);
+    if (rec) {
+      if (rec.cohortKey !== cohortKey) {
+        rec.cohortKey = cohortKey;
+        await DB.put('sf9Records', rec);
+      }
+      return rec;
+    }
+
+    // 2 · Fall back to any legacy class-keyed record for this learner whose
+    //     class shares the same grade level and section. This finds records
+    //     created before the fix and re-keys them in place.
+    const existing = await DB.getAllByIndex('sf9Records', 'learnerId', learner.id);
+    const legacy = existing.find(r =>
+      r.schoolYear === schoolYear &&
+      State.classes.some(c =>
+        c.id === r.classId &&
+        c.gradeLevel === cls.gradeLevel &&
+        c.section    === cls.section
+      )
+    );
+    if (legacy) {
+      const oldId = legacy.id;
+      legacy.id         = newId;
+      legacy.cohortKey  = cohortKey;
+      legacy.updatedAt  = new Date().toISOString();
+      await DB.put('sf9Records', legacy);
+      if (oldId !== newId) {
+        try { await DB.delete('sf9Records', oldId); } catch (e) {}
+      }
+      return legacy;
+    }
+
+    // 3 · Create a fresh record.
+    const fresh = {
+      id: newId,
+      cohortKey,
+      classId: cls.id,
+      learnerId: learner.id,
+      schoolYear,
+      subjects: {},
+      coreValues: {
+        'Maka-Diyos':        { term1: '', term2: '', term3: '' },
+        'Makatao':           { term1: '', term2: '', term3: '' },
+        'Makakalikasan':     { term1: '', term2: '', term3: '' },
+        'Makabansa':         { term1: '', term2: '', term3: '' }
+      },
+      teacherComments: { term1: '', term2: '', term3: '' },
+      transfer: {
+        admittedToGrade: '', eligibleFor: '', approved: '',
+        cancelledDate: '', cancelledBy: ''
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    await DB.put('sf9Records', fresh);
+    return fresh;
+  },
+
   /* ---------- Internal helper: render the SF9 editor for the selected learner ---------- */
   async _renderSf9Editor() {
     const container = document.getElementById('sf9-editor-container');
@@ -40361,32 +41073,13 @@ _openPhilIriHelp() {
     const band = resolveSf9Band(cls.gradeLevel);
     const learningAreas = SF9_LEARNING_AREAS[band];
 
-    // Load (or initialize) the SF9 record
-    const recId = `sf9-${cls.id}-${learnerId}-${schoolYear}`;
-    let rec = await DB.get('sf9Records', recId);
-    if (!rec) {
-      rec = {
-        id: recId,
-        classId: cls.id,
-        learnerId: learner.id,
-        schoolYear,
-        subjects: {},
-        coreValues: {
-          'Maka-Diyos':        { term1: '', term2: '', term3: '' },
-          'Makatao':           { term1: '', term2: '', term3: '' },
-          'Makakalikasan':     { term1: '', term2: '', term3: '' },
-          'Makabansa':         { term1: '', term2: '', term3: '' }
-        },
-        teacherComments: { term1: '', term2: '', term3: '' },
-        transfer: {
-          admittedToGrade: '', eligibleFor: '', approved: '',
-          cancelledDate: '', cancelledBy: ''
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      await DB.put('sf9Records', rec);
-    }
+    // Load (or initialize) the SF9 record.
+    // Keyed by COHORT (gradeLevel + section + SY), not by the active class,
+    // so the learner's report card carries the same data no matter which
+    // subject-class the teacher is signed into. Migrates older class-keyed
+    // records in place on first access.
+    const cohortKey = Pages._cohortKey(cls);
+    const rec = await Pages._loadOrCreateSf9Record(cohortKey, learner, schoolYear, cls);
 
     // Ensure every learning area has a row object
     learningAreas.forEach(area => {
@@ -40395,16 +41088,34 @@ _openPhilIriHelp() {
       }
     });
 
-    // Load finalized termGrades for this learner so we can auto-lock handled subjects
+    // Load finalized termGrades for this learner so we can auto-lock the
+    // learning areas the teacher handles. We must filter by COHORT and by
+    // SPECIFIC CLASS — otherwise an elementary teacher who handles Math
+    // and English would see the SAME term grade echoed into every area.
+    const cohortSubjects = await Pages._findCohortSubjects(cls);
+    const subjectToClassId = {};
+    cohortSubjects.forEach(c => {
+      const subj = String(c.subject || '').trim();
+      if (subj && !subjectToClassId[subj]) subjectToClassId[subj] = c.id;
+    });
+
     const allTermGrades = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
-    const handledSubjects = new Set(State.classes.filter(c => c.schoolYear === schoolYear).map(c => (c.subject || '').trim()));
     const autoGradeMap = {};   // subject → { term1, term2, term3 }
 
     learningAreas.forEach(area => {
-      if (!handledSubjects.has(area)) return;
-      const t1 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[0] && g.status === 'finalized');
-      const t2 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[1] && g.status === 'finalized');
-      const t3 = allTermGrades.find(g => g.learnerId === learner.id && g.term === policy.terms[2] && g.status === 'finalized');
+      const classId = subjectToClassId[area];
+      if (!classId) return;   // this subject isn't taught in this cohort
+
+      const findTerm = (term) => allTermGrades.find(g =>
+        g.learnerId === learner.id &&
+        g.classId  === classId &&           // ← the critical filter
+        g.term     === term &&
+        g.status   === 'finalized'
+      );
+
+      const t1 = findTerm(policy.terms[0]);
+      const t2 = findTerm(policy.terms[1]);
+      const t3 = findTerm(policy.terms[2]);
       if (t1 || t2 || t3) {
         autoGradeMap[area] = {
           term1: t1 ? t1.reportedGrade : '',
@@ -40452,10 +41163,39 @@ _openPhilIriHelp() {
         isAuto
       };
     });
+
+    // ── MAPEH consolidation ──
+    // DepEd practice: MAPEH is the mean of Music and Arts and Physical
+    // Education and Health. When BOTH children have numeric finals, MAPEH
+    // is derived — never entered directly. Subject teachers fill in the
+    // children; MAPEH is the summary row.
+    const mapehChildFinals = MAPEH_CHILDREN
+      .map(c => rowState[c] && rowState[c].finalNumeric)
+      .filter(n => n !== null && n !== undefined && !isNaN(n));
+
+    if (mapehChildFinals.length === MAPEH_CHILDREN.length) {
+      const mapehFinal = Math.round(
+        mapehChildFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
+      );
+      rowState[MAPEH_PARENT] = {
+        t1: '', t2: '', t3: '',
+        final:         descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : mapehFinal,
+        finalNumeric:  mapehFinal,
+        descriptor:    descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : '',
+        remarks:       descriptive ? '' : GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade),
+        isAuto:        true,
+        isMapehParent: true
+      };
+    }
+
     // Use the numeric finals for the math in both modes. In descriptive mode
-    // `r.final` is a string, so mixing it into the average would corrupt the result.
+    // `r.final` is a string, so mixing it into the average would corrupt the
+    // result. We also exclude the MAPEH children — their contribution flows
+    // through MAPEH itself, so counting them again would double-weight them.
     const generalAverageNumeric = GradingEngine.calculateGeneralAverageFromFinals(
-      Object.values(rowState).map(r => r.finalNumeric)
+      Object.entries(rowState)
+        .filter(([area]) => !MAPEH_CHILDREN.includes(area))
+        .map(([, r]) => r.finalNumeric)
     );
 
     const generalAverage = descriptive
@@ -40484,6 +41224,53 @@ _openPhilIriHelp() {
       present: acc.present + r.present,
       absent: acc.absent + r.absent
     }), { open: 0, present: 0, absent: 0 });
+
+    // DO 015, s. 2026 compliance checks for the SF9 editor.
+    const attEligibility = GradingEngine.checkAttendanceEligibility(
+      attTotals.absent,
+      attTotals.open
+    );
+
+    const awardCheck = GradingEngine.getAcademicExcellenceAward(
+      generalAverageNumeric,
+      Object.fromEntries(
+        Object.entries(rowState).map(([k, v]) => [k, v.finalNumeric])
+      )
+    );
+
+    const attendanceWarningHTML = (!attEligibility.eligible && attTotals.open > 0) ? `
+      <div class="card mb-16" style="border-left:4px solid var(--danger);">
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <div style="width:36px;height:36px;border-radius:10px;background:rgba(220,53,69,0.12);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            ${icon('alert')}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:800;font-size:13.5px;color:var(--danger);margin-bottom:3px;">
+              Attendance eligibility warning
+            </div>
+            <div style="font-size:12.5px;color:var(--text);line-height:1.55;">
+              ${Utils.esc(attEligibility.message)}
+            </div>
+          </div>
+        </div>
+      </div>` : '';
+
+    const awardHTML = (generalAverageNumeric !== null) ? `
+      <div class="card mb-16" style="border-left:4px solid ${awardCheck.qualifies ? 'var(--success)' : 'var(--border)'};">
+        <div style="display:flex;gap:12px;align-items:center;">
+          <div style="width:36px;height:36px;border-radius:50%;background:${awardCheck.qualifies ? 'var(--gradient-gold)' : 'var(--bg)'};color:${awardCheck.qualifies ? 'var(--dark-navy)' : 'var(--text-muted)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            ${icon('star')}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:700;font-size:13px;color:${awardCheck.qualifies ? 'var(--text)' : 'var(--text-muted)'};">
+              ${awardCheck.qualifies ? 'Qualifies for the Academic Excellence Award' : 'Academic Excellence Award'}
+            </div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
+              ${Utils.esc(awardCheck.reason)}
+            </div>
+          </div>
+        </div>
+      </div>` : '';
 
     /* ---------------- Render ---------------- */
     container.innerHTML = `
@@ -40514,7 +41301,27 @@ _openPhilIriHelp() {
             <tbody>
               ${learningAreas.map(area => {
                 const r = rowState[area];
-                const lock = r.isAuto ? 'readonly style="background:var(--bg);cursor:not-allowed;text-align:center;"' : 'style="text-align:center;"';
+
+                // MAPEH parent: rendered as a read-only summary row.
+                // No inputs — the values are derived from the two children.
+                if (r.isMapehParent) {
+                  return `<tr style="background:var(--light-blue);">
+                    <td><strong>${Utils.esc(area)}</strong> <span class="badge badge-gold" style="font-size:9px;">auto</span></td>
+                    <td colspan="3" style="text-align:center;color:var(--text-muted);font-size:11px;">
+                      Mean of ${MAPEH_CHILDREN.map(c => Utils.esc(c)).join(' and ')}
+                    </td>
+                    <td style="text-align:center;">
+                      <strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? Utils.esc(String(r.final)) : '—'}</strong>
+                    </td>
+                    <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">
+                      ${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}
+                    </td>
+                  </tr>`;
+                }
+
+                const lock = r.isAuto
+                  ? 'readonly style="background:var(--bg);cursor:not-allowed;text-align:center;"'
+                  : 'style="text-align:center;"';
                 return `<tr>
                   <td><strong>${Utils.esc(area)}</strong>${r.isAuto ? ' <span class="badge badge-blue" style="font-size:9px;">auto</span>' : ''}</td>
                   <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="1" value="${Utils.attr(r.t1)}" ${lock}></td>
@@ -40535,6 +41342,9 @@ _openPhilIriHelp() {
           </table>
         </div>
       </div>
+
+      ${awardHTML}
+      ${attendanceWarningHTML}
 
       <div class="grid grid-2 mb-16">
         <div class="card">
@@ -40630,6 +41440,38 @@ _openPhilIriHelp() {
         if (finalEl) finalEl.textContent = finalDisplay;
         if (remEl)   remEl.textContent = remarks || '—';
 
+        // If the edited subject is a MAPEH child, recompute MAPEH live.
+        if (MAPEH_CHILDREN.includes(area)) {
+          const childFinals = MAPEH_CHILDREN
+            .map(c => {
+              const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(c)}"]`);
+              if (!inputs.length) return null;
+              const v = [inputs[0].value, inputs[1].value, inputs[2].value];
+              return GradingEngine.calculateSubjectFinal(v[0], v[1], v[2]);
+            })
+            .filter(n => n !== null && !isNaN(n));
+
+          const mapehFinalEl = container.querySelector(`.sf9-final[data-area="${MAPEH_PARENT}"]`);
+          const mapehRemEl   = container.querySelector(`.sf9-remarks[data-area="${MAPEH_PARENT}"]`);
+
+          if (childFinals.length === MAPEH_CHILDREN.length && mapehFinalEl) {
+            const mapehFinal = Math.round(
+              childFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
+            );
+            mapehFinalEl.textContent = descriptive
+              ? GradingEngine.getDescriptor(mapehFinal, policy).label
+              : String(mapehFinal);
+            if (mapehRemEl) {
+              mapehRemEl.textContent = descriptive
+                ? ''
+                : (GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade) || '—');
+            }
+          } else if (mapehFinalEl) {
+            mapehFinalEl.textContent = '—';
+            if (mapehRemEl) mapehRemEl.textContent = '—';
+          }
+        }
+
         Pages._recomputeSf9Gwa(container, learningAreas, policy);
       });
     });
@@ -40639,6 +41481,10 @@ _openPhilIriHelp() {
       rec.subjects = rec.subjects || {};
       learningAreas.forEach(area => {
         const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
+        // Auto-computed rows (MAPEH when its children are present) have no
+        // inputs to read — skip them entirely so we never overwrite the
+        // derived value with an empty string.
+        if (!inputs.length) return;
         const manual = rec.subjects[area] || { source: 'manual' };
         if (!manual.source || manual.source !== 'auto') {
           manual.term1 = inputs[0].value;
