@@ -14337,3 +14337,36 @@ body.zg-scanner-open #toast-container {
 @media (max-width: 520px) {
   .schedule-cell.subject .sched-teacher { display: none; }
 }
+
+/* ============================================================================
+   CLOUD BACKUP — empty-state icons
+   ----------------------------------------------------------------------------
+   The icon() helper emits bare SVGs with no explicit dimensions. Inside a
+   large text block, an unconstrained SVG fills its container. Pin the icons
+   in the Cloud Backup empty states to a fixed 32×32 box, and keep every
+   property that could otherwise let it grow (min/max/flex-shrink).
+   ============================================================================ */
+.cb-empty-state {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.cb-empty-state svg {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  max-width: 32px;
+  max-height: 32px;
+  flex-shrink: 0;
+  display: block;
+  margin: 0 auto 10px;
+  opacity: 0.45;
+}
+
+.cb-empty-state > div {
+  margin-top: 0;
+}

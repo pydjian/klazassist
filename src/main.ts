@@ -7545,13 +7545,18 @@ const Dashboard = {
       }
 
       if (!lastAt) {
+        const cloudReady = await CloudBackup.isConfigured();
         return {
           level: 'info',
           days: null,
           message: "You haven't backed up yet.",
-          detail: 'Export a JSON backup now to protect your classroom records.',
-          actionLabel: 'Backup now',
-          actionFn: 'Pages.backupAll()'
+          detail: cloudReady
+            ? 'Back up to Google Drive with one click, or export a local JSON file.'
+            : 'Export a JSON backup now to protect your classroom records.',
+          actionLabel: cloudReady ? 'Back up to Drive' : 'Backup now',
+          actionFn: cloudReady
+            ? 'Pages._cloudBackupFromDashboard()'
+            : 'Pages.backupAll()'
         };
       }
 
@@ -43007,7 +43012,14 @@ Choose strategies that fit naturally with the lesson design pattern "${designPat
         </div>
       </div>`;
   },
-  async backupAll() {
+  /**
+   * Build a backup snapshot object without writing it anywhere.
+   * Shared by the file-based backup (backupAll) and the cloud backup
+   * (CloudBackup.backupNow).
+   *
+   * @returns {Object} The snapshot in the standard KlazAssist format.
+   */
+  async _buildBackupSnapshot() {
     const data = {
       application: CONFIG.APP_NAME,
       version: CONFIG.VERSION,
@@ -43028,20 +43040,23 @@ Choose strategies that fit naturally with the lesson design pattern "${designPat
 
     await DB.open();
 
-    try {
-      // Do not silently turn a failed store read into an empty store.
-      // That was the main cause of apparently successful but incomplete backups.
-      for (const store of CONFIG.STORES) {
-        let rows = await DB.getAll(store);
-        if (!Array.isArray(rows)) throw new Error(`Could not read store: ${store}`);
+    for (const store of CONFIG.STORES) {
+      let rows = await DB.getAll(store);
+      if (!Array.isArray(rows)) throw new Error(`Could not read store: ${store}`);
 
-        // Image cache is derived data and can make a backup unnecessarily huge.
-        if (store === 'settings') {
-          rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
-        }
-        data.data[store] = rows;
-        data.counts[store] = rows.length;
+      // Image cache is derived data and can make a backup unnecessarily huge.
+      if (store === 'settings') {
+        rows = rows.filter(r => !(typeof r.id === 'string' && r.id.startsWith('imgCache.')));
       }
+      data.data[store] = rows;
+      data.counts[store] = rows.length;
+    }
+    return data;
+  },
+
+  async backupAll() {
+    try {
+      const data = await Pages._buildBackupSnapshot();
 
       const json = JSON.stringify(data, null, 2);
       const bytes = new Blob([json]).size;
@@ -43068,6 +43083,23 @@ Choose strategies that fit naturally with the lesson design pattern "${designPat
       console.error('Backup failed:', e);
       UI.toast('Backup failed: ' + (e.message || 'Could not read the database.'), 'error');
       return false;
+    }
+  },
+
+  /** Convenience wrapper used by the dashboard reminder when Google Drive
+   *  backup is configured. Builds a snapshot, uploads it, and surfaces
+   *  progress via toasts so the teacher gets feedback without leaving
+   *  the dashboard. */
+  async _cloudBackupFromDashboard() {
+    try {
+      await CloudBackup.backupNow((p) => {
+        UI.toast(p.message || 'Backing up…', 'info', 1500);
+      });
+      UI.toast('Backup uploaded to Google Drive.', 'success');
+      App.navigate('dashboard');
+    } catch (e) {
+      console.error('Cloud backup failed:', e);
+      UI.toast('Backup failed: ' + e.message, 'error', 6000);
     }
   },
 
@@ -43337,6 +43369,7 @@ const tabs = [
   { id: 'school',   label: 'School Profile',   icon: 'building', desc: 'School name, ID, seals' },
   { id: 'license',  label: 'License',          icon: 'star',     desc: 'Pro activation and status' },
   { id: 'data',     label: 'Data & Storage',   icon: 'database', desc: 'Backup, restore, storage health' },
+  { id: 'cloud',    label: 'Cloud Backup',     icon: 'upload',   desc: 'Google Drive backup and restore' },
   { id: 'activity', label: 'Activity Log',     icon: 'history',  desc: 'Recent actions in the app' },
   { id: 'about',    label: 'About',            icon: 'info',     desc: 'Version, developer, privacy' }
 ];
@@ -44051,6 +44084,7 @@ const renderTab = (tab) => {
     case 'school':   Pages.schoolProfile(content);    break;
     case 'license':  renderLicense(); break;
     case 'data':     renderData();    break;
+    case 'cloud':    Pages.renderCloudBackupSettings(content); break;
     case 'activity': Pages.activityLog(content); break;
     case 'about':    Pages.about(content);       break;
     case 'general':
@@ -59335,8 +59369,675 @@ async _applySnapshot(snapshot) {
 window.SyncManager = SyncManager;
 
 /* ============================================================================
-   EXPORTS + BOOT
+   CLOUD BACKUP — Google Drive (appDataFolder)
+   ----------------------------------------------------------------------------
+   Stores JSON snapshots in the hidden appDataFolder of the teacher's own
+   Google Drive. Uses the Google Identity Services token model:
+     • OAuth consent popup returns a short-lived access token (~1 hour)
+     • No refresh token — when the token expires, the user re-authorizes
+     • Files are invisible in the Drive UI; only this OAuth client ID can
+       see them
+     • Files count against the teacher's own Drive quota (15 GB personal,
+       100 GB Workspace for Education)
+
+   The access token lives in memory only. If the page reloads, the user must
+   re-authorize. This is deliberate: storing OAuth tokens in localStorage is
+   a well-known XSS escalation vector.
    ============================================================================ */
+const CloudBackup = {
+  /* ---------- configuration ---------- */
+  CLIENT_ID_KEY: 'cloudBackup.clientId',
+  SCOPE: 'https://www.googleapis.com/auth/drive.appdata',
+  FOLDER_LABEL: 'KlazAssist Backups',
+  API_ROOT: 'https://www.googleapis.com/drive/v3',
+  UPLOAD_ROOT: 'https://www.googleapis.com/upload/drive/v3',
+
+  /* ---------- runtime state ---------- */
+  _tokenClient: null,
+  _accessToken: null,
+  _tokenExpiresAt: 0,
+  _connectedEmail: null,
+  _pendingResolve: null,
+  _pendingReject: null,
+
+  /* ========================================================================
+     LIBRARY LOADING
+     ======================================================================== */
+  async _ensureLib() {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      return true;
+    }
+    // The script is loaded in index.html with `async defer`. Wait for it.
+    for (let i = 0; i < 80; i++) {         // up to 8 seconds
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        return true;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    throw new Error('Google Identity Services did not load. Check your internet connection.');
+  },
+
+  /* ========================================================================
+     CLIENT ID MANAGEMENT
+     ======================================================================== */
+  async getClientId() {
+    try {
+      const saved = await DB.getSetting(this.CLIENT_ID_KEY, '');
+      return String(saved || '').trim();
+    } catch (e) {
+      return '';
+    }
+  },
+
+  async setClientId(id) {
+    const clean = String(id || '').trim();
+    // Google OAuth client IDs always end with .apps.googleusercontent.com
+    if (clean && !/\.apps\.googleusercontent\.com$/.test(clean)) {
+      throw new Error('That does not look like a Google OAuth client ID. It should end with ".apps.googleusercontent.com".');
+    }
+    await DB.setSetting(this.CLIENT_ID_KEY, clean);
+    this._tokenClient = null;            // force re-init on next use
+  },
+
+  async isConfigured() {
+    const id = await this.getClientId();
+    return !!id;
+  },
+
+  /* ========================================================================
+     AUTHENTICATION
+     ======================================================================== */
+
+  /** Initialise the GIS token client. Safe to call repeatedly. */
+  async _ensureTokenClient() {
+    await this._ensureLib();
+    if (this._tokenClient) return this._tokenClient;
+
+    const clientId = await this.getClientId();
+    if (!clientId) {
+      throw new Error('Google Drive backup is not configured. Set a client ID in Settings → Cloud Backup.');
+    }
+
+    const self = this;
+    this._tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: this.SCOPE,
+      callback: (response) => {
+        // The GIS callback is global to the token client. We route it back
+        // to whichever promise is currently waiting.
+        if (!self._pendingResolve) return;
+
+        if (response && response.error) {
+          const rej = self._pendingReject;
+          self._pendingResolve = null;
+          self._pendingReject = null;
+          if (rej) rej(new Error(response.error_description || response.error));
+          return;
+        }
+
+        if (response && response.access_token) {
+          self._accessToken = response.access_token;
+          // expires_in is in seconds; subtract 60 s as a safety margin.
+          const expiresIn = Number(response.expires_in) || 3600;
+          self._tokenExpiresAt = Date.now() + (expiresIn - 60) * 1000;
+
+          const res = self._pendingResolve;
+          self._pendingResolve = null;
+          self._pendingReject = null;
+          if (res) res(self._accessToken);
+        }
+      },
+      // Let the popup appear in the centre of the screen
+      error_callback: (err) => {
+        if (!self._pendingReject) return;
+        const rej = self._pendingReject;
+        self._pendingResolve = null;
+        self._pendingReject = null;
+        rej(new Error((err && (err.message || err.type)) || 'Authorization was cancelled.'));
+      }
+    });
+    return this._tokenClient;
+  },
+
+  /**
+   * Trigger the consent popup and return an access token.
+   * If a valid token is already cached, returns it without a popup.
+   *
+   * @param {boolean} forceNew  When true, always show the popup even if
+   *                            a cached token is still valid.
+   */
+  async connect(forceNew) {
+    if (!forceNew && this._accessToken && Date.now() < this._tokenExpiresAt) {
+      return this._accessToken;
+    }
+
+    const client = await this._ensureTokenClient();
+
+    return new Promise((resolve, reject) => {
+      this._pendingResolve = resolve;
+      this._pendingReject  = reject;
+      try {
+        // "" reuses the user's last-granted scope; "consent" forces the
+        // full consent screen. We use "" so returning users see the
+        // faster flow.
+        client.requestAccessToken({ prompt: forceNew ? 'consent' : '' });
+      } catch (e) {
+        this._pendingResolve = null;
+        this._pendingReject = null;
+        reject(e);
+      }
+    });
+  },
+
+  /** Revoke the current token and forget it. */
+  async disconnect() {
+    if (this._accessToken && window.google && window.google.accounts.oauth2) {
+      try {
+        window.google.accounts.oauth2.revoke(this._accessToken, () => {});
+      } catch (e) { /* revoke is best-effort */ }
+    }
+    this._accessToken = null;
+    this._tokenExpiresAt = 0;
+    this._connectedEmail = null;
+  },
+
+  /** True when an access token is cached and not yet expired. */
+  isConnected() {
+    return !!(this._accessToken && Date.now() < this._tokenExpiresAt);
+  },
+
+  /* ========================================================================
+     LOW-LEVEL API
+     ======================================================================== */
+
+  /**
+   * Fetch wrapper that injects the Bearer token and transparently retries
+   * once with a fresh token after a 401.
+   */
+  async _apiFetch(path, options = {}, _retried = false) {
+    let token = this._accessToken;
+    if (!token || Date.now() >= this._tokenExpiresAt) {
+      token = await this.connect(false);
+    }
+
+    const headers = Object.assign({}, options.headers || {});
+    headers['Authorization'] = 'Bearer ' + token;
+
+    const res = await fetch(this.API_ROOT + path, Object.assign({}, options, { headers }));
+
+    if (res.status === 401 && !_retried) {
+      // Token was revoked or expired early — re-authorize and retry once.
+      this._accessToken = null;
+      this._tokenExpiresAt = 0;
+      return this._apiFetch(path, options, true);
+    }
+    return res;
+  },
+
+  /* ========================================================================
+     BACKUP LIST
+     ======================================================================== */
+
+  /**
+   * List every backup file in the appDataFolder, newest first.
+   * Returns [{ id, name, size, createdTime, modifiedTime }].
+   */
+  async listBackups() {
+    const q = encodeURIComponent("name contains 'klazassist-backup' and trashed = false");
+    const fields = encodeURIComponent('files(id,name,size,createdTime,modifiedTime)');
+    const path = `/files?spaces=appDataFolder&q=${q}&fields=${fields}&orderBy=createdTime desc&pageSize=100`;
+
+    const res = await this._apiFetch(path);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Could not list backups (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return Array.isArray(data.files) ? data.files : [];
+  },
+
+  /* ========================================================================
+     UPLOAD
+     ======================================================================== */
+
+  /**
+   * Upload a backup snapshot to the appDataFolder.
+   *
+   * @param {Object} snapshot    The object produced by Pages.backupAll().
+   * @param {Function} onProgress Optional callback({ loaded, total, percent }).
+   * @returns {{ id, name, size }}
+   */
+  async upload(snapshot, onProgress) {
+    if (!snapshot || !snapshot.data) {
+      throw new Error('Nothing to upload — the backup snapshot is empty.');
+    }
+
+    const json   = JSON.stringify(snapshot);
+    const blob   = new Blob([json], { type: 'application/json' });
+    const size   = blob.size;
+
+    // Guard against the 5 MB multipart limit. A full backup with photos is
+    // usually 2–4 MB, but a very large school can exceed 5 MB.
+    const FIVE_MB = 5 * 1024 * 1024;
+    if (size > FIVE_MB) {
+      throw new Error(
+        `Backup is ${(size / 1024 / 1024).toFixed(1)} MB, which exceeds Google Drive's ` +
+        `5 MB limit for this upload method. Try removing learner photos from the backup ` +
+        `or wait for the resumable-upload feature.`
+      );
+    }
+
+    const stamp = Utils.timestampForFilename();
+    const name  = `klazassist-backup-${stamp}.json`;
+
+    const metadata = {
+      name,
+      mimeType: 'application/json',
+      parents: ['appDataFolder']
+    };
+
+    const form = new FormData();
+    form.append('metadata',
+      new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+
+    // The Authorization header must be added AFTER FormData is built, because
+    // the browser sets its own Content-Type boundary.
+    let token = this._accessToken;
+    if (!token || Date.now() >= this._tokenExpiresAt) {
+      token = await this.connect(false);
+    }
+
+    if (typeof onProgress === 'function') {
+      onProgress({ loaded: 0, total: size, percent: 0 });
+    }
+
+    const res = await fetch(
+      `${this.UPLOAD_ROOT}/files?uploadType=multipart&supportsAllDrives=true`,
+      {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: form
+      }
+    );
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Upload failed (HTTP ${res.status})`);
+    }
+
+    const created = await res.json();
+
+    if (typeof onProgress === 'function') {
+      onProgress({ loaded: size, total: size, percent: 100 });
+    }
+
+    App.logActivity(`Cloud backup uploaded: ${name} (${(size / 1024).toFixed(1)} KB)`, 'Cloud Backup');
+
+    return {
+      id:   created.id,
+      name: created.name || name,
+      size
+    };
+  },
+
+  /* ========================================================================
+     DOWNLOAD
+     ======================================================================== */
+
+  /**
+   * Download a backup file by ID and return the parsed snapshot object.
+   * Does NOT restore — the caller decides whether to apply it.
+   */
+  async download(fileId) {
+    const res = await this._apiFetch(`/files/${encodeURIComponent(fileId)}?alt=media`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Download failed (HTTP ${res.status})`);
+    }
+    const text = await res.text();
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch (e) { throw new Error('The downloaded backup is not valid JSON.'); }
+    if (!parsed || parsed.application !== CONFIG.APP_NAME || !parsed.data) {
+      throw new Error('The downloaded file is not a valid KlazAssist backup.');
+    }
+    return parsed;
+  },
+
+  /* ========================================================================
+     DELETE
+     ======================================================================== */
+
+  /** Permanently delete a backup file. */
+  async delete(fileId) {
+    const res = await this._apiFetch(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Delete failed (HTTP ${res.status})`);
+    }
+    App.logActivity('Cloud backup deleted', 'Cloud Backup');
+  },
+
+  /* ========================================================================
+     RESTORE
+     ======================================================================== */
+
+  /**
+   * Download a cloud backup and restore it into the local database.
+   * Uses the existing `DB.restoreSnapshot` atomic write path.
+   *
+   * @returns {number} The number of records restored.
+   */
+  async restore(fileId) {
+    const snapshot = await this.download(fileId);
+    const written = await DB.restoreSnapshot(snapshot, { replace: true });
+    await App.loadState();
+    App.logActivity(`Cloud backup restored (${written} records)`, 'Cloud Backup');
+    return written;
+  },
+
+  /* ========================================================================
+     CONVENIENCE — full backup-now flow
+     ======================================================================== */
+
+  /**
+   * Build a snapshot, upload it to Drive, and update the backup-hygiene
+   * counters. Called from the Settings button and the dashboard reminder.
+   */
+  async backupNow(onProgress) {
+    if (!(await this.isConfigured())) {
+      throw new Error('Set a Google OAuth client ID first (Settings → Cloud Backup).');
+    }
+
+    if (typeof onProgress === 'function') {
+      onProgress({ phase: 'building', percent: 0, message: 'Building snapshot…' });
+    }
+
+    const snapshot = await Pages._buildBackupSnapshot();
+
+    if (typeof onProgress === 'function') {
+      onProgress({ phase: 'uploading', percent: 10, message: 'Uploading to Google Drive…' });
+    }
+
+    const result = await this.upload(snapshot, (p) => {
+      if (typeof onProgress === 'function') {
+        onProgress({
+          phase: 'uploading',
+          percent: 10 + Math.round(p.percent * 0.9),
+          message: `Uploading… ${p.percent}%`
+        });
+      }
+    });
+
+    // Reset the backup-hygiene counters so the reminder goes quiet.
+    const nowIso = new Date().toISOString();
+    try {
+      await DB.setSetting('backupMeta', { lastBackupAt: nowIso, changesSinceBackup: 0 });
+      await DB.setSetting('backupReminderDismissedAt', null);
+      State.backupMeta = { lastBackupAt: nowIso, changesSinceBackup: 0 };
+    } catch (e) { /* non-critical */ }
+
+    if (typeof onProgress === 'function') {
+      onProgress({ phase: 'done', percent: 100, message: 'Backup complete.' });
+    }
+    return result;
+  }
+};
+
+window.CloudBackup = CloudBackup;
+
+/* ============================================================================
+   CLOUD BACKUP — Settings tab + backup list + restore confirmation
+   ----------------------------------------------------------------------------
+   Defined as property assignments on `Pages` at module scope, NOT as methods
+   inside Pages.settings(). Pages.settings is a function body, and function
+   bodies cannot contain object-literal method shorthand — the parser rejects
+   `async methodName() {}` in that context.
+   ============================================================================ */
+
+Pages.renderCloudBackupSettings = async function (content) {
+  const configured = await CloudBackup.isConfigured();
+  const clientId   = await CloudBackup.getClientId();
+  const connected  = CloudBackup.isConnected();
+
+  let listHTML = '';
+  if (configured) {
+    listHTML = connected
+      ? `<p class="text-sm text-muted" style="padding:16px;text-align:center;">Loading backups…</p>`
+      : `<div class="cb-empty-state">
+           ${icon('upload')}
+           <div>Connect to Google Drive to view your backups.</div>
+         </div>`;
+  }
+
+  content.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-head">
+        <h3>Google Drive Backup</h3>
+        <p>Store JSON snapshots in a hidden folder inside your own Google Drive. Files are invisible in the Drive UI and count against your Google storage quota.</p>
+      </div>
+
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          This feature uses Google Identity Services and requires a one-time OAuth
+          client ID setup. Backups are stored in the <code>appDataFolder</code> —
+          a hidden, per-app folder that only KlazAssist can read. They are never
+          uploaded anywhere else.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="cb-client-id">Google OAuth Client ID</label>
+        <input class="form-control" id="cb-client-id"
+               placeholder="1234567890-abc.apps.googleusercontent.com"
+               value="${Utils.attr(clientId)}" spellcheck="false" autocomplete="off">
+        <small class="text-muted">
+          Get this from the Google Cloud Console → APIs &amp; Services → Credentials.
+        </small>
+      </div>
+
+      <div class="flex gap-8 mb-16" style="flex-wrap:wrap;">
+        <button class="btn btn-primary" id="cb-save-client">${icon('save')} Save Client ID</button>
+        ${configured ? `
+          <button class="btn ${connected ? 'btn-outline' : 'btn-primary'}" id="cb-connect">
+            ${icon(connected ? 'xCircle' : 'check')}
+            ${connected ? 'Disconnect' : 'Connect to Google Drive'}
+          </button>` : ''}
+      </div>
+    </div>
+
+    ${configured ? `
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div>
+              <h3>Backups in Drive</h3>
+              <p id="cb-status">${connected ? 'Connected' : 'Not connected'}</p>
+            </div>
+            <div class="flex gap-8">
+              <button class="btn btn-primary btn-sm" id="cb-backup-now" ${connected ? '' : 'disabled'}>
+                ${icon('upload')} Backup Now
+              </button>
+              <button class="btn btn-outline btn-sm" id="cb-refresh" ${connected ? '' : 'disabled'}>
+                ${icon('history')} Refresh
+              </button>
+            </div>
+          </div>
+        </div>
+        <div id="cb-list">${listHTML}</div>
+      </div>` : ''}
+  `;
+
+  /* ---------- Bindings ---------- */
+
+  content.querySelector('#cb-save-client').onclick = async () => {
+    const id = content.querySelector('#cb-client-id').value.trim();
+    try {
+      await CloudBackup.setClientId(id);
+      UI.toast(id ? 'Client ID saved.' : 'Client ID cleared.', 'success');
+      Pages.settings(document.getElementById('content').firstElementChild);
+    } catch (e) {
+      UI.toast(e.message, 'warning', 5000);
+    }
+  };
+
+  const connectBtn = content.querySelector('#cb-connect');
+  if (connectBtn) {
+    connectBtn.onclick = async () => {
+      if (CloudBackup.isConnected()) {
+        await CloudBackup.disconnect();
+        UI.toast('Disconnected from Google Drive.', 'info');
+      } else {
+        try {
+          await CloudBackup.connect(true);
+          UI.toast('Connected to Google Drive.', 'success');
+        } catch (e) {
+          UI.toast('Could not connect: ' + e.message, 'error', 5000);
+          return;
+        }
+      }
+      Pages.settings(document.getElementById('content').firstElementChild);
+    };
+  }
+
+  const backupNowBtn = content.querySelector('#cb-backup-now');
+  if (backupNowBtn) {
+    backupNowBtn.onclick = async () => {
+      backupNowBtn.disabled = true;
+      const status = content.querySelector('#cb-status');
+      try {
+        if (status) status.textContent = 'Building snapshot…';
+        await CloudBackup.backupNow((p) => {
+          if (status) status.textContent = p.message || 'Working…';
+        });
+        UI.toast('Backup uploaded to Google Drive.', 'success');
+        Pages.settings(document.getElementById('content').firstElementChild);
+      } catch (e) {
+        console.error('Cloud backup failed:', e);
+        UI.toast('Backup failed: ' + e.message, 'error', 6000);
+        if (status) status.textContent = 'Not connected';
+        backupNowBtn.disabled = false;
+      }
+    };
+  }
+
+  const refreshBtn = content.querySelector('#cb-refresh');
+  if (refreshBtn) {
+    refreshBtn.onclick = () => Pages._renderCloudBackupList(content);
+  }
+
+  if (configured && connected) {
+    setTimeout(() => Pages._renderCloudBackupList(content), 50);
+  }
+};
+
+Pages._renderCloudBackupList = async function (content) {
+  const listEl = content.querySelector('#cb-list');
+  if (!listEl) return;
+
+  listEl.innerHTML = `<p class="text-sm text-muted" style="padding:16px;text-align:center;">Loading…</p>`;
+
+  try {
+    const files = await CloudBackup.listBackups();
+
+    if (!files.length) {
+      listEl.innerHTML = `
+        <div class="cb-empty-state">
+          ${icon('folder')}
+          <div>No backups yet. Click <strong>Backup Now</strong> to create one.</div>
+        </div>`;
+      return;
+    }
+
+    listEl.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table" style="font-size:12.5px;">
+          <thead>
+            <tr>
+              <th>Backup</th>
+              <th style="width:100px;">Size</th>
+              <th style="width:170px;">Created</th>
+              <th style="width:180px;text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${files.map(f => `
+              <tr data-cb-file="${Utils.attr(f.id)}">
+                <td><strong>${Utils.esc(f.name || 'Untitled')}</strong></td>
+                <td>${f.size ? (Number(f.size) / 1024).toFixed(1) + ' KB' : '—'}</td>
+                <td class="text-xs text-muted">${Utils.formatDateTime(f.createdTime)}</td>
+                <td class="table-actions" style="justify-content:flex-end;">
+                  <button class="btn btn-sm btn-primary" data-cb-restore="${Utils.attr(f.id)}" title="Restore this backup">
+                    ${icon('download')} Restore
+                  </button>
+                  <button class="icon-btn" data-cb-delete="${Utils.attr(f.id)}" title="Delete">
+                    ${icon('trash')}
+                  </button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    listEl.querySelectorAll('[data-cb-restore]').forEach(btn => {
+      btn.onclick = () => Pages._confirmCloudRestore(btn.dataset.cbRestore);
+    });
+    listEl.querySelectorAll('[data-cb-delete]').forEach(btn => {
+      btn.onclick = async () => {
+        UI.confirm({
+          title: 'Delete cloud backup?',
+          message: 'This permanently deletes the backup from your Google Drive. It cannot be recovered.',
+          confirmText: 'Delete',
+          confirmClass: 'btn-danger',
+          onConfirm: async () => {
+            try {
+              await CloudBackup.delete(btn.dataset.cbDelete);
+              UI.toast('Backup deleted.', 'success');
+              Pages._renderCloudBackupList(content);
+            } catch (e) {
+              UI.toast('Delete failed: ' + e.message, 'error', 5000);
+            }
+          }
+        });
+      };
+    });
+  } catch (e) {
+    console.error('List backups failed:', e);
+    listEl.innerHTML = `
+      <div class="alert alert-danger" style="margin:16px;">
+        ${icon('alert')}
+        <div>${Utils.esc(e.message)}</div>
+      </div>`;
+  }
+};
+
+Pages._confirmCloudRestore = function (fileId) {
+  UI.confirm({
+    title: 'Restore from Google Drive?',
+    message: `
+      This will <strong>replace</strong> every record on this device with the
+      selected backup. Anything not in the backup will be deleted.
+      <br><br>
+      Your current data will be overwritten. Consider exporting a local backup first.
+    `,
+    confirmText: 'Restore',
+    confirmClass: 'btn-danger',
+    onConfirm: async () => {
+      UI.toast('Downloading and restoring…', 'info', 3000);
+      try {
+        const written = await CloudBackup.restore(fileId);
+        UI.toast(`Restored ${written.toLocaleString()} records.`, 'success', 5000);
+        App.navigate('dashboard');
+      } catch (e) {
+        console.error('Cloud restore failed:', e);
+        UI.toast('Restore failed: ' + e.message, 'error', 7000);
+      }
+    }
+  });
+};
+
 window.Pages = Pages;
 window.App = App;
 window.DB = DB;
