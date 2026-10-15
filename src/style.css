@@ -14746,3 +14746,43 @@ body.zg-scanner-open #toast-container {
 #unsaved-badge.unsaved-badge[hidden] {
   display: flex !important;
 }
+
+
+/* PHASE 5 — teacher task center, mobile ergonomics, accessibility */
+.sr-only { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
+.teacher-task-form { display:grid; grid-template-columns:minmax(180px,1fr) minmax(145px,190px) auto; gap:10px; align-items:center; margin-bottom:14px; }
+.teacher-task-form .form-control { min-width:0; min-height:44px; }
+.teacher-task-form .btn { min-height:44px; white-space:nowrap; }
+.teacher-task-summary { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:9px 0 12px; border-bottom:1px solid var(--border,#e5e7eb); color:var(--text-muted,#64748b); font-size:.84rem; }
+.teacher-task-summary strong { color:var(--text-primary,#1f2937); }
+.teacher-task-summary button { margin-left:auto; }
+.teacher-task-list { list-style:none; padding:0; margin:0; display:grid; gap:2px; }
+.teacher-task-item { display:flex; align-items:center; gap:12px; min-width:0; padding:10px 4px; border-bottom:1px solid var(--border,#e5e7eb); }
+.teacher-task-item:last-child { border-bottom:0; }
+.teacher-task-check { display:inline-flex; flex:0 0 44px; min-height:44px; min-width:44px; align-items:center; justify-content:center; cursor:pointer; }
+.teacher-task-check input { width:20px; height:20px; margin:0; accent-color:var(--deped-blue,#0038a8); }
+.teacher-task-copy { display:grid; gap:3px; min-width:0; flex:1; }
+.teacher-task-title { overflow-wrap:anywhere; font-size:.92rem; color:var(--text-primary,#1f2937); }
+.teacher-task-due { color:var(--text-muted,#64748b); font-size:.78rem; }
+.teacher-task-item.is-overdue .teacher-task-due { color:var(--danger,#b42318); font-weight:700; }
+.teacher-task-delete { flex:0 0 44px; width:44px; height:44px; }
+.teacher-task-empty { padding:18px 8px; color:var(--text-muted,#64748b); text-align:center; font-size:.9rem; }
+#content { min-width:0; }
+#content :is(input,select,textarea,button) { scroll-margin-block:90px; }
+#content :is(input,select,textarea) { max-width:100%; }
+:where(button,a,input,select,textarea,[tabindex]):focus-visible { outline:3px solid var(--deped-yellow,#ffc72c)!important; outline-offset:3px!important; }
+@media (max-width:680px) {
+ .teacher-task-form { grid-template-columns:minmax(0,1fr); gap:8px; }
+ .teacher-task-form .btn { width:100%; justify-content:center; }
+ .teacher-task-date { width:100%; }
+ .teacher-task-summary { gap:10px; }
+ .teacher-task-summary button { margin-left:0; }
+ .teacher-task-item { gap:8px; padding-block:8px; }
+ .dash-widget-head { min-height:44px; }
+ .dash-widget-collapse { min-width:44px; min-height:44px; }
+}
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
+@media (forced-colors:active) { :where(button,a,input,select,textarea,[tabindex]):focus-visible { outline:2px solid Highlight!important; } .teacher-task-item,.teacher-task-summary { border-color:CanvasText; } }
+
+.skip-link { position:fixed; z-index:100000; top:8px; left:8px; padding:12px 16px; border-radius:8px; background:var(--deped-blue,#0038a8); color:#fff; transform:translateY(-160%); text-decoration:none; font-weight:700; }
+.skip-link:focus { transform:translateY(0); outline:3px solid var(--deped-yellow,#ffc72c); outline-offset:2px; }

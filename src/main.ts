@@ -7608,10 +7608,12 @@ WIDGETS: [
     desc: 'Assignments, calendar events, and deadlines.' },
   { id: 'quicktools',   label: 'Quick Tools',            icon: 'grid',      span: 'full',
     desc: 'Shortcuts to the tools you use most often.' },
+  { id: 'teacherTasks', label: 'Teacher Task List',       icon: 'check',     span: 'full',
+    desc: 'A personal offline checklist for deadlines, follow-ups, and classroom preparation.' },
   { id: 'activity',     label: 'Recent Activity',        icon: 'history',
     desc: 'A running log of recent actions in the app.' }
 ],
-  DEFAULT_ORDER: ['prompt','stats','attention','attendance','performance','schedule','birthdays','upcoming','quicktools','activity'],
+  DEFAULT_ORDER: ['prompt','stats','attention','attendance','performance','schedule','birthdays','upcoming','teacherTasks','quicktools','activity'],
 
   async loadLayout() {
     const layout = await DB.getSetting('dashboardLayout', null);
@@ -10749,6 +10751,7 @@ async _waitForFontsForPrint() {
   }
 },
   async dashboard(root) {
+    const dashboardStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const cls = State.activeClass;
     const teacherName = (State.currentUser && State.currentUser.fullName)
       || (Auth._account && Auth._account.name) || 'Teacher';
@@ -11004,36 +11007,106 @@ async _waitForFontsForPrint() {
     bodyEl('stats').innerHTML = this._renderDashStats(stats);
     this._bindDashStats(root);
 
-    // 3. Attention
-    const attentionItems = await Dashboard.buildAttentionFeed();
+    // Render independent widgets concurrently to reduce total dashboard wait time.
+    const [attentionItems, attendanceHTML, performanceHTML, scheduleHTML, birthdaysHTML,
+      upcomingHTML, quickToolsHTML, activityHTML] = await Promise.all([
+      Dashboard.buildAttentionFeed(),
+      this._renderDashAttendance(stats),
+      this._renderDashPerformance(),
+      this._renderDashSchedule(),
+      Promise.resolve(this._renderDashBirthdays()),
+      this._renderDashUpcoming(stats),
+      this._renderDashQuickTools(),
+      this._renderDashActivity(stats)
+    ]);
     bodyEl('attention').innerHTML = this._renderDashAttention(attentionItems);
+    bodyEl('attendance').innerHTML = attendanceHTML;
+    bodyEl('performance').innerHTML = performanceHTML;
+    bodyEl('schedule').innerHTML = scheduleHTML;
+    bodyEl('birthdays').innerHTML = birthdaysHTML;
+    bodyEl('upcoming').innerHTML = upcomingHTML;
+    bodyEl('quicktools').innerHTML = quickToolsHTML;
+    bodyEl('activity').innerHTML = activityHTML;
+
+    // Bind after markup exists; task center has its own event bindings.
     this._bindDashAttention(root);
-
-    // 4. Attendance
-    bodyEl('attendance').innerHTML = await this._renderDashAttendance(stats);
     this._bindDashAttendance(root);
-
-    // 5. Performance
-    bodyEl('performance').innerHTML = await this._renderDashPerformance();
-
-    // 6. Schedule
-    bodyEl('schedule').innerHTML = await this._renderDashSchedule();
     this._bindDashSchedule(root);
-
-    // 7. Birthdays
-    bodyEl('birthdays').innerHTML = this._renderDashBirthdays();
     this._bindDashBirthdays(root);
-
-    // 8. Upcoming
-    bodyEl('upcoming').innerHTML = await this._renderDashUpcoming(stats);
     this._bindDashUpcoming(root);
-
-    // 9. Quick tools
-    bodyEl('quicktools').innerHTML = await this._renderDashQuickTools();
     this._bindDashQuickTools(root);
+    await this._renderTeacherTaskCenter(bodyEl('teacherTasks'));
 
-    // 10. Recent activity
-    bodyEl('activity').innerHTML = await this._renderDashActivity(stats);
+    // Lightweight local measurement; no telemetry or network requests are made.
+    const dashboardElapsed = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - dashboardStartedAt;
+    root.dataset.dashboardRenderMs = String(Math.round(dashboardElapsed));
+    try { if (localStorage.getItem('klazassistPerfDebug') === '1') console.info(`[KlazAssist performance] Dashboard rendered in ${Math.round(dashboardElapsed)} ms`); } catch (_) {}
+  },
+
+  async _getTeacherTasks() {
+    try {
+      const value = await DB.getSetting('teacherTaskCenter', []);
+      return Array.isArray(value) ? value.filter(t => t && typeof t.id === 'string' && typeof t.title === 'string') : [];
+    } catch (err) { console.warn('[TeacherTasks] Could not load tasks:', err); return []; }
+  },
+
+  async _saveTeacherTasks(tasks) { await DB.setSetting('teacherTaskCenter', tasks.slice(0, 300)); },
+
+  async _renderTeacherTaskCenter(body) {
+    if (!body) return;
+    const tasks = await this._getTeacherTasks();
+    const openTasks = tasks.filter(t => !t.done).sort((a,b) => (a.dueDate || '9999-12-31').localeCompare(b.dueDate || '9999-12-31'));
+    const completed = tasks.filter(t => t.done).length;
+    body.innerHTML = `
+      <form class="teacher-task-form" id="teacher-task-form">
+        <label class="sr-only" for="teacher-task-title">Task description</label>
+        <input class="form-control" id="teacher-task-title" name="title" maxlength="160" required placeholder="e.g., Prepare Grade 8 activity sheets" autocomplete="off">
+        <label class="sr-only" for="teacher-task-due">Due date (optional)</label>
+        <input class="form-control teacher-task-date" id="teacher-task-due" name="dueDate" type="date" aria-label="Due date (optional)">
+        <button class="btn btn-primary" type="submit"><span aria-hidden="true">＋</span> Add task</button>
+      </form>
+      <div class="teacher-task-summary" aria-live="polite"><span><strong>${openTasks.length}</strong> open</span><span><strong>${completed}</strong> completed</span><button type="button" class="btn btn-ghost btn-sm" id="teacher-task-clear-completed" ${completed ? '' : 'disabled'}>Clear completed</button></div>
+      <ul class="teacher-task-list" id="teacher-task-list">${openTasks.length ? openTasks.map(t => {
+        const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+        const overdue = t.dueDate && t.dueDate < today;
+        const due = t.dueDate ? new Date(t.dueDate + 'T00:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
+        return `<li class="teacher-task-item ${overdue ? 'is-overdue' : ''}" data-task-id="${Utils.attr(t.id)}">
+          <label class="teacher-task-check"><input type="checkbox" data-task-complete="${Utils.attr(t.id)}" aria-label="Mark ${Utils.attr(t.title)} complete"></label>
+          <span class="teacher-task-copy"><span class="teacher-task-title">${Utils.esc(t.title)}</span>${due ? `<span class="teacher-task-due">${overdue ? 'Overdue · ' : 'Due · '}${Utils.esc(due)}</span>` : ''}</span>
+          <button type="button" class="icon-btn teacher-task-delete" data-task-delete="${Utils.attr(t.id)}" aria-label="Delete task: ${Utils.attr(t.title)}" title="Delete task">${icon('trash')}</button>
+        </li>`;
+      }).join('') : '<li class="teacher-task-empty">No open tasks. Add a reminder for a deadline, learner follow-up, or class preparation.</li>'}</ul>`;
+    const form = body.querySelector('#teacher-task-form');
+    form?.addEventListener('submit', async e => {
+      e.preventDefault();
+      const input = form.querySelector('#teacher-task-title');
+      const date = form.querySelector('#teacher-task-due');
+      const title = String(input?.value || '').trim();
+      if (!title) { input?.focus(); return; }
+      try {
+        const next = await this._getTeacherTasks();
+        const id = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : `task-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+        if (next.length >= 300) { UI.toast('Task list is full (300 tasks). Clear completed tasks before adding more.', 'warning'); return; }
+        next.push({ id, title, dueDate: date?.value || '', done: false, createdAt: new Date().toISOString() });
+        await this._saveTeacherTasks(next);
+        await this._renderTeacherTaskCenter(body);
+        body.querySelector('#teacher-task-title')?.focus();
+      } catch (err) { console.error('[TeacherTasks] Save failed:', err); UI.toast('Could not save task. Check local database availability.', 'error'); }
+    });
+    body.querySelectorAll('[data-task-complete]').forEach(input => input.addEventListener('change', async () => {
+      const id = input.getAttribute('data-task-complete');
+      try { const next = await this._getTeacherTasks(); const task = next.find(t => t.id === id); if (task) task.done = input.checked; await this._saveTeacherTasks(next); await this._renderTeacherTaskCenter(body); }
+      catch (_) { UI.toast('Could not update task.', 'error'); }
+    }));
+    body.querySelectorAll('[data-task-delete]').forEach(btn => btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-task-delete');
+      try { const next = (await this._getTeacherTasks()).filter(t => t.id !== id); await this._saveTeacherTasks(next); await this._renderTeacherTaskCenter(body); }
+      catch (_) { UI.toast('Could not delete task.', 'error'); }
+    }));
+    body.querySelector('#teacher-task-clear-completed')?.addEventListener('click', async () => {
+      try { const next = (await this._getTeacherTasks()).filter(t => !t.done); await this._saveTeacherTasks(next); await this._renderTeacherTaskCenter(body); }
+      catch (_) { UI.toast('Could not clear completed tasks.', 'error'); }
+    });
   },
 
   getGreeting() {
