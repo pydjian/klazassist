@@ -1,5 +1,7 @@
   // @ts-nocheck
 import './style.css';
+import { prepareRestoreData } from './backup-restore-core.js';
+import { getAcademicTermOptionsForPolicy, normalizeAcademicTermForPolicy } from './academic-terms.js';
 import {
   PEDAGOGY_CARDS,
   PEDAGOGY_PRINCIPLES,
@@ -16,7 +18,6 @@ import {
   type PhilIriGstSet,
   type PhilIriReadingLevel
 } from './phil-iri-materials';
-import { encode as uqrEncode } from './vendor/uqr.js';
 
 /* ============================================================================
    KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
@@ -74,13 +75,14 @@ const CONFIG = {
   BACKUP_STALE_CHANGES: 200,   // OR after this many changes since last backup
   BACKUP_REMIND_DEFER_DAYS: 3, // snooze the reminder for this long when dismissed
   USER_DATA_STORES: [          // writes here bump the "changes since backup" counter
-    'teachers','schools','classes','learners','attendance',
-    'assessments','assessmentResults','grades','assignments',
-    'assignmentRecords','schedules','seatingPlans','lessonPlans',
-    'weeklyPlans','notes','behaviorLogs','parentLogs','groups',
-    'termGrades','calendarEvents','presentations','teachingLoad',
-    'sf9Records',
-    'rubrics' 
+    // Keep aligned with CONFIG.STORES. Settings are intentionally excluded because
+    // backupMeta itself is stored in settings and must not recursively bump itself.
+    'teachers','schools','classes','learners','attendance','subjects',
+    'assessments','questions','assessmentResults','grades','assignments',
+    'assignmentRecords','schedules','seatingPlans','lessonPlans','weeklyPlans',
+    'notes','behaviorLogs','parentLogs','groups','termGrades','reportSnapshots',
+    'calendarEvents','presentations','teachingLoad','sf9Records','rubrics',
+    'parentDigestLog','philIriRecords'
   ],
 };
 /* ============================================================================
@@ -94,7 +96,7 @@ const CONFIG = {
    DevTools can read it. It is therefore DISABLED by default. Flip the flag to
    true only for a private build you control (never for a public release).
    Normal account recovery uses the per-device Recovery Key instead. */
-const ENABLE_MASTER_BYPASS = true;
+const ENABLE_MASTER_BYPASS = false;
 const MASTER_BYPASS_KEY = '@cec0mbaT10221982';
 const isMasterBypass = (v) => ENABLE_MASTER_BYPASS && v === MASTER_BYPASS_KEY;
 /* ============================================================================
@@ -1053,6 +1055,27 @@ const GRADING_POLICIES = {
    GRADING ENGINE — pure, independently-testable calculation functions.
    Nothing here touches the DOM or IndexedDB directly.
    ============================================================================ */
+/* ============================================================================
+   ACADEMIC TERM HELPERS
+   Current grading policies use three terms; legacy school years retain their
+   historical four-quarter structure. `quarter` remains a compatibility alias.
+   ============================================================================ */
+function getAcademicTermOptions(schoolYear) {
+  return getAcademicTermOptionsForPolicy(
+    schoolYear,
+    (year) => GradingEngine.resolvePolicy({ schoolYear: year }),
+    CONFIG.DEFAULT_SCHOOL_YEAR
+  );
+}
+function normalizeAcademicTerm(value, schoolYear) {
+  return normalizeAcademicTermForPolicy(
+    value,
+    schoolYear,
+    (year) => GradingEngine.resolvePolicy({ schoolYear: year }),
+    CONFIG.DEFAULT_SCHOOL_YEAR
+  );
+}
+
 const GradingEngine = {
   /** Resolve which versioned policy applies for a given school year. */
     /** In-memory cache of policy-level overrides, loaded from IndexedDB at boot.
@@ -3259,7 +3282,12 @@ const DB = {
         p.then(() => { if (this._isUserData(store)) this._bumpBackupCounter(); }).catch(() => {});
         return p;
     },
-    clear(store)       { this._invalidate(); return this.req(store, 'readwrite', os => os.clear()); },
+    clear(store) {
+      this._invalidate();
+      const p = this.req(store, 'readwrite', os => os.clear());
+      p.then(() => { if (this._isUserData(store)) this._bumpBackupCounter(); }).catch(() => {});
+      return p;
+    },
 
     async getAll(store) {
         const cache = this._activeCache();
@@ -3341,48 +3369,21 @@ const DB = {
   async restoreSnapshot(snapshot, options = {}) {
     const replace = options.replace !== false;
     const stores = CONFIG.STORES.slice();
-    const data = snapshot && snapshot.data;
-    if (!data || typeof data !== 'object') throw new Error('Invalid backup data.');
-
-    // ── Backward-compatible normalization ──────────────────────────────
-    // A backup created by an older KlazAssist build will not contain every
-    // store that exists in the current CONFIG.STORES (e.g. `rubrics` was
-    // added in v1.1.0). We treat missing stores as empty arrays so that
-    // valid old backups still restore cleanly, instead of failing with a
-    // hard "Backup is incomplete" error.
-    //
-    // The integrity guarantees are preserved for stores that DO exist:
-    //   • the payload must be an array
-    //   • every record must be an object with a non-empty `id`
-    const normalized = {};
-    const missingStores = [];
-
-    for (const store of stores) {
-      const arr = data[store];
-
-      if (arr === undefined || arr === null) {
-        normalized[store] = [];
-        missingStores.push(store);
-        continue;
-      }
-      if (!Array.isArray(arr)) {
-        throw new Error(`Invalid backup data for "${store}" — expected an array.`);
-      }
-      for (const item of arr) {
-        if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
-          throw new Error(`Invalid record found in "${store}".`);
-        }
-      }
-      normalized[store] = arr;
+    if (snapshot && Number.isFinite(Number(snapshot.formatVersion)) && Number(snapshot.formatVersion) > 2) {
+      throw new Error(`This backup uses a newer format version (${snapshot.formatVersion}). Update KlazAssist before restoring it.`);
     }
-
+    const data = snapshot && snapshot.data;
+    const { normalized, presentStores, missingStores } = prepareRestoreData(data, stores);
     if (missingStores.length) {
       console.info(
-        '[DB] Restoring a backup that predates these stores; they will be created empty:',
+        '[DB] Older or partial backup detected. Stores absent from the file will be preserved:',
         missingStores.join(', ')
       );
     }
-    // ───────────────────────────────────────────────────────────────────
+
+    // A caller can require a downloadable recovery snapshot before destructive
+    // replacement. If backup creation fails, fail closed before changing data.
+    if (replace && typeof options.beforeReplace === 'function') await options.beforeReplace();
 
     await this.open();
     this._invalidate();
@@ -3390,7 +3391,9 @@ const DB = {
     return new Promise((resolve, reject) => {
       let tx;
       try {
-        tx = this.db.transaction(stores, 'readwrite');
+        // Only stores actually present in the payload are written/cleared.
+        // This is important for backward-compatible restore safety.
+        tx = this.db.transaction(presentStores, 'readwrite');
       } catch (e) {
         reject(e);
         return;
@@ -3399,7 +3402,6 @@ const DB = {
       let written = 0;
       let failed = null;
       let settled = false;
-
       const done = (fn, arg) => {
         if (settled) return;
         settled = true;
@@ -3407,36 +3409,33 @@ const DB = {
         fn(arg);
       };
 
-      // Hard ceiling — a restore that writes 2 MB should finish in seconds.
-      // 30 s means the tab is blocked or a write is genuinely stuck.
       const timeoutId = setTimeout(() => {
         try { tx.abort(); } catch (_) {}
         done(reject, new Error(
-          'Restore timed out. Another KlazAssist tab may be holding the ' +
-          'database open. Close other tabs on this device, then try again.'
+          'Restore timed out. Another KlazAssist tab may be holding the database open. ' +
+          'Close other tabs on this device, then try again.'
         ));
       }, 30000);
 
-      tx.oncomplete = () => {
+      tx.oncomplete = async () => {
+        clearTimeout(timeoutId);
         this._invalidate();
+        // A restore/sync is itself a data change. Increment after the restore
+        // transaction completes so the reminder cannot silently stay stale.
+        await this._bumpBackupCounter();
         done(resolve, written);
       };
-
-      // FIXED: reject the promise instead of silently recording `failed`.
-      // Without this, a transaction error left the promise pending forever,
-      // which is exactly the "Applying received data… 100%" hang in Sync.
       tx.onerror = () => {
         failed = tx.error || new Error('Restore transaction failed.');
         done(reject, failed);
       };
-
       tx.onabort = () => {
         this._invalidate();
         done(reject, failed || tx.error || new Error('Restore was aborted. No changes were applied.'));
       };
 
       try {
-        for (const store of stores) {
+        for (const store of presentStores) {
           const os = tx.objectStore(store);
           if (replace) os.clear();
           for (const item of normalized[store]) {
@@ -7346,7 +7345,7 @@ async openAssignAssessmentModal(assessmentId) {
         el.innerHTML = `<div class="card"><div class="card-head"><h3>Grades</h3></div>
           ${grades.length === 0 ? UI.emptyState({icon:'chart', title:'No grades yet', message:'Grades appear once recorded in the Gradebook.'}) :
             `<div class="table-wrap"><table class="data-table"><thead><tr><th>Subject</th><th>Quarter</th><th>Initial</th><th>Transmuted</th></tr></thead>
-              <tbody>${grades.map(g => `<tr><td>${Utils.esc(g.subject||'')}</td><td>${Utils.esc(g.quarter||'')}</td><td>${Utils.round(g.initialGrade,2)}</td><td>${g.transmutedGrade}</td></tr>`).join('')}</tbody>
+              <tbody>${grades.map(g => `<tr><td>${Utils.esc(g.subject||'')}</td><td>${Utils.esc(g.term || g.quarter || '')}</td><td>${Utils.round(g.initialGrade,2)}</td><td>${g.transmutedGrade}</td></tr>`).join('')}</tbody>
             </table></div>`}</div>`;
       } else if (tab === 'behavior') {
         el.innerHTML = `<div class="card"><div class="card-head"><h3>Behavior Log</h3></div>
@@ -21178,13 +21177,18 @@ async tosGenerator(root) {
       examMeta: {
         examTitle: '',
         schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
-        quarter: 'First Quarter',
+        term: 'Term 1',
+        quarter: 'Term 1',
         teacherName: (State.currentUser && State.currentUser.fullName) || ''
       }
     };
   }
   const s = State.tos;
-  if (!s.examMeta) s.examMeta = { examTitle: '', schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR, quarter: 'First Quarter', teacherName: (State.currentUser && State.currentUser.fullName) || '' };
+  if (!s.examMeta) s.examMeta = { examTitle: '', schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR, term: 'Term 1', quarter: 'Term 1', teacherName: (State.currentUser && State.currentUser.fullName) || '' };
+  if (!s.examMeta.schoolYear) s.examMeta.schoolYear = State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
+  const normalizedExamTerm = normalizeAcademicTerm(s.examMeta.term || s.examMeta.quarter, s.examMeta.schoolYear);
+  s.examMeta.term = normalizedExamTerm;
+  s.examMeta.quarter = normalizedExamTerm; // compatibility for existing TOS code and saved drafts
 
   const savedKey   = await DB.getSetting('geminiApiKey', '');
   const savedModel = await DB.getSetting('geminiModel', '');
@@ -21357,7 +21361,8 @@ async _tosResetAll() {
       examMeta: {
         examTitle: '',
         schoolYear: State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR,
-        quarter: 'First Quarter',
+        term: 'Term 1',
+        quarter: 'Term 1',
         teacherName: (State.currentUser && State.currentUser.fullName) || ''
       }
     };
@@ -21542,15 +21547,16 @@ _tosRenderStep1(container) {
         <div class="form-group">
           <label>Exam Title <span class="text-muted" style="font-weight:400;">(optional — AI will suggest if blank)</span></label>
           <input class="form-control" id="tos-meta-title"
-                 placeholder="e.g. First Quarter Summative Test in Mathematics 9"
+                 placeholder="e.g. Summative Assessment in Mathematics 9"
                  value="${Utils.attr(s.examMeta.examTitle || '')}">
         </div>
         <div class="form-group">
-          <label>Quarter / Term</label>
-          <select class="form-control" id="tos-meta-quarter">
-            ${['First Quarter','Second Quarter','Third Quarter','Fourth Quarter','Term 1','Term 2','Term 3']
-              .map(q => `<option value="${q}" ${s.examMeta.quarter === q ? 'selected' : ''}>${q}</option>`).join('')}
+          <label id="tos-meta-term-label">${getAcademicTermOptions(s.examMeta.schoolYear).some(t => t.startsWith('Term ')) ? 'Term' : 'Quarter (legacy school year)'}</label>
+          <select class="form-control" id="tos-meta-quarter" aria-label="Academic term">
+            ${getAcademicTermOptions(s.examMeta.schoolYear)
+              .map(term => `<option value="${Utils.attr(term)}" ${s.examMeta.term === term ? 'selected' : ''}>${Utils.esc(term)}</option>`).join('')}
           </select>
+          <small class="text-muted">Options follow the grading policy for the selected school year.</small>
         </div>
       </div>
       <div class="form-row">
@@ -21589,9 +21595,36 @@ _tosRenderStep1(container) {
     });
   };
   bindMeta('#tos-meta-title', 'examTitle');
-  bindMeta('#tos-meta-quarter', 'quarter');
-  bindMeta('#tos-meta-sy', 'schoolYear');
   bindMeta('#tos-meta-teacher', 'teacherName');
+  const termSelect = container.querySelector('#tos-meta-quarter');
+  if (termSelect) termSelect.addEventListener('change', () => {
+    State.tos.examMeta.term = termSelect.value;
+    State.tos.examMeta.quarter = termSelect.value;
+    Pages._tosPersist();
+  });
+  const syInput = container.querySelector('#tos-meta-sy');
+  if (syInput) {
+    const refreshTermsForSchoolYear = () => {
+      const sy = syInput.value.trim() || CONFIG.DEFAULT_SCHOOL_YEAR;
+      State.tos.examMeta.schoolYear = syInput.value;
+      const previous = termSelect ? termSelect.value : (State.tos.examMeta.term || State.tos.examMeta.quarter);
+      const options = getAcademicTermOptions(sy);
+      const selected = normalizeAcademicTerm(previous, sy);
+      if (termSelect) {
+        termSelect.innerHTML = options.map(term => `<option value="${Utils.attr(term)}" ${term === selected ? 'selected' : ''}>${Utils.esc(term)}</option>`).join('');
+      }
+      const label = container.querySelector('#tos-meta-term-label');
+      if (label) label.textContent = options.some(term => term.startsWith('Term ')) ? 'Term' : 'Quarter (legacy school year)';
+      State.tos.examMeta.term = selected;
+      State.tos.examMeta.quarter = selected;
+      Pages._tosPersist();
+    };
+    syInput.addEventListener('input', () => {
+      State.tos.examMeta.schoolYear = syInput.value;
+      Pages._tosPersist();
+    });
+    syInput.addEventListener('change', refreshTermsForSchoolYear);
+  }
 
   container.querySelector('#tos-next-1').onclick = () => {
     State.tos.step = 2;
@@ -36616,7 +36649,8 @@ async sf1(root) {
       </div>
     </div>
 
-   
+    <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this preview and the exported .xlsx are functional, DepEd-labeled renderings built from your data. KlazAssist could not verify exact official SF1 template geometry (page size, merged cells, column widths) against a live source. Verify against your school/division's current SF1 template before submission.</div></div>
+
     ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
     ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
 
@@ -36711,6 +36745,7 @@ async sf1(root) {
     const defaultMonth = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     root.innerHTML = `
       <div class="page-head"><div><h2>SF2 — Daily Attendance Report of Learners</h2><p>Generated from your recorded attendance data</p></div></div>
+      <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this is a functional, DepEd-labeled rendering built from your data — KlazAssist could not verify exact official SF2 template geometry against a live source. Fields it cannot determine show "Data required" instead of a fabricated value. Verify against your Division's current SF2 instructions before submission.</div></div>
       <div class="card mb-16">
         <div class="form-row">
           <div class="form-group"><label>Class</label>
@@ -43110,12 +43145,18 @@ Choose strategies that fit naturally with the lesson design pattern "${designPat
       </div>`;
   },
   /**
-   * Build a backup snapshot object without writing it anywhere.
-   * Shared by the file-based backup (backupAll) and the cloud backup
-   * (CloudBackup.backupNow).
-   *
-   * @returns {Object} The snapshot in the standard KlazAssist format.
+   * Download a recovery snapshot before a destructive restore or sync.
+   * If the snapshot cannot be built, the caller aborts before changing data.
    */
+  async _downloadRecoveryBackup(reason = 'before-restore') {
+    const snapshot = await this._buildBackupSnapshot();
+    const filename = `klazassist-recovery-${reason}-${Utils.timestampForFilename()}.json`;
+    const json = JSON.stringify(snapshot, null, 2);
+    if (!json || new Blob([json]).size < 2) throw new Error('Could not create a recovery backup. The restore was cancelled.');
+    Utils.download(filename, json, 'application/json;charset=utf-8');
+    return { filename, records: Object.values(snapshot.counts || {}).reduce((sum, n) => sum + Number(n || 0), 0) };
+  },
+
   async _buildBackupSnapshot() {
     const data = {
       application: CONFIG.APP_NAME,
@@ -43319,9 +43360,9 @@ Notes:
         if (!txt || !txt.trim()) throw new Error('The selected file is empty.');
 
         const candidate = JSON.parse(txt);
-        if (!candidate || typeof candidate !== 'object' ||
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) ||
             candidate.application !== CONFIG.APP_NAME ||
-            !candidate.data || typeof candidate.data !== 'object') {
+            !candidate.data || typeof candidate.data !== 'object' || Array.isArray(candidate.data)) {
           throw new Error('This is not a valid KlazAssist database backup.');
         }
 
@@ -43338,20 +43379,29 @@ Notes:
           let arr = candidate.data[store];
 
           if (arr === undefined || arr === null) {
-            arr = [];
-            candidate.data[store] = arr;
             missingStores.push(store);
+            continue; // absent means preserve current store during restore
           }
           if (!Array.isArray(arr)) {
             throw new Error(`Invalid backup data for "${store}" — expected an array.`);
           }
+          const seenIds = new Set();
           for (const item of arr) {
-            if (!item || typeof item !== 'object' || item.id === undefined || item.id === null || item.id === '') {
+            if (!item || typeof item !== 'object' || Array.isArray(item) || item.id === undefined || item.id === null || String(item.id).trim() === '') {
               throw new Error(`Backup contains an invalid record in "${store}".`);
             }
+            if (seenIds.has(String(item.id))) throw new Error(`Backup contains duplicate ID "${item.id}" in "${store}".`);
+            seenIds.add(String(item.id));
           }
           total += arr.length;
           if (arr.length) summary.push(`${arr.length} ${store}`);
+        }
+
+        if (Number.isFinite(Number(candidate.formatVersion)) && Number(candidate.formatVersion) > 2) {
+          throw new Error(`This backup uses a newer format version (${candidate.formatVersion}). Update KlazAssist before restoring it.`);
+        }
+        if (missingStores.length === CONFIG.STORES.length) {
+          throw new Error('This file contains no recognized KlazAssist data stores. No data was changed.');
         }
 
         // Drop any stores present in the backup that this build doesn't
@@ -43363,11 +43413,8 @@ Notes:
           }
         });
 
-        // Final normalized map — every store key is guaranteed to exist.
-        candidate.data = Object.fromEntries(
-          CONFIG.STORES.map(store => [store, candidate.data[store] || []])
-        );
-
+        // Keep absent stores absent: DB.restoreSnapshot preserves them rather
+        // than clearing data created by newer app versions.
         parsed = candidate;
 
         preview.innerHTML = `
@@ -43380,11 +43427,14 @@ Notes:
               ${icon('info')}
               <div>
                 This backup was created before these features were added.
-                They will simply start empty:
+                Their existing records on this device will be preserved because this backup does not contain them:
                 <strong>${missingStores.map(s => Utils.esc(s)).join(', ')}</strong>
               </div>
             </div>` : ''}
-          <p class="text-xs text-muted mt-8">Restore will replace the current database only after every record passes validation.</p>`;
+          <div class="alert alert-warning mt-8" style="font-size:12px;">
+            ${icon('alert')}<div>Before restoring, KlazAssist will download a recovery backup of the current data. Keep that file in a secure location.</div>
+          </div>
+          <p class="text-xs text-muted mt-8">Only stores present in this backup will be replaced. Missing stores will be preserved.</p>`;
         restoreBtn.disabled = false;
       } catch (e) {
         console.error('Restore validation error:', e);
@@ -43406,7 +43456,7 @@ Notes:
         // One IndexedDB read/write transaction across ALL stores.
         // If any record fails, IndexedDB aborts the transaction and rolls back
         // the entire restore instead of leaving a partially restored database.
-        const imported = await DB.restoreSnapshot(parsed, { replace: true });
+        const imported = await DB.restoreSnapshot(parsed, { replace: true, beforeReplace: () => Pages._downloadRecoveryBackup('before-file-restore') });
 
         if (parsed.preferences) {
           try {
@@ -59407,14 +59457,25 @@ _sendChunkedSnapshot(snapshot) {
 
     // Normalise the payload: every store guaranteed to be an array, and
     // unknown stores dropped (defends against a future-version sender).
+    const incoming = snapshot && snapshot.data;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      throw new Error('The received sync snapshot is invalid. No data was changed.');
+    }
+    // Keep absent stores absent. DB.restoreSnapshot interprets absence as
+    // "preserve local store"; fabricating [] here would erase newer local data.
     const normalised = {};
     for (const store of CONFIG.STORES) {
-      const arr = snapshot.data[store];
-      normalised[store] = Array.isArray(arr) ? arr : [];
+      if (!Object.prototype.hasOwnProperty.call(incoming, store)) continue;
+      if (!Array.isArray(incoming[store])) {
+        throw new Error(`The received sync data for "${store}" is invalid. No data was changed.`);
+      }
+      normalised[store] = incoming[store];
     }
 
-    // Merge preserved settings back in.
-    if (preserved.length) {
+    // Preserve this device's sensitive settings. If the sender omitted the
+    // settings store entirely, retain all local settings rather than creating
+    // a partial replacement store.
+    if (Object.prototype.hasOwnProperty.call(normalised, 'settings') && preserved.length) {
       const existing = new Map(normalised.settings.map(r => [r.id, r]));
       preserved.forEach(r => existing.set(r.id, r));
       normalised.settings = Array.from(existing.values());
@@ -59422,8 +59483,8 @@ _sendChunkedSnapshot(snapshot) {
 
     // Atomic write — all stores or none.
     await DB.restoreSnapshot(
-      { data: normalised, exportDate: snapshot.exportDate },
-      { replace: true }
+      { data: normalised, exportDate: snapshot.exportDate, formatVersion: snapshot.formatVersion },
+      { replace: true, beforeReplace: () => Pages._downloadRecoveryBackup('before-sync') }
     );
 
     // Refresh in-memory account & license from the now-updated settings store.
@@ -60415,7 +60476,7 @@ const CloudBackup = {
    */
   async restore(fileId) {
     const snapshot = await this.download(fileId);
-    const written = await DB.restoreSnapshot(snapshot, { replace: true });
+    const written = await DB.restoreSnapshot(snapshot, { replace: true, beforeReplace: () => Pages._downloadRecoveryBackup('before-cloud-restore') });
     await App.loadState();
     App.logActivity(`Cloud backup restored (${written} records)`, 'Cloud Backup');
     return written;
