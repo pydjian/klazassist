@@ -12158,22 +12158,141 @@ async classprofile(root) {
           <h3>Attendance Trend</h3>
           <span class="text-xs text-muted">${trendPoints.length ? 'Last ' + trendPoints.length + ' recorded day' + (trendPoints.length === 1 ? '' : 's') : 'No data'}</span>
         </div>
-        ${trendPoints.length ? `
-          <div style="display:flex;gap:5px;align-items:flex-end;height:140px;padding:6px 0;">
-            ${trendPoints.map(p => {
-              const color = p.rate >= 90 ? '#198754' : p.rate >= 75 ? '#0057B8' : '#DC3545';
-              return `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;min-width:0;" title="${Utils.formatDate(p.date)}: ${p.rate}%">
-                <div style="font-size:9px;font-weight:700;color:${color};">${p.rate}</div>
-                <div style="width:100%;background:var(--bg);border-radius:4px;flex:1;position:relative;overflow:hidden;">
-                  <div style="position:absolute;bottom:0;left:0;right:0;height:${p.rate}%;background:linear-gradient(180deg, ${color}, ${color}cc);border-radius:4px 4px 0 0;"></div>
+        ${trendPoints.length ? (() => {
+          /* ==========================================================
+             LINEAR REGRESSION over the trend points.
+               y = intercept + slope * x
+             where x is the day index (0 .. n-1) and y is the daily rate.
+             ========================================================== */
+          const n = trendPoints.length;
+          let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+          trendPoints.forEach((p, i) => {
+            sumX  += i;
+            sumY  += p.rate;
+            sumXY += i * p.rate;
+            sumX2 += i * i;
+          });
+          const denom     = n * sumX2 - sumX * sumX;
+          const slope     = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+          const intercept = (sumY - slope * sumX) / n;
+
+          // Clamp to the visible 0–100% band so a wild slope can't push
+          // the trend line off the chart.
+          const yAt0 = Math.max(0, Math.min(100, intercept));
+          const yAtN = Math.max(0, Math.min(100, intercept + slope * (n - 1)));
+          const totalDelta = yAtN - yAt0;
+
+          // Anything under 2 pts over the whole window is "stable" —
+          // so a tiny wiggle can't be misread as a real trend.
+          const dir      = Math.abs(totalDelta) < 2 ? 'flat'
+                         : totalDelta > 0           ? 'up'
+                         :                            'down';
+          const dirColor = dir === 'up'   ? 'var(--success)'
+                         : dir === 'down' ? 'var(--danger)'
+                         :                  'var(--text-muted)';
+          const dirIcon  = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '►';
+          const dirLabel = dir === 'up' ? 'Improving'
+                         : dir === 'down' ? 'Declining'
+                         :                  'Stable';
+
+          // Map data-space (x = day index, y = rate %) to SVG viewBox
+          // coordinates (0..100 on both axes, y inverted).
+          const xStart = (0.5 / n) * 100;
+          const xEnd   = ((n - 0.5) / n) * 100;
+          const yStart = 100 - yAt0;
+          const yEnd   = 100 - yAtN;
+
+          return `
+            <!-- Trend summary: direction badge + net change -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
+              <div class="text-xs text-muted" style="display:flex;align-items:center;gap:6px;">
+                <span style="display:inline-block;width:22px;height:0;
+                             border-top:2px dashed ${dirColor};
+                             vertical-align:middle;"></span>
+                <span>Trend direction over ${n} day${n === 1 ? '' : 's'}</span>
+              </div>
+              <div class="flex gap-6" style="align-items:center;">
+                <span style="font-size:11px;font-weight:800;letter-spacing:.4px;color:${dirColor};">
+                  ${dirIcon} ${dirLabel}
+                </span>
+                <span class="badge"
+                      style="font-size:10px;background:${dirColor}1a;color:${dirColor};border:1px solid ${dirColor}33;">
+                  ${totalDelta >= 0 ? '+' : ''}${totalDelta.toFixed(1)} pts
+                </span>
+              </div>
+            </div>
+
+            <!-- Row 1 · per-day rate label -->
+            <div style="display:flex;gap:6px;height:16px;">
+              ${trendPoints.map(p => {
+                const c = p.rate >= 90 ? 'var(--success)'
+                        : p.rate >= 75 ? 'var(--deped-blue)'
+                        :                'var(--danger)';
+                return `<div style="flex:1;min-width:0;text-align:center;
+                                   font-size:10px;font-weight:800;
+                                   line-height:16px;color:${c};">
+                  ${p.rate}%
+                </div>`;
+              }).join('')}
+            </div>
+
+            <!-- Row 2 · bars with the trend line overlaid -->
+            <div style="position:relative;display:flex;gap:6px;height:150px;margin-top:4px;">
+              ${trendPoints.map(p => {
+                const c = p.rate >= 90 ? '#198754'
+                        : p.rate >= 75 ? '#0057B8'
+                        :                '#DC3545';
+                return `<div style="flex:1;min-width:0;position:relative;
+                                   background:var(--bg);border-radius:6px;overflow:hidden;
+                                   box-shadow:inset 0 0 0 1px var(--border);"
+                             title="${Utils.attr(Utils.formatDate(p.date))}: ${p.rate}%">
+                  <div style="position:absolute;left:0;right:0;bottom:0;height:${p.rate}%;
+                              background:linear-gradient(180deg, ${c}, ${c}cc);
+                              border-radius:6px 6px 0 0;
+                              transition:height .3s ease;"></div>
+                </div>`;
+              }).join('')}
+
+              <!-- Trend line · stretched SVG overlay.
+                   preserveAspectRatio="none"  → viewBox 0..100 maps to the
+                     container's actual pixel box, so coordinates are
+                     resolution-independent.
+                   vector-effect="non-scaling-stroke" → keeps the dash pattern
+                     from being stretched horizontally by the anisotropic scale. -->
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+                   style="position:absolute;inset:0;width:100%;height:100%;
+                          pointer-events:none;overflow:visible;">
+                <line x1="${xStart}" y1="${yStart}" x2="${xEnd}" y2="${yEnd}"
+                      stroke="${dirColor}"
+                      stroke-width="2"
+                      stroke-dasharray="5 4"
+                      stroke-linecap="round"
+                      vector-effect="non-scaling-stroke"
+                      opacity="0.9" />
+                <circle cx="${xStart}" cy="${yStart}" r="2.2"
+                        fill="${dirColor}"
+                        vector-effect="non-scaling-stroke" />
+                <circle cx="${xEnd}" cy="${yEnd}" r="2.2"
+                        fill="${dirColor}"
+                        vector-effect="non-scaling-stroke" />
+              </svg>
+            </div>
+
+            <!-- Row 3 · per-day date label -->
+            <div style="display:flex;gap:6px;height:14px;margin-top:4px;">
+              ${trendPoints.map(p => `
+                <div style="flex:1;min-width:0;text-align:center;font-size:9px;
+                            line-height:14px;color:var(--text-muted);">
+                  ${Utils.formatDate(p.date, {month:'numeric',day:'numeric'})}
                 </div>
-                <div style="font-size:9px;color:var(--text-muted);white-space:nowrap;">${Utils.formatDate(p.date, {month:'numeric',day:'numeric'})}</div>
-              </div>`;
-            }).join('')}
-          </div>`
+              `).join('')}
+            </div>`;
+        })()
         : `<div style="padding:30px;text-align:center;color:var(--text-muted);font-size:13px;">
             Attendance has not been recorded for this class yet.
-            <div class="mt-8"><button class="btn btn-sm btn-primary" id="cp-start-attendance">Record Attendance</button></div>
+            <div class="mt-8">
+              <button class="btn btn-sm btn-primary" id="cp-start-attendance">Record Attendance</button>
+            </div>
           </div>`}
         <div class="divider"></div>
         <div class="card-head" style="margin-bottom:10px;"><h3 style="font-size:13px;">Attendance Distribution</h3></div>
