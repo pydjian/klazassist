@@ -1632,6 +1632,18 @@ const AttendancePolicy = {
    ============================================================================ */
 const MergeEngine = {
   SKIP_STORES: new Set(['settings']),
+  // These keys are device-local secrets and must never be written into a
+  // downloadable backup or a sync payload. Enforced inside buildPlan too.
+  SKIP_SETTING_KEYS: new Set([
+    'auth.account',
+    'geminiApiKey',
+    'geminiModel',
+    'web3formsKey',
+    'pollinationsApiKey',
+    'emailSendMethod',
+    'license.current',
+    'gradingPolicyOverrides'
+  ]),
 
   // Stores where a mismatch between two records has no safe automatic
   // answer. A predicate returns true when the pair should be reported
@@ -2765,6 +2777,188 @@ const Security = {
 };
 
 /* ============================================================================
+   AI GATEWAY — cost estimation, usage tracking, provider routing, response cache
+   ----------------------------------------------------------------------------
+   Every Gemini call in KlazAssist routes through this module. It provides:
+     • A pre-flight cost estimate (₱ per 1k tokens, per-model)
+     • A running monthly usage total, shown in API Configuration
+     • A configurable base URL for region endpoints and corporate proxies
+     • A 30-day response cache keyed by model + prompts + schema
+   Prices are conservative estimates to keep teachers out of surprise bills —
+   they are not billing-grade. Teachers can edit them in Settings.
+   ============================================================================ */
+const AIGateway = {
+  // ₱ per 1,000 tokens. Update if Google's published prices change.
+  PRICING: {
+    'gemini-3.5-flash':     { input: 0.10, output: 0.40 },
+    'gemini-3.5-pro':       { input: 0.20, output: 0.80 },
+    'gemini-3.0-flash':     { input: 0.08, output: 0.30 },
+    'gemini-2.5-flash':     { input: 0.05, output: 0.20 },
+    'gemini-2.5-pro':       { input: 0.20, output: 0.80 },
+    'default':              { input: 0.15, output: 0.60 }
+  },
+
+  CACHE_PREFIX: 'aiCache.',
+  CACHE_TTL_MS: 30 * 24 * 60 * 60 * 1000,   // 30 days
+  CACHE_MAX:    200,
+
+  /* ─────────── Pricing ─────────── */
+
+  _rateFor(model) {
+    const m = String(model || '').toLowerCase();
+    for (const key of Object.keys(this.PRICING)) {
+      if (key === 'default') continue;
+      if (m.includes(key)) return this.PRICING[key];
+    }
+    return this.PRICING.default;
+  },
+
+  /** Estimate ₱ cost from a prompt string and the requested max output. */
+  estimate(promptText, maxOutputTokens, model) {
+    const inputTokens  = Math.ceil(String(promptText || '').length / 4);
+    const outputTokens = Math.ceil((Number(maxOutputTokens) || 2048) * 0.5);
+    const rate = this._rateFor(model);
+    const cost = (inputTokens * rate.input / 1000) + (outputTokens * rate.output / 1000);
+    return { inputTokens, outputTokens, cost, rate };
+  },
+
+  /* ─────────── Usage tracking ─────────── */
+
+  _monthKey(d = new Date()) {
+    return 'aiUsage.' + d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  },
+
+  async getThisMonth() {
+    try {
+      const rec = await DB.getSetting(this._monthKey(), null);
+      return rec || { promptTokens: 0, outputTokens: 0, calls: 0, cost: 0, byModel: {} };
+    } catch (e) {
+      return { promptTokens: 0, outputTokens: 0, calls: 0, cost: 0, byModel: {} };
+    }
+  },
+
+  async recordUsage(usageMetadata, model) {
+    if (!usageMetadata || typeof usageMetadata !== 'object') return;
+    const prompt  = Number(usageMetadata.promptTokenCount)     || 0;
+    const output  = Number(usageMetadata.candidatesTokenCount) || 0;
+    if (!prompt && !output) return;
+
+    const rate = this._rateFor(model);
+    const cost = (prompt * rate.input / 1000) + (output * rate.output / 1000);
+
+    try {
+      const key = this._monthKey();
+      const cur = (await DB.getSetting(key, null)) || {
+        promptTokens: 0, outputTokens: 0, calls: 0, cost: 0, byModel: {}
+      };
+      cur.promptTokens += prompt;
+      cur.outputTokens += output;
+      cur.calls += 1;
+      cur.cost = Math.round((cur.cost + cost) * 10000) / 10000;
+      cur.byModel = cur.byModel || {};
+      cur.byModel[model] = cur.byModel[model] || { calls: 0, cost: 0 };
+      cur.byModel[model].calls += 1;
+      cur.byModel[model].cost = Math.round((cur.byModel[model].cost + cost) * 10000) / 10000;
+      await DB.setSetting(key, cur);
+    } catch (e) {
+      console.warn('[AI] Could not record usage:', e);
+    }
+  },
+
+  async clearMonth() {
+    try { await DB.deleteSetting(this._monthKey()); } catch (e) {}
+  },
+
+  /* ─────────── Base URL (provider routing) ─────────── */
+
+  async getBaseUrl() {
+    try {
+      const custom = await DB.getSetting('geminiBaseUrl', '');
+      const trimmed = String(custom || '').trim();
+      return trimmed || 'https://generativelanguage.googleapis.com';
+    } catch (e) {
+      return 'https://generativelanguage.googleapis.com';
+    }
+  },
+
+  async buildUrl(model, key) {
+    const base  = await this.getBaseUrl();
+    const clean = base.replace(/\/+$/, '');
+    return `${clean}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  },
+
+  /* ─────────── Response cache ─────────── */
+
+  async _hash(str) {
+    if (!crypto || !crypto.subtle) return null;
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+      return [...new Uint8Array(buf)]
+        .map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+    } catch (e) { return null; }
+  },
+
+  async cacheKey(model, systemPrompt, userPrompt, schemaJSON) {
+    return await this._hash(
+      String(model) + '|' +
+      String(systemPrompt || '') + '|' +
+      String(userPrompt || '') + '|' +
+      String(schemaJSON || '')
+    );
+  },
+
+  async cacheGet(hash) {
+    if (!hash) return null;
+    try {
+      const rec = await DB.getSetting(this.CACHE_PREFIX + hash, null);
+      if (!rec || !rec.data) return null;
+      const age = Date.now() - new Date(rec.createdAt || 0).getTime();
+      if (age > this.CACHE_TTL_MS) {
+        await DB.deleteSetting(this.CACHE_PREFIX + hash);
+        return null;
+      }
+      return rec;
+    } catch (e) { return null; }
+  },
+
+  async cachePut(hash, data, meta) {
+    if (!hash || !data) return;
+    try {
+      await DB.setSetting(this.CACHE_PREFIX + hash, {
+        data,
+        meta: meta || {},
+        createdAt: new Date().toISOString()
+      });
+      this.cachePrune().catch(() => {});
+    } catch (e) {
+      console.warn('[AI] Cache write failed:', e);
+    }
+  },
+
+  async cachePrune() {
+    try {
+      const all = await DB.getAll('settings');
+      const entries = all
+        .filter(s => s.id.startsWith(this.CACHE_PREFIX))
+        .map(s => ({ id: s.id, createdAt: s.value?.createdAt || '' }))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      if (entries.length <= this.CACHE_MAX) return;
+      for (const e of entries.slice(this.CACHE_MAX)) {
+        await DB.deleteSetting(e.id);
+      }
+    } catch (e) {}
+  },
+
+  async clearCache() {
+    try {
+      const all = await DB.getAll('settings');
+      const keys = all.filter(s => s.id.startsWith(this.CACHE_PREFIX)).map(s => s.id);
+      for (const k of keys) await DB.deleteSetting(k);
+      return keys.length;
+    } catch (e) { return 0; }
+  }
+};
+/* ============================================================================
    LICENSING — offline Ed25519 license verification
    ============================================================================ */
 const Licensing = {
@@ -2977,6 +3171,90 @@ const WRITE_VALIDATORS = {
     const r = Number(g.reportedGrade);
     if (g.reportedGrade !== '' && g.reportedGrade != null && !isNaN(r)) {
       if (r < 0 || r > 100) throw new Error('Reported grade must be between 0 and 100.');
+    }
+  }
+};
+
+/* ============================================================================
+   SECURE SETTINGS — AES-GCM at-rest encryption for secrets
+   ----------------------------------------------------------------------------
+   A random 256-bit key is generated on first use and stored in localStorage.
+   IndexedDB values for a small allow-list of keys are wrapped as:
+       "enc:" + base64( IV(12 bytes) || ciphertext || GCM tag )
+   Reads transparently decrypt. Non-string values and non-allow-listed keys
+   pass through unchanged, so this is safe to bolt onto the existing DB layer.
+   ============================================================================ */
+const SecureSettings = {
+  SENSITIVE_KEYS: new Set([
+    'geminiApiKey',
+    'web3formsKey',
+    'pollinationsApiKey',
+    'license.current'
+  ]),
+
+  LS_KEY_NAME: 'klazassist.sec.v1',
+  _keyPromise: null,
+
+  async _getKey() {
+    if (this._keyPromise) return this._keyPromise;
+    this._keyPromise = (async () => {
+      let raw = null;
+      try { raw = localStorage.getItem(this.LS_KEY_NAME); } catch (e) {}
+      if (!raw) {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        raw = btoa(bin);
+        try { localStorage.setItem(this.LS_KEY_NAME, raw); } catch (e) {}
+      }
+      const bin = atob(raw);
+      const keyBytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) keyBytes[i] = bin.charCodeAt(i);
+      return crypto.subtle.importKey(
+        'raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+      );
+    })();
+    return this._keyPromise;
+  },
+
+  async encrypt(plaintext) {
+    if (!Security.available()) return plaintext;
+    try {
+      const key = await this._getKey();
+      const iv = new Uint8Array(12);
+      crypto.getRandomValues(iv);
+      const ct = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv }, key, new TextEncoder().encode(String(plaintext))
+      );
+      const ctBytes = new Uint8Array(ct);
+      const combined = new Uint8Array(iv.length + ctBytes.length);
+      combined.set(iv, 0);
+      combined.set(ctBytes, iv.length);
+      let bin = '';
+      for (let i = 0; i < combined.length; i++) bin += String.fromCharCode(combined[i]);
+      return 'enc:' + btoa(bin);
+    } catch (e) {
+      console.warn('[SecureSettings] encrypt failed:', e);
+      return plaintext;
+    }
+  },
+
+  async decrypt(stored) {
+    if (typeof stored !== 'string' || !stored.startsWith('enc:')) return stored;
+    if (!Security.available()) return '';
+    try {
+      const key = await this._getKey();
+      const bin = atob(stored.slice(4));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const iv = bytes.slice(0, 12);
+      const ct = bytes.slice(12);
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+      return new TextDecoder().decode(pt);
+    } catch (e) {
+      console.warn('[SecureSettings] decrypt failed — key may have rotated:', e);
+      return '';
     }
   }
 };
@@ -3329,16 +3607,31 @@ const DB = {
       const k = 'getSetting|' + key;
       if (cache.has(k)) return cache.get(k);
       const s = await this.get('settings', key);
-      const v = s ? s.value : def;
+      let v = s ? s.value : def;
+      if (SecureSettings.SENSITIVE_KEYS.has(key) && typeof v === 'string' && v) {
+        v = await SecureSettings.decrypt(v);
+      }
       cache.set(k, v);
       return v;
     }
     const s = await this.get('settings', key);
-    return s ? s.value : def;
+    let v = s ? s.value : def;
+    if (SecureSettings.SENSITIVE_KEYS.has(key) && typeof v === 'string' && v) {
+      v = await SecureSettings.decrypt(v);
+    }
+    return v;
   },
 
-  async setSetting(key, value) { this._invalidate(); return this.put('settings', { id: key, value }); },
-  async deleteSetting(key)     { this._invalidate(); return this.delete('settings', key); },
+  async setSetting(key, value) {
+    this._invalidate();
+    let toStore = value;
+    if (SecureSettings.SENSITIVE_KEYS.has(key) && typeof value === 'string' && value) {
+      toStore = await SecureSettings.encrypt(value);
+    }
+    return this.put('settings', { id: key, value: toStore });
+  },
+
+  async deleteSetting(key) { this._invalidate(); return this.delete('settings', key); },
   async healthCheck() {
     try { await this.open(); await this.getAll('settings'); return true; }
     catch (e) { return false; }
@@ -3551,6 +3844,8 @@ const DB = {
     } catch (e) { return false; }
   }
 };
+
+
 
 /* ============================================================================
    AUTH
@@ -4632,6 +4927,72 @@ const HUB_CHILDREN = {
   'teaching-tools':       ['random-picker', 'wheel', 'timer', 'randomizer', 'noise-meter', 'signal'],
   'planning':             ['lesson-planner', 'tos-generator', 'powerpoint-generator', 'rubric-builder', 'weekly-planner', 'calendar', 'pedagogy-library']
 };
+
+
+/* ============================================================================
+   KIOSK STATE — persists the lightweight Teaching Tools state so a teacher
+   who navigates away and comes back doesn't lose their place.
+   ============================================================================ */
+const KioskState = {
+  _loaded: false,
+  _saveTimers: {},
+
+  async hydrate() {
+    if (this._loaded) return;
+    try {
+      const picker = await DB.getSetting('kiosk.pickerHistory', []);
+      if (Array.isArray(picker)) State.pickerHistory = picker;
+    } catch (e) {}
+    try {
+      const removed = await DB.getSetting('kiosk.wheelRemoved', []);
+      if (Array.isArray(removed)) State.wheelRemoved = removed;
+    } catch (e) {}
+    try {
+      const winner = await DB.getSetting('kiosk.wheelWinnerId', null);
+      if (typeof winner === 'string' || winner === null) State.wheelWinnerId = winner;
+    } catch (e) {}
+    try {
+      const rot = await DB.getSetting('kiosk.wheelRotation', 0);
+      if (typeof rot === 'number') State.wheelRotation = rot;
+    } catch (e) {}
+    this._loaded = true;
+  },
+
+  save(key, value) {
+    if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
+    this._saveTimers[key] = setTimeout(async () => {
+      this._saveTimers[key] = null;
+      try { await DB.setSetting('kiosk.' + key, value); }
+      catch (e) { console.warn('[KioskState] save failed for', key, e); }
+    }, 250);
+  },
+
+  async flush() {
+    for (const key of Object.keys(this._saveTimers)) {
+      if (this._saveTimers[key]) clearTimeout(this._saveTimers[key]);
+      this._saveTimers[key] = null;
+    }
+    try {
+      await DB.setSetting('kiosk.pickerHistory',   State.pickerHistory   || []);
+      await DB.setSetting('kiosk.wheelRemoved',    State.wheelRemoved    || []);
+      await DB.setSetting('kiosk.wheelWinnerId',   State.wheelWinnerId   ?? null);
+      await DB.setSetting('kiosk.wheelRotation',   State.wheelRotation   || 0);
+    } catch (e) {}
+  },
+
+  clearPicker() {
+    State.pickerHistory = [];
+    this.save('pickerHistory', []);
+  },
+  clearWheel() {
+    State.wheelRemoved = [];
+    State.wheelWinnerId = null;
+    State.wheelRotation = 0;
+    this.save('wheelRemoved', []);
+    this.save('wheelWinnerId', null);
+    this.save('wheelRotation', 0);
+  }
+};
 /* ============================================================================
    AUTH UI
    ============================================================================ */
@@ -4825,6 +5186,8 @@ showLock(reason) {
     };
   },
 };
+
+
 
 /* ============================================================================
    SETUP WIZARD
@@ -5483,6 +5846,36 @@ const App = {
     try { NetStatus.init(); } catch (e) { console.warn('[NetStatus] init failed:', e); }
     try { Unsaved._loadPersisted(); Unsaved._reflectBadge(); } catch (e) { console.warn('[Unsaved] init failed:', e); }
 
+    // Restore persisted Teaching Tools state so picker/wheel pick up
+    // where the teacher left off.
+    try { await KioskState.hydrate(); } catch (e) { console.warn('[Kiosk] hydrate failed:', e); }
+
+    // Persist kiosk state on graceful exit so nothing is lost if the tab
+    // closes right after a pick.
+    if (!this._kioskExitBound) {
+      this._kioskExitBound = true;
+      window.addEventListener('pagehide', () => { KioskState.flush(); });
+      window.addEventListener('beforeunload', () => { KioskState.flush(); });
+    }
+
+    // Wire the item-analysis live refresh. One global listener handles
+    // every scan event, and only refreshes when the item-analysis page
+    // is actually on screen. No polling, no background work.
+    if (!this._omrLiveBound) {
+      this._omrLiveBound = true;
+      window.addEventListener('klaz:omr-scan-complete', (e) => {
+        const detail = e && e.detail ? e.detail : {};
+        const iaRoot = document.querySelector('[data-ia-page]');
+        if (!iaRoot) return;                     // page is not open
+        const selectedId = State.itemAnalysisAssessment;
+        // Only refresh if the open analysis matches the assessment just scanned.
+        if (selectedId && detail.assessmentId && selectedId !== detail.assessmentId) return;
+        // Re-render in place. App.navigate is safe to call here because
+        // it replaces the page content and rewires all bindings.
+        App.navigate('item-analysis');
+      });
+    }
+
     // Run migrations in the background — do NOT await. The user is
     // already looking at their dashboard by the time these complete.
     this.runDeferredMigrations();
@@ -5631,8 +6024,13 @@ toggleTheme() {
       in the background. */
   async runDeferredMigrations() {
     try {
-      const MIGRATION_VERSION = 5;   // bumped from 4 → 5 for orphan cleanup
+      const MIGRATION_VERSION = 6;   // bumped from 5 → 6 for secret encryption
       const done = await DB.getSetting('migrationsVersion', 0);
+
+      // Encrypt any sensitive keys stored before SecureSettings existed.
+      if (done < 6) {
+        await this.migrateEncryptSecrets();
+      }
 
       // Orphan cleanup runs once per DB_VERSION, regardless of migration
       // version — it's cheap when there's nothing to do and prevents
@@ -5725,6 +6123,27 @@ toggleTheme() {
     } catch (e) { console.warn('Learner sex migration failed:', e); }
     if (changed) {
       this.logActivity('Learner sex field normalized (' + changed + ' record' + (changed === 1 ? '' : 's') + ')', 'System');
+    }
+  },
+
+    /** One-time: re-write any sensitive settings that are still plaintext so
+      they get the AES-GCM wrapper. Idempotent — re-running does nothing. */
+  async migrateEncryptSecrets() {
+    let touched = 0;
+    for (const key of SecureSettings.SENSITIVE_KEYS) {
+      try {
+        const rec = await DB.get('settings', key);
+        if (!rec || typeof rec.value !== 'string' || !rec.value) continue;
+        if (rec.value.startsWith('enc:')) continue;
+        const enc = await SecureSettings.encrypt(rec.value);
+        await DB.put('settings', { id: key, value: enc });
+        touched++;
+      } catch (e) {
+        console.warn('[Migration] Could not encrypt key:', key, e);
+      }
+    }
+    if (touched) {
+      this.logActivity(`Encrypted ${touched} sensitive setting${touched === 1 ? '' : 's'} at rest`, 'Security');
     }
   },
 
@@ -6005,6 +6424,23 @@ renderSidebar() {
     const gate = PRO_FEATURES[id];
     if (gate && gate.tier === 'pro' && !Licensing.isPro()) {
       Pages.openUpgradeModal(id);
+      return;
+    }
+
+    // ── Unsaved-changes guard ──
+    // If the target is a different module than the current one AND any
+    // registered editor has unsaved edits, hand control to the Unsaved
+    // module. It handles the three-way prompt, the draft save, and the
+    // cleanup of stale modals. We only need to handle the two outcomes:
+    // proceed with the navigation, or cancel and stay put.
+    if (State.currentModule !== id && Unsaved.isDirty()) {
+      const target = id;
+      Unsaved.intercept(target).then((result) => {
+        if (!result || result.action !== 'proceed') return;   // user stayed
+        // intercept() has already closed any lingering editor modal and
+        // cleared the dirty set. Safe to run the real navigation now.
+        this.navigate(target);
+      });
       return;
     }
 
@@ -10417,6 +10853,448 @@ const SF1Parser = {
   };
 },
 };
+
+/* ============================================================================
+   MINI ZIP — minimal stored-format ZIP archive builder
+   Shared by XlsxWriter and DocxWriter. Files are stored uncompressed (the
+   content is small enough that deflate would add more complexity than it
+   saves). Every modern Office application opens stored-format OOXML.
+   ============================================================================ */
+const MiniZip = {
+  _crcTable: null,
+  _crc32(bytes) {
+    if (!this._crcTable) {
+      const t = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[i] = c >>> 0;
+      }
+      this._crcTable = t;
+    }
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = this._crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  },
+
+  _enc(s) { return new TextEncoder().encode(s); },
+
+  /** files: [{ name: 'word/document.xml', data: Uint8Array }] */
+  build(files) {
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    const DOS_TIME = 0;
+    const DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1;
+    const w16 = (arr, v) => { arr.push(v & 0xFF, (v >> 8) & 0xFF); };
+    const w32 = (arr, v) => { arr.push(v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF); };
+
+    files.forEach(f => {
+      const nameBytes = this._enc(f.name);
+      const crc = this._crc32(f.data);
+      const size = f.data.length;
+
+      const local = [];
+      w32(local, 0x04034b50);
+      w16(local, 20); w16(local, 0); w16(local, 0);
+      w16(local, DOS_TIME); w16(local, DOS_DATE);
+      w32(local, crc); w32(local, size); w32(local, size);
+      w16(local, nameBytes.length); w16(local, 0);
+      chunks.push(new Uint8Array(local), nameBytes, f.data);
+
+      const cd = [];
+      w32(cd, 0x02014b50);
+      w16(cd, 20); w16(cd, 20); w16(cd, 0); w16(cd, 0);
+      w16(cd, DOS_TIME); w16(cd, DOS_DATE);
+      w32(cd, crc); w32(cd, size); w32(cd, size);
+      w16(cd, nameBytes.length); w16(cd, 0); w16(cd, 0);
+      w16(cd, 0); w16(cd, 0); w32(cd, 0); w32(cd, offset);
+      central.push(new Uint8Array(cd), nameBytes);
+
+      offset += local.length + nameBytes.length + size;
+    });
+
+    let cdSize = 0;
+    central.forEach(c => cdSize += c.length);
+
+    const eocd = [];
+    w32(eocd, 0x06054b50);
+    w16(eocd, 0); w16(eocd, 0);
+    w16(eocd, files.length); w16(eocd, files.length);
+    w32(eocd, cdSize); w32(eocd, offset); w16(eocd, 0);
+
+    const all = [...chunks, ...central, new Uint8Array(eocd)];
+    let total = 0; all.forEach(a => total += a.length);
+    const out = new Uint8Array(total);
+    let p = 0; all.forEach(a => { out.set(a, p); p += a.length; });
+    return out;
+  }
+};
+
+/* ============================================================================
+   DOCX WRITER — real .docx generation without external dependencies
+   ----------------------------------------------------------------------------
+   Emits a minimal but complete OOXML document with paragraph styles, lists,
+   tables, page breaks, and inline images. Everything Word, Pages, Google Docs,
+   and LibreOffice can open.
+
+   Block types:
+     { type: 'h1' | 'h2' | 'h3', text }
+     { type: 'p', text, bold?, italic?, align? }
+     { type: 'bullet', text }
+     { type: 'number', text }
+     { type: 'pagebreak' }
+     { type: 'image', dataURL, widthMM, heightMM }
+     { type: 'table', rows: [[cell, cell, ...], ...], header?: true }
+
+   A "cell" is a string or `{ text, bold?, italic?, align?, width? }`.
+   ============================================================================ */
+const DocxWriter = {
+  _escXml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  },
+
+  /* Convert block text into <w:r> run elements, applying bold/italic. */
+  _run(text, opts = {}) {
+    const rPr = [];
+    if (opts.bold)   rPr.push('<w:b/>');
+    if (opts.italic) rPr.push('<w:i/>');
+    if (opts.color)  rPr.push(`<w:color w:val="${this._escXml(opts.color)}"/>`);
+    if (opts.size)   rPr.push(`<w:sz w:val="${Math.round(opts.size * 2)}"/>`);
+    const rPrXml = rPr.length ? `<w:rPr>${rPr.join('')}</w:rPr>` : '';
+    // Preserve leading/trailing spaces with xml:space="preserve"
+    return `<w:r>${rPrXml}<w:t xml:space="preserve">${this._escXml(text)}</w:t></w:r>`;
+  },
+
+  _para(text, opts = {}) {
+    const pPr = [];
+    if (opts.align)   pPr.push(`<w:jc w:val="${this._escXml(opts.align)}"/>`);
+    if (opts.style)   pPr.push(`<w:pStyle w:val="${this._escXml(opts.style)}"/>`);
+    if (opts.spacing) pPr.push(`<w:spacing w:before="${opts.spacing.before || 0}" w:after="${opts.spacing.after || 0}"/>`);
+    if (opts.numId)   pPr.push(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${opts.numId}"/></w:numPr>`);
+    const pPrXml = pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : '';
+    return `<w:p>${pPrXml}${this._run(text, opts)}</w:p>`;
+  },
+
+  _table(rows, hasHeader) {
+    if (!Array.isArray(rows) || !rows.length) return '';
+    const colCount = Math.max(...rows.map(r => Array.isArray(r) ? r.length : 0));
+    if (colCount === 0) return '';
+
+    // Distribute width evenly; Word only uses these as hints.
+    const totalTwips = 9360;   // ~6.5 inches
+    const colTwips   = Math.floor(totalTwips / colCount);
+
+    const gridXml = `<w:tblGrid>${Array(colCount).fill(`<w:gridCol w:w="${colTwips}"/>`).join('')}</w:tblGrid>`;
+
+    const rowXml = rows.map((row, ri) => {
+      const cells = (row || []).map(cell => {
+        const isObj = cell && typeof cell === 'object';
+        const text  = isObj ? (cell.text || '') : String(cell == null ? '' : cell);
+        const bold  = isObj ? !!cell.bold : (hasHeader && ri === 0);
+        const align = isObj && cell.align ? cell.align : 'left';
+        const cellPara = `<w:p><w:pPr><w:jc w:val="${this._escXml(align)}"/></w:pPr>${this._run(text, { bold })}</w:p>`;
+        return `<w:tc><w:tcPr><w:tcW w:w="${colTwips}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>${cellPara}</w:tc>`;
+      }).join('');
+      return `<w:tr>${cells}</w:tr>`;
+    }).join('');
+
+    return `<w:tbl>
+      <w:tblPr>
+        <w:tblStyle w:val="TableGrid"/>
+        <w:tblW w:w="${totalTwips}" w:type="dxa"/>
+        <w:tblBorders>
+          <w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+          <w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+          <w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+          <w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+          <w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+          <w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+        </w:tblBorders>
+      </w:tblPr>
+      ${gridXml}
+      ${rowXml}
+    </w:tbl>`;
+  },
+
+  _pageBreak() {
+    return `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
+  },
+
+  /* Image handling: decode a data URL into binary and register the media part. */
+  _imageBlock(dataURL, media, rels, widthMM, heightMM) {
+    const m = String(dataURL || '').match(/^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/i);
+    if (!m) return '';
+    const ext = m[1].toLowerCase() === 'jpg' ? 'jpeg' : m[1].toLowerCase();
+    const b64 = m[2];
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const mediaName = `image${media.length + 1}.${ext}`;
+    const rId = `rIdImg${media.length + 1}`;
+    media.push({ name: `word/media/${mediaName}`, data: bytes });
+    rels.push({
+      id: rId,
+      type: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
+      target: `media/${mediaName}`
+    });
+
+    // Convert mm → EMU (English Metric Units). 1 mm = 36,000 EMU.
+    const cx = Math.round((widthMM || 40) * 36000);
+    const cy = Math.round((heightMM || 40) * 36000);
+
+    return `<w:p>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="0" distR="0"
+                     xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+            <wp:extent cx="${cx}" cy="${cy}"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:docPr id="${media.length}" name="Image${media.length}"/>
+            <wp:cNvGraphicFramePr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicFrameLocks noChangeAspect="1"/>
+            </wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="${media.length}" name="${this._escXml(mediaName)}"/>
+                    <pic:cNvPicPr/>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${rId}"/>
+                    <a:stretch><a:fillRect/></a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm>
+                      <a:off x="0" y="0"/>
+                      <a:ext cx="${cx}" cy="${cy}"/>
+                    </a:xfrm>
+                    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>`;
+  },
+
+  /** Generate and download a .docx file. */
+  build(blocks) {
+    const media = [];
+    const rels  = [];
+
+    const bodyXml = (blocks || []).map(b => {
+      if (!b || !b.type) return '';
+      switch (b.type) {
+        case 'h1':       return this._para(b.text, { style: 'Heading1', bold: true, size: 15 });
+        case 'h2':       return this._para(b.text, { style: 'Heading2', bold: true, size: 13 });
+        case 'h3':       return this._para(b.text, { style: 'Heading3', bold: true, size: 11.5 });
+        case 'p':        return this._para(b.text, { bold: b.bold, italic: b.italic, align: b.align });
+        case 'bullet':   return this._para(b.text, { numId: 2 });
+        case 'number':   return this._para(b.text, { numId: 1 });
+        case 'pagebreak':return this._pageBreak();
+        case 'table':    return this._table(b.rows, b.header);
+        case 'image':    return this._imageBlock(b.dataURL, media, rels, b.widthMM, b.heightMM);
+        default:         return '';
+      }
+    }).join('\n');
+
+    const document =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
+                  `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+        `<w:body>${bodyXml}` +
+          `<w:sectPr>` +
+            `<w:pgSz w:w="11906" w:h="16838"/>` +   // A4 portrait
+            `<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="720" w:footer="720" w:gutter="0"/>` +
+          `</w:sectPr>` +
+        `</w:body>` +
+      `</w:document>`;
+
+    const stylesXml =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<w:docDefaults>` +
+          `<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>` +
+          `<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>` +
+        `</w:docDefaults>` +
+        `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
+        `<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style>` +
+        `<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>` +
+        `<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="23"/></w:rPr></w:style>` +
+        `<w:style w:type="numbering" w:styleId="NumberList"><w:name w:val="Number List"/></w:style>` +
+      `</w:styles>`;
+
+    // Numbering definitions for ordered and unordered lists.
+    const numberingXml =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
+        `<w:abstractNum w:abstractNumId="0">` +
+          `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>` +
+        `</w:abstractNum>` +
+        `<w:abstractNum w:abstractNumId="1">` +
+          `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>` +
+        `</w:abstractNum>` +
+        `<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
+        `<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>` +
+      `</w:numbering>`;
+
+    const contentTypes =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+        `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+        `<Default Extension="xml"  ContentType="application/xml"/>` +
+        media.map(m => {
+          const ext = m.name.split('.').pop().toLowerCase();
+          const ct = ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`;
+          return `<Default Extension="${this._escXml(ext)}" ContentType="${ct}"/>`;
+        }).join('') +
+        `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+        `<Override PartName="/word/styles.xml"   ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>` +
+        `<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>` +
+      `</Types>`;
+
+    const rootRels =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+      `</Relationships>`;
+
+    // Document-level relationships: styles, numbering, and any images.
+    const docRels =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"    Target="styles.xml"/>` +
+        `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` +
+        rels.map(r => `<Relationship Id="${this._escXml(r.id)}" Type="${this._escXml(r.type)}" Target="${this._escXml(r.target)}"/>`).join('') +
+      `</Relationships>`;
+
+    const enc = (s) => new TextEncoder().encode(s);
+    const files = [
+      { name: '[Content_Types].xml',          data: enc(contentTypes) },
+      { name: '_rels/.rels',                  data: enc(rootRels) },
+      { name: 'word/document.xml',            data: enc(document) },
+      { name: 'word/_rels/document.xml.rels', data: enc(docRels) },
+      { name: 'word/styles.xml',              data: enc(stylesXml) },
+      { name: 'word/numbering.xml',           data: enc(numberingXml) }
+    ];
+    media.forEach(m => files.push({ name: m.name, data: m.data }));
+
+    return MiniZip.build(files);
+  },
+
+  download(filename, blocks) {
+    const bytes = this.build(blocks);
+    const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+};
+
+/* ============================================================================
+   HTML → DOCX BLOCKS
+   Walks a parsed DOM tree and produces DocxWriter block objects. Handles the
+   subset of HTML that KlazAssist's exam renderer produces: headings, paragraphs,
+   ordered/unordered lists, tables, images, and page breaks.
+   ============================================================================ */
+function htmlToDocxBlocks(html) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const blocks = [];
+
+  const textOf = (node) => {
+    if (!node) return '';
+    return String(node.textContent || '').replace(/\s+/g, ' ').trim();
+  };
+
+  const walkList = (listEl, kind) => {
+    // kind: 'number' | 'bullet'
+    Array.from(listEl.children).forEach(li => {
+      if ((li.tagName || '').toLowerCase() !== 'li') return;
+      // Detect nested lists so we can descend after emitting the parent item.
+      const nested = Array.from(li.children).filter(c =>
+        ['ul', 'ol'].includes((c.tagName || '').toLowerCase())
+      );
+      // Remove nested lists before reading the text.
+      const clone = li.cloneNode(true);
+      clone.querySelectorAll('ul, ol').forEach(n => n.remove());
+      const text = textOf(clone);
+      if (text) blocks.push({ type: kind, text });
+      nested.forEach(n => {
+        const tag = (n.tagName || '').toLowerCase();
+        walkList(n, tag === 'ol' ? 'number' : 'bullet');
+      });
+    });
+  };
+
+  const walk = (node) => {
+    if (!node) return;
+    if (node.nodeType === 3) return;   // text nodes handled by parents
+    const tag = (node.tagName || '').toLowerCase();
+    switch (tag) {
+      case 'h1':    blocks.push({ type: 'h1', text: textOf(node) }); return;
+      case 'h2':    blocks.push({ type: 'h2', text: textOf(node) }); return;
+      case 'h3':
+      case 'h4':    blocks.push({ type: 'h3', text: textOf(node) }); return;
+      case 'p': {
+        const text = textOf(node);
+        if (text) {
+          // Preserve bold/italic emphasis on <strong> / <em> by taking the
+          // first inner style we find. Rich inline formatting within a single
+          // paragraph is flattened — a reasonable trade-off for exam content.
+          const hasBold   = !!node.querySelector('strong, b');
+          const hasItalic = !!node.querySelector('em, i');
+          blocks.push({ type: 'p', text, bold: hasBold, italic: hasItalic });
+        }
+        return;
+      }
+      case 'ol': walkList(node, 'number'); return;
+      case 'ul': walkList(node, 'bullet'); return;
+      case 'table': {
+        const rows = Array.from(node.querySelectorAll('tr')).map(tr => {
+          return Array.from(tr.querySelectorAll('th, td')).map(cell => ({
+            text: textOf(cell),
+            bold: (cell.tagName || '').toLowerCase() === 'th',
+            align: (cell.getAttribute('align') || 'left')
+          }));
+        });
+        if (rows.length) {
+          const hasHeader = (node.querySelector('th') != null);
+          blocks.push({ type: 'table', rows, header: hasHeader });
+        }
+        return;
+      }
+      case 'img': {
+        const src = node.getAttribute('src') || '';
+        // Only inline data URLs — remote images can't be embedded synchronously.
+        if (src.startsWith('data:image/')) {
+          const w = Number(node.getAttribute('width'))  || 30;
+          const h = Number(node.getAttribute('height')) || 30;
+          blocks.push({ type: 'image', dataURL: src, widthMM: w, heightMM: h });
+        }
+        return;
+      }
+      case 'br': blocks.push({ type: 'pagebreak' }); return;
+      case 'hr': blocks.push({ type: 'pagebreak' }); return;
+      default:
+        Array.from(node.children || []).forEach(walk);
+    }
+  };
+
+  Array.from(doc.body.children).forEach(walk);
+  return blocks;
+}
 
 /* ============================================================================
    XLSX WRITER — dependency-free .xlsx generator
@@ -15900,6 +16778,9 @@ async gradebook(root) {
               <button class="btn btn-sm btn-outline" id="gb-reset-widths" title="Restore default column widths">
                 ${icon('history')} Reset Widths
               </button>
+              <button class="btn btn-sm btn-outline" id="gb-bulk-clear-term" title="Delete every score recorded for the currently-shown term">
+                ${icon('trash')} Clear Term Scores
+              </button>
             </div>
           </div>
 
@@ -15958,6 +16839,58 @@ async gradebook(root) {
 
     const resetBtn = root.querySelector('#gb-reset-widths');
     if (resetBtn) resetBtn.onclick = () => Pages._gbResetColWidths(columns);
+
+    /* ---- Bulk clear: every score in the current term ---- */
+    const bulkClearBtn = root.querySelector('#gb-bulk-clear-term');
+    if (bulkClearBtn) bulkClearBtn.onclick = async () => {
+      // Collect every assessment id currently in the term view (across all
+      // categories). This is what the teacher sees on screen right now.
+      const termAssessmentIds = new Set();
+      termAssessments.forEach(a => termAssessmentIds.add(a.id));
+
+      if (!termAssessmentIds.size) {
+        UI.toast('No assessments recorded for this term yet.', 'info');
+        return;
+      }
+
+      // Count how many results would be affected, so the confirm is honest.
+      const all = await DB.getAll('assessmentResults');
+      const toDelete = all.filter(r => termAssessmentIds.has(r.assessmentId));
+
+      if (!toDelete.length) {
+        UI.toast('No scores recorded for this term.', 'info');
+        return;
+      }
+
+      UI.confirm({
+        title: `Clear all ${State.gbTerm} scores?`,
+        message: `
+          This will delete <strong>${toDelete.length}</strong> recorded score${toDelete.length === 1 ? '' : 's'}
+          across <strong>${termAssessmentIds.size}</strong> assessment${termAssessmentIds.size === 1 ? '' : 's'}
+          in <strong>${Utils.esc(State.gbTerm)}</strong>.
+          <br><br>
+          The assessments themselves are kept — only the scores are cleared.
+          This cannot be undone.
+        `,
+        confirmText: `Clear ${toDelete.length} score${toDelete.length === 1 ? '' : 's'}`,
+        confirmClass: 'btn-danger',
+        onConfirm: async () => {
+          try {
+            await DB.bulkWrite('assessmentResults', toDelete.map(r => r.id), 'delete');
+          } catch (err) {
+            console.error('[Gradebook] Bulk term clear failed:', err);
+            UI.toast('Clear failed — nothing was changed.', 'error', 6000);
+            return;
+          }
+          App.logActivity(
+            `Cleared ${toDelete.length} score(s) from ${State.gbTerm}`,
+            'Grading'
+          );
+          UI.toast(`Cleared ${toDelete.length} score${toDelete.length === 1 ? '' : 's'}`, 'success', 2500);
+          App.navigate('gradebook');
+        }
+      });
+    };
 
     await this.renderGradebookRowsDO015(cls, policy, weights, ww, pt, st1, st2, te, columns);
   }
@@ -16352,7 +17285,8 @@ _gbBuildColumns(ww, pt, st1, st2, te, opts = {}) {
       id: 'reported',
       label: 'Reported',
       width: 72,
-      cat: 'summary'
+      cat: 'summary',
+      stickyRight: true
     });
   }
 
@@ -16374,7 +17308,8 @@ _gbBuildColumns(ww, pt, st1, st2, te, opts = {}) {
     id: 'actions',
     label: '',
     width: 44,
-    cat: 'actions'
+    cat: 'actions',
+    stickyRight: true
   });
 
   return cols;
@@ -16395,19 +17330,15 @@ _gbRenderHeader(columns) {
   if (!thead) return;
 
   thead.innerHTML = `<tr>${columns.map((col, i) => {
-    thead.querySelectorAll('th[data-assessment-id]').forEach(th => {
-      th.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const idx = Number(th.dataset.colIdx);
-        const col = columns[idx];
-        if (col && col.assessmentId) {
-          Pages._gbOpenColumnMenu(col, e.clientX, e.clientY);
-        }
-      });
-    });
-    
     const sticky = col.sticky === 1 ? ' gb-sticky-1' : col.sticky === 2 ? ' gb-sticky-2' : '';
+
+    // Sticky-right: the Reported grade sits at right: 44px so it lines up
+    // flush against the actions column, which anchors at right: 0. The
+    // 44px offset matches the actions column's `width: 44`.
+    const stickyRight = col.stickyRight
+      ? (col.id === 'actions' ? ' gb-sticky-right-2' : ' gb-sticky-right-1')
+      : '';
+
     const cat    = ' gb-cat-' + col.cat;
     const exSub  = col.exSub ? ' gb-ex-sub' : '';
     const title  = col.sub ? ` title="${Utils.attr(col.sub)}"` : '';
@@ -16421,23 +17352,28 @@ _gbRenderHeader(columns) {
       ? `<div class="gb-col-resize" data-col-idx="${i}" data-col-id="${Utils.attr(col.id)}" title="Drag to resize"></div>`
       : '';
 
-    // ── Column identity for the context menu ──
-    // Editable data columns carry an `assessmentId` (set in _gbBuildColumns).
-    // Summary/meta/actions columns do not, so they get no menu.
+    // Per-column menu button. Rendered only on columns backed by an
+    // assessment, since the menu's actions (rename, clear, delete) don't
+    // apply to summary or meta columns.
+    const menuHTML = col.assessmentId
+      ? `<button type="button" class="gb-col-menu-btn" data-col-menu="${i}" title="Column options" aria-label="Column options for ${Utils.attr(col.sub || col.label)}">⋮</button>`
+      : '';
+
     const colAttr = col.assessmentId
       ? ` data-col-idx="${i}" data-assessment-id="${Utils.attr(col.assessmentId)}"`
       : '';
 
-    return `<th class="${cat.trim()}${sticky}${exSub}"${title}${colAttr}>
+    return `<th class="${cat.trim()}${sticky}${stickyRight}${exSub}"${title}${colAttr}>
       <span class="gb-th-label">${Utils.esc(col.label)}</span>
       ${subHTML}
+      ${menuHTML}
       ${handleHTML}
     </th>`;
   }).join('')}</tr>`;
 
-  // ── Right-click menu on editable columns ──
-  // Delegated at the thead level so it survives any future re-render
-  // that swaps the inner `<tr>` without rebuilding the binding.
+  /* ── Right-click context menu on editable columns ──
+     Delegated at the thead level. The `_gbCtxBound` flag prevents stacking
+     duplicate listeners on each re-render, since thead itself is reused. */
   if (!thead._gbCtxBound) {
     thead.addEventListener('contextmenu', (e) => {
       const th = e.target.closest('th[data-assessment-id]');
@@ -16454,6 +17390,23 @@ _gbRenderHeader(columns) {
     });
     thead._gbCtxBound = true;
   }
+
+  /* ── Left-click menu button on every editable column ──
+     Rebound on every render because the buttons themselves are recreated
+     inside `thead.innerHTML = ...` above. */
+  thead.querySelectorAll('[data-col-menu]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const idx = Number(btn.dataset.colMenu);
+      const col = columns[idx];
+      if (!col || !col.assessmentId) return;
+      const rect = btn.getBoundingClientRect();
+      // Anchor the menu just below the button. The horizontal offset
+      // centers the ~240px-wide menu under the button.
+      Pages._gbOpenColumnMenu(col, rect.left - 120, rect.bottom + 4);
+    });
+  });
 },
 
 _gbWireResizeHandles() {
@@ -16946,6 +17899,7 @@ async assessmentBuilder(root) {
                   <button class="icon-btn" title="Edit" data-assess-edit="${Utils.attr(a.id)}">${icon('edit')}</button>
                   <button class="icon-btn" title="Assign to classes" data-assess-assign="${Utils.attr(a.id)}">${icon('users')}</button>
                   <button class="icon-btn" title="Print answer sheets" data-assess-sheets="${Utils.attr(a.id)}">${icon('grid')}</button>
+                  <button class="icon-btn" title="Print printer test sheet" data-assess-test-sheet="${Utils.attr(a.id)}">${icon('printer')}</button>
                   <button class="icon-btn" title="Scan answer sheets" data-assess-scan="${Utils.attr(a.id)}">${icon('scan')}</button>
                   <button class="icon-btn" title="Scanned papers — review, reassign, delete" data-assess-papers="${Utils.attr(a.id)}">${icon('list')}</button>
                   <button class="icon-btn" title="Print exam &amp; answer key" data-assess-print="${Utils.attr(a.id)}">${icon('printer')}</button>
@@ -16965,6 +17919,9 @@ async assessmentBuilder(root) {
     root.querySelectorAll('[data-assess-sheets]').forEach(el =>
       el.addEventListener('click', () => AnswerSheetOMR.printSheets(el.dataset.assessSheets))
     );
+    root.querySelectorAll('[data-assess-test-sheet]').forEach(el =>
+      el.addEventListener('click', () => AnswerSheetOMR.printTestSheet(el.dataset.assessTestSheet))
+    );
     root.querySelectorAll('[data-assess-scan]').forEach(el =>
       el.addEventListener('click', () => AnswerSheetOMR.openScanner(el.dataset.assessScan))
     );
@@ -16976,6 +17933,35 @@ async assessmentBuilder(root) {
   async openAssessmentModal(id) {
     if (!State.activeClass) { UI.toast('Select a class first', 'warning'); return; }
     const existing = id ? await DB.get('assessments', id) : null;
+
+    // If the assessment has already been frozen by the OMR scanner, show a
+    // one-time informational modal so the teacher understands the trade-off
+    // before editing.
+    if (existing && existing.frozenQuestions) {
+      const proceed = await new Promise(resolve => {
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+        UI.confirm({
+          title: 'This assessment is frozen',
+          message: `
+            <strong>${Utils.esc(existing.title || 'This assessment')}</strong> has already been
+            used for scanned answer sheets. The question list has been snapshotted
+            so existing scans stay valid.
+            <br><br>
+            Editing the questions will <strong>not</strong> affect recorded scans — they keep
+            the frozen answer key. New scans will use the edited questions.
+            <br><br>
+            If you want a clean split, cancel and use <strong>Duplicate assessment</strong> instead.
+          `,
+          confirmText: 'Edit anyway',
+          confirmClass: 'btn-warning',
+          onConfirm: () => done(true),
+          onClose:   () => done(false)
+        });
+      });
+      if (!proceed) return;
+    }
+
     const questions = existing ? (existing.questions || []) : [];
     let qDraft = JSON.parse(JSON.stringify(questions));
     let expandedIdx = -1; // index of the question currently being edited inline (-1 = none)
@@ -17206,6 +18192,106 @@ async assessmentBuilder(root) {
     const qList = m.overlay.querySelector('#af-questions');
     renderQuestions(qList);
 
+    /* ---- Unsaved-changes guard ---- */
+    Unsaved.register(
+      'assessment-modal',
+      existing ? 'Assessment: ' + (existing.title || 'Untitled') : 'New Assessment',
+      () => {
+        // The producer reads from `m.overlay` directly, so it works even
+        // after Unsaved.intercept() has detached the modal from the DOM.
+        if (!m.overlay) return null;
+        const read = (sel) => {
+          const el = m.overlay.querySelector(sel);
+          return el ? el.value : '';
+        };
+        const title = read('#af-title').trim();
+        const hasQuestions = Array.isArray(qDraft) && qDraft.length > 0;
+        // Empty form → nothing worth drafting.
+        if (!title && !hasQuestions) return null;
+
+        return {
+          existingId: existing ? existing.id : null,
+          title,
+          type: read('#af-type'),
+          maxScore: read('#af-max'),
+          timeLimit: read('#af-time'),
+          instructions: read('#af-instr'),
+          term: m.overlay.querySelector('#af-term') ? read('#af-term') : undefined,
+          questions: JSON.parse(JSON.stringify(qDraft)),
+          isLegacyClass
+        };
+      }
+    );
+
+    // Mark dirty on any input or question-list mutation.
+    const markAssessmentDirty = Utils.debounce(() => Unsaved.mark('assessment-modal'), 300);
+    m.overlay.addEventListener('input', markAssessmentDirty);
+    m.overlay.addEventListener('click', (e) => {
+      if (e.target.closest('#af-q-add, #af-shuffle, #af-shuffle-answers, [data-q-del], [data-q-edit], [data-qe-save], [data-q-move-up], [data-q-move-down]')) {
+        markAssessmentDirty();
+      }
+    });
+
+    /* ---- Draft restorer ----
+       Reopens the assessment modal with the saved draft. Because the
+       question list lives in a closure, we rebuild it through the modal's
+       own delete and add buttons. Every step is a real click, so the
+       internal qDraft array and every listener stay in sync. */
+    Unsaved.registerRestorer('assessment-modal', async (payload) => {
+      if (!payload) return;
+
+      await Pages.openAssessmentModal(payload.existingId || null);
+      await new Promise(r => setTimeout(r, 80));
+
+      const ov = document.querySelector('.modal-overlay.show');
+      if (!ov) return;
+
+      const set = (sel, v) => {
+        const el = ov.querySelector(sel);
+        if (el && v !== undefined && v !== null) el.value = v;
+      };
+
+      // ── Scalar fields ──
+      set('#af-title',      payload.title);
+      set('#af-type',       payload.type);
+      set('#af-max',        payload.maxScore);
+      set('#af-time',       payload.timeLimit);
+      set('#af-instr',      payload.instructions);
+      set('#af-term',       payload.term);
+
+      // ── Rebuild the question list ──
+      // 1. Delete every existing question. Each click re-renders the list,
+      //    so the same selector keeps matching the new index-0 button
+      //    until the list is empty. The safety counter guards against any
+      //    future change to the delete handler that would loop forever.
+      const qList = ov.querySelector('#af-questions');
+      if (qList) {
+        let safety = 200;
+        while (safety-- > 0) {
+          const delBtn = qList.querySelector('[data-q-del="0"]');
+          if (!delBtn) break;
+          delBtn.click();
+        }
+      }
+
+      // 2. Add the draft's questions using the modal's own add form. The
+      //    type `<select>` must be set BEFORE its change handler would
+      //    normally fire — we skip that step because the add handler reads
+      //    `.value` directly, not the currently-visible wrap.
+      const questions = Array.isArray(payload.questions) ? payload.questions : [];
+      for (const q of questions) {
+        set('#af-q-text',    q.text || '');
+        set('#af-q-type',    q.type || 'Multiple Choice');
+        set('#af-q-points',  String(q.points || 1));
+        set('#af-q-choices', (q.choices || []).join('\n'));
+        set('#af-q-answer',  q.answer || '');
+        const addBtn = ov.querySelector('#af-q-add');
+        if (addBtn) addBtn.click();
+      }
+
+      Unsaved.mark('assessment-modal');
+    });
+
     // ---- Shuffle button ----
     // Randomly reorders the draft in place using Fisher–Yates. Question IDs
     // travel with their questions, so nothing is lost — only the order changes.
@@ -17374,6 +18460,7 @@ async assessmentBuilder(root) {
       if (isLegacyClass) { rec.type = m.overlay.querySelector('#af-type').value; }
       else { rec.category = m.overlay.querySelector('#af-type').value; rec.term = m.overlay.querySelector('#af-term').value; }
       await DB.put('assessments', rec);
+      Unsaved.clear('assessment-modal');
       App.logActivity(existing ? 'Assessment updated' : 'Assessment created', 'Assessments');
       m.close(); App.navigate('assessment-builder');
       UI.toast('Assessment saved', 'success');
@@ -17590,7 +18677,8 @@ async printAssessment(id) {
   });
 },
 
-/** Export a saved assessment as a Word .doc file. */
+
+/** Export a saved assessment as a real Word .docx file. */
 async exportAssessmentWord(id) {
   const a = await DB.get('assessments', id);
   if (!a) { UI.toast('Assessment not found.', 'error'); return; }
@@ -17601,158 +18689,46 @@ async exportAssessmentWord(id) {
 
   UI.toast('Preparing Word document…', 'info', 1500);
 
-  // Reuse the shared renderer, but build a Word-wrapped document so that
-  // Microsoft Word honours the page geometry and fonts.
+  // Render the exam as HTML first. We reuse the same renderer that produces
+  // the on-screen preview, so the two outputs never drift.
   const bodyHTML = Pages._renderAssessmentHTML(a, { forWord: true, includeAnswerKey: true });
 
-  const doc = `
-    <html xmlns:o="urn:schemas-microsoft-com:office:office"
-          xmlns:w="urn:schemas-microsoft-com:office:word"
-          xmlns="http://www.w3.org/TR/REC-html40">
-    <head>
-      <meta charset="utf-8">
-      <title>${Utils.esc(a.title || 'Assessment')}</title>
-      <!--[if gte mso 9]>
-      <xml>
-        <w:WordDocument>
-          <w:View>Print</w:View>
-          <w:Zoom>100</w:Zoom>
-          <w:DoNotOptimizeForBrowser/>
-        </w:WordDocument>
-      </xml>
-      <![endif]-->
-      <style>
-        /* ---- Page geometry ---- */
-        @page WordSection1 {
-          size: 8.5in 11.0in;
-          mso-page-orientation: portrait;
-          margin: 0.75in;
-          mso-header-margin: 0.5in;
-          mso-footer-margin: 0.5in;
-          mso-paper-source: 0;
-        }
-        div.WordSection1 { page: WordSection1; }
-
-        /* ---- Base typography ---- */
-        body {
-          font-family: 'Times New Roman', Times, serif;
-          font-size: 11pt;
-          line-height: 1.4;
-          color: #000;
-          margin: 0;
-          padding: 0;
-        }
-
-        h1 { font-size: 15pt; font-weight: bold; margin: 0 0 12pt 0; text-align: center; }
-        h2 { font-size: 12pt; font-weight: bold; margin: 14pt 0 6pt 0;
-             border-bottom: 1.5pt solid #000; padding-bottom: 3pt;
-             page-break-after: avoid; }
-
-        table { border-collapse: collapse; }
-        td    { vertical-align: top; }
-
-        /* Answer key starts on a fresh page */
-        div[style*="page-break-before:always"] { page-break-before: always; }
-
-        /* ============================================================
-           DEPED LETTERHEAD — every element centered
-           Word does not reliably inherit text-align from a parent, so
-           each class sets text-align:center explicitly.
-           ============================================================ */
-        .print-deped-header {
-          text-align: center;
-          margin-bottom: 20px;
-          padding-bottom: 4px;
-          font-family: 'Times New Roman', Times, serif;
-        }
-        .print-deped-header .pdh-seal img {
-          display: block;
-          margin: 0 auto;
-          width: 76pt;
-          height: 76pt;
-        }
-        .print-deped-header .pdh-text {
-          text-align: center;
-          line-height: 1.25;
-          color: #000;
-          margin-top: 6px;
-        }
-        .print-deped-header .pdh-republic {
-          font-family: 'Old English Text MT', 'Times New Roman', serif;
-          font-size: 12pt;
-          letter-spacing: 0.3px;
-          text-align: center;
-        }
-        .print-deped-header .pdh-department {
-          font-family: 'Old English Text MT', 'Times New Roman', serif;
-          font-size: 18pt;
-          letter-spacing: 0.5px;
-          margin-top: -2px;
-          text-align: center;
-        }
-        .print-deped-header .pdh-region,
-        .print-deped-header .pdh-division,
-        .print-deped-header .pdh-school,
-        .print-deped-header .pdh-address {
-          font-family: 'Times New Roman', Times, serif;
-          font-size: 10pt;
-          font-weight: bold;
-          text-transform: uppercase;
-          text-align: center;
-        }
-        .print-deped-header .pdh-line {
-          border-bottom: 2pt solid #000;
-          margin: 8px auto 0;
-          width: 100%;
-        }
-        .print-deped-header .pdh-doc-title {
-          font-family: 'Times New Roman', Times, serif;
-          font-size: 14pt;
-          font-weight: 800;
-          text-transform: uppercase;
-          letter-spacing: 0.6px;
-          margin-top: 14pt;
-          color: #000;
-          text-align: center;
-        }
-        .print-deped-header .pdh-doc-subtitle {
-          font-family: 'Times New Roman', Times, serif;
-          font-size: 11.5pt;
-          font-weight: 700;
-          margin-top: 4pt;
-          color: #000;
-          text-align: center;
-        }
-
-        /* ============================================================
-           EXAM BODY — always left-aligned
-           Scoped to .assessment-body so it never touches the letterhead.
-           ============================================================ */
-        .assessment-body,
-        .assessment-body h1,
-        .assessment-body h2,
-        .assessment-body h3,
-        .assessment-body h4,
-        .assessment-body p,
-        .assessment-body div,
-        .assessment-body td,
-        .assessment-body th { text-align: left; }
-      </style>
-    </head>
-    <body>
-      <div class="WordSection1">${bodyHTML}</div>
-    </body>
-    </html>`;
-
-  const safeTitle = String(a.title || 'Assessment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
-  Utils.download(
-    `${safeTitle}_${Utils.timestamp()}.doc`,
-    doc,
-    'application/msword'
+  // Strip the DepEd letterhead out of the HTML — we rebuild it as native
+  // DOCX blocks below so the seal can be embedded as a real image part.
+  const withoutHeader = bodyHTML.replace(
+    /<div class="print-deped-header"[\s\S]*?<\/div>\s*<div class="pdh-line"><\/div>\s*<\/div>/i,
+    ''
   );
 
-  App.logActivity('Assessment exported to Word: ' + a.title, 'Assessments');
-  UI.toast('Word document downloaded', 'success');
+  const blocks = [];
+
+  // ── Letterhead as native DOCX blocks ──
+  const school = State.schools[0] || {};
+  const sealSrc = Pages._sealDataURLCache || school.depedSeal || '';
+  if (sealSrc && sealSrc.startsWith('data:image/')) {
+    blocks.push({ type: 'image', dataURL: sealSrc, widthMM: 27, heightMM: 27 });
+  }
+  blocks.push({ type: 'p', text: 'Republic of the Philippines', align: 'center' });
+  blocks.push({ type: 'h2', text: 'Department of Education' });
+  if (school.region)   blocks.push({ type: 'p', text: school.region,   align: 'center' });
+  if (school.division) blocks.push({ type: 'p', text: school.division, align: 'center' });
+  if (school.name)     blocks.push({ type: 'p', text: school.name,     align: 'center', bold: true });
+  if (school.address)  blocks.push({ type: 'p', text: school.address,  align: 'center' });
+  blocks.push({ type: 'h1', text: a.title || 'Assessment' });
+
+  // ── Exam body ──
+  const bodyBlocks = htmlToDocxBlocks(withoutHeader);
+  blocks.push(...bodyBlocks);
+
+  const safeTitle = String(a.title || 'Assessment').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60);
+  try {
+    DocxWriter.download(`${safeTitle}_${Utils.timestamp()}.docx`, blocks);
+    App.logActivity('Assessment exported to .docx: ' + a.title, 'Assessments');
+    UI.toast('Word document downloaded (.docx)', 'success');
+  } catch (e) {
+    console.error('[DocxWriter] Build failed:', e);
+    UI.toast('Word export failed: ' + (e.message || 'unknown error'), 'error', 6000);
+  }
 },
   async deleteAssessment(id) {
     UI.confirm({
@@ -18152,6 +19128,11 @@ async itemAnalysis(root) {
 
   const data = Pages._itemAnalysisCompute(assessment, results, cls);
   root.innerHTML = Pages._itemAnalysisRenderHTML(assessment, assessments, data, cls);
+
+  // Sentinel attribute so the global "klaz:omr-scan-complete" listener
+  // can tell whether the item-analysis page is currently on screen.
+  root.setAttribute('data-ia-page', '1');
+
   Pages._itemAnalysisBind(root, data, assessment, cls);
 },
 
@@ -18429,7 +19410,16 @@ _itemAnalysisRenderHTML(assessment, assessments, data, cls) {
         </svg>
       </div>
       <div class="item-hero-body">
-        <div class="item-hero-eyebrow">${data.k} items · ${data.n} submission${data.n === 1 ? '' : 's'}</div>
+        <div class="item-hero-eyebrow">
+          ${data.k} items · ${data.n} submission${data.n === 1 ? '' : 's'}
+          ${(() => {
+            const scanned = (data.results || []).filter(r =>
+              Array.isArray(r.omrDetails) && r.omrDetails.length === data.k
+            ).length;
+            if (!scanned) return '';
+            return ` · <span style="color:#86EFAC;font-weight:700;">${scanned} scanned</span>`;
+          })()}
+        </div>
         <div class="item-hero-title">${esc(assessment.title || 'Assessment')}</div>
         <div class="item-hero-meta">
           ${esc(cls.gradeLevel)} – ${esc(cls.section)}
@@ -20855,7 +21845,10 @@ _perfPrintSingleLearnerReport(cls, learner, grades, rank, classAvg, classAvgDelt
             <select class="form-control" id="as-status">${['Assigned','Submitted','Missing','Late','Completed'].map(s => `<option ${existing && existing.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>`,
         footer: `<button class="btn btn-outline" data-cancel>Cancel</button><button class="btn btn-primary" data-save>Save</button>`
       });
-      m.overlay.querySelector('[data-cancel]').onclick = m.close;
+      m.overlay.querySelector('[data-cancel]').onclick = () => {
+        Unsaved.clear('assessment-modal');
+        m.close();
+      };
       m.overlay.querySelector('[data-save]').onclick = async () => {
         const title = m.overlay.querySelector('#as-title').value.trim();
         if (!title) { UI.toast('Title required', 'warning'); return; }
@@ -23164,7 +24157,47 @@ numbered sequentially. Do not skip, merge, or invent items.
     }
   };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const url = await AIGateway.buildUrl(model, key);
+
+  /* ---- Pre-flight cost confirmation ---- */
+  const estimate = AIGateway.estimate(prompt, payload.generationConfig.maxOutputTokens, model);
+  const proceed = await new Promise(resolve => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    UI.confirm({
+      title: 'Generate exam?',
+      message: `
+        <div style="font-size:13.5px;line-height:1.6;">
+          This will send <strong>~${estimate.inputTokens.toLocaleString()} tokens</strong>
+          to <strong>${Utils.esc(model)}</strong>.
+        </div>
+        <div class="info-grid" style="margin-top:14px;">
+          <div class="info-row">
+            <span class="info-key">Estimated cost</span>
+            <span class="info-val"><strong>₱${estimate.cost.toFixed(2)}</strong>
+              <span class="text-xs text-muted">(approximate)</span></span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Max output</span>
+            <span class="info-val">${payload.generationConfig.maxOutputTokens.toLocaleString()} tokens</span>
+          </div>
+        </div>
+        <p class="text-xs text-muted" style="margin-top:12px;line-height:1.55;">
+          Costs vary by model. Check your AI Studio billing for actual charges.
+        </p>
+      `,
+      confirmText: 'Generate',
+      confirmClass: 'btn-primary',
+      onConfirm: () => done(true),
+      onClose:   () => done(false)
+    });
+  });
+  if (!proceed) {
+    statusEl.innerHTML = '';
+    btn.disabled = false;
+    btn.innerHTML = icon('star') + ' Generate Full Exam & Answer Key';
+    return;
+  }
 
   try {
     let delay = 1500, lastErr = null, resp = null;
@@ -23192,6 +24225,14 @@ numbered sequentially. Do not skip, merge, or invent items.
       throw new Error(errBody?.error?.message || `Gemini API error (HTTP ${resp ? resp.status : 'network'})`);
     }
     const data = await resp.json();
+
+    // Record actual usage. The Gemini response carries a `usageMetadata`
+    // object with exact prompt/candidate token counts. This is more accurate
+    // than our pre-flight estimate and it's what the monthly total uses.
+    try {
+      await AIGateway.recordUsage(data?.usageMetadata, model);
+    } catch (e) { /* non-critical */ }
+
     const candidate = data?.candidates?.[0];
     const finishReason = candidate?.finishReason || '';
     const text = candidate?.content?.parts?.[0]?.text;
@@ -23947,9 +24988,74 @@ async openCalendarEventById(id) {
                <button class="btn btn-outline" data-cancel>Cancel</button>
                <button class="btn btn-primary" data-save>${existing ? 'Save Changes' : 'Add Event'}</button>`
     });
-    m.overlay.querySelector('[data-cancel]').onclick = m.close;
+    /* ---- Unsaved-changes guard ---- */
+    Unsaved.register(
+      'calendar-event',
+      existing ? 'Event: ' + (existing.title || 'Untitled') : 'New Calendar Event',
+      () => {
+        if (!m.overlay) return null;
+        const read = (sel) => {
+          const el = m.overlay.querySelector(sel);
+          return el ? el.value : '';
+        };
+        const title = read('#ce-title').trim();
+        const date  = read('#ce-date');
+        const notes = read('#ce-notes').trim();
+        if (!title && !date && !notes) return null;
+
+        return {
+          existingId: existing ? existing.id : null,
+          title,
+          date,
+          time:  read('#ce-time'),
+          category: read('#ce-cat'),
+          location: read('#ce-loc'),
+          notes
+        };
+      }
+    );
+
+    const markEventDirty = Utils.debounce(() => Unsaved.mark('calendar-event'), 300);
+    m.overlay.addEventListener('input', markEventDirty);
+
+    /* ---- Draft restorer ----
+       Reopens the event modal with the saved draft, either editing the
+       same event record or creating a new one dated to the draft's date. */
+    Unsaved.registerRestorer('calendar-event', async (payload) => {
+      if (!payload) return;
+
+      if (payload.existingId) {
+        await Pages.openCalendarEventModal(payload.existingId);
+      } else {
+        await Pages.openCalendarEventModal(null, payload.date || Utils.todayISO());
+      }
+      await new Promise(r => setTimeout(r, 80));
+
+      const ov = document.querySelector('.modal-overlay.show');
+      if (!ov) return;
+
+      const set = (sel, v) => {
+        const el = ov.querySelector(sel);
+        if (el && v !== undefined && v !== null) el.value = v;
+      };
+
+      set('#ce-title',    payload.title);
+      set('#ce-date',     payload.date);
+      set('#ce-time',     payload.time);
+      set('#ce-cat',      payload.category);
+      set('#ce-loc',      payload.location);
+      set('#ce-notes',    payload.notes);
+
+      Unsaved.mark('calendar-event');
+    });
+
+    m.overlay.querySelector('[data-cancel]').onclick = () => {
+      Unsaved.clear('calendar-event');
+      m.close();
+    };
     if (existing) m.overlay.querySelector('[data-del]').onclick = async () => {
       await DB.delete('calendarEvents', id);
+      Unsaved.clear('calendar-event');
       App.logActivity('Calendar event deleted', 'Planning');
       m.close(); App.navigate('calendar');
       UI.toast('Event deleted', 'success');
@@ -23972,6 +25078,7 @@ async openCalendarEventById(id) {
         updatedAt: new Date().toISOString()
       };
       await DB.put('calendarEvents', rec);
+      Unsaved.clear('calendar-event');
       App.logActivity(existing ? 'Calendar event updated' : 'Calendar event created', 'Planning');
       m.close(); App.navigate('calendar');
       UI.toast(existing ? 'Event updated' : 'Event added', 'success');
@@ -24642,8 +25749,54 @@ async generateLessonPlanWithGemini({
   if (!key)   throw new Error('No API key saved.');
   if (!model) throw new Error('No model selected.');
 
-  const systemPrompt = `You are an expert Philippine DepEd curriculum developer implementing the ILAW framework under DO 16, s. 2026 (MATATAG). You unpack one week's competency into EXACTLY ${numSessions} chronological sessions and return a strict JSON object matching the requested schema.`;
-  const pedagogyBlock = Pages._buildPedagogyPromptBlock(gradeSection, designPattern);
+  /* ---- Cache lookup ----
+     A teacher generating the same lesson twice (e.g. once for planning,
+     once for a demo) shouldn't be charged twice. The cache is keyed by
+     every meaningful input, so tweaking anything invalidates it. */
+  const cacheFingerprint = await AIGateway.cacheKey(
+    model,
+    'ilaw-lesson-plan',
+    JSON.stringify({
+      lessonName, subject, teacherName, gradeSection, numSessions,
+      mediumOfInstruction, term, week, competency, contentStandards,
+      performanceStandards, generalObjectives, learnerContext,
+      designPattern, resources, extraPrompts
+      // Note: referenceText is intentionally excluded. It can be tens of
+      // thousands of characters, which would blow up the fingerprint. A
+      // teacher uploading new reference material wants a fresh generation.
+    }),
+    'v1'
+  );
+
+  if (cacheFingerprint) {
+    const hit = await AIGateway.cacheGet(cacheFingerprint);
+    if (hit && hit.data) {
+      const reuse = await new Promise(resolve => {
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+        UI.confirm({
+          title: 'Reuse a previous generation?',
+          message: `
+            You generated a lesson plan with these same inputs on
+            <strong>${Utils.formatDateTime(hit.createdAt)}</strong>.
+            <br><br>
+            Reusing it is instant and costs ₱0. Choose <strong>Generate fresh</strong>
+            to call Gemini again and get a different result.
+          `,
+          confirmText: 'Reuse previous',
+          confirmClass: 'btn-primary',
+          onConfirm: () => done(true),
+          onClose:   () => done(false)
+        });
+      });
+      if (reuse) {
+        App.logActivity('Lesson plan served from cache (no API call)', 'Lessons');
+        return hit.data;
+      }
+    }
+  }
+
+  const systemPrompt = `You are an expert Philippine DepEd curriculum developer implementing the ILAW framework under DO 16, s. 2026 (MATATAG). You unpack one week's competency into EXACTLY ${numSessions} chronological sessions and return a strict JSON object matching the requested schema.`;  const pedagogyBlock = Pages._buildPedagogyPromptBlock(gradeSection, designPattern);
   const prompt = `Generate a weekly ILAW lesson plan matrix.
 
 ILAW components you must structure the output around:
@@ -24721,7 +25874,14 @@ Return ONLY the JSON object. No prose, no markdown fences.`;
     systemInstruction: { parts: [{ text: systemPrompt }] }
   };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const url = await AIGateway.buildUrl(model, key);
+
+  // Cost estimate logged to the monthly usage tracker. For the lesson
+  // planner we do NOT block with a confirm dialog — it's the most-used
+  // feature and a per-call prompt would be friction. The usage tracker
+  // in API Configuration gives the teacher the running total.
+  const _estimate = AIGateway.estimate(prompt, payload.generationConfig.maxOutputTokens, model);
+  console.log('[AI] Lesson plan estimate:', _estimate);
 
   let delay = 1000, lastErr = null;
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -24744,6 +25904,11 @@ Return ONLY the JSON object. No prose, no markdown fences.`;
       throw new Error(msg);
     }
     const data = await res.json();
+
+    try {
+      await AIGateway.recordUsage(data?.usageMetadata, model);
+    } catch (e) { /* non-critical */ }
+
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Gemini returned an empty response (possibly blocked by safety filters).');
     const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
@@ -24758,6 +25923,12 @@ Return ONLY the JSON object. No prose, no markdown fences.`;
         learningResources:'', opportunitiesForIntegration:'', formativeAssessment:'',
         extendedLearning:'', reflections:''
       });
+          // Cache the successful response so an identical request is free.
+      if (cacheFingerprint) {
+        AIGateway.cachePut(cacheFingerprint, parsed, {
+          model, numSessions, subject
+        }).catch(() => {});
+      }
     }
     return parsed;
   }
@@ -25086,6 +26257,8 @@ openGeminiKeyModal() {
           The lesson plan generator calls Google's Gemini API directly from your browser. Your key and model choice are stored <strong>only on this device</strong> (IndexedDB) and are never sent to any KlazAssist server.
         </div></div>
 
+        <div id="gmk-usage-block"></div>
+
         <div class="form-group">
           <label for="gmk-key">Gemini API Key</label>
           <div class="input-wrap">
@@ -25116,6 +26289,16 @@ openGeminiKeyModal() {
           </small>
         </div>
 
+        <div class="form-group">
+          <label for="gmk-base-url">API Base URL <span class="text-muted" style="font-weight:400;">(advanced, optional)</span></label>
+          <input type="url" class="form-control" id="gmk-base-url"
+                 value="${Utils.attr(await DB.getSetting('geminiBaseUrl', ''))}"
+                 placeholder="https://generativelanguage.googleapis.com">
+          <small class="text-muted mt-8">
+            Leave blank for Google's default endpoint. Set this if your school routes Gemini traffic through a proxy, or if you use a region-locked Google endpoint. The server must speak the Gemini API.
+          </small>
+        </div>
+
         <div class="form-group" style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
           <label for="gmk-pollinations">Pollinations API Key <span class="text-muted" style="font-weight:400;">(optional)</span></label>
           <input type="password" class="form-control" id="gmk-pollinations" value="${Utils.attr(await DB.getSetting('pollinationsApiKey', ''))}" placeholder="pk_… or sk_…">
@@ -25125,7 +26308,6 @@ openGeminiKeyModal() {
             If left blank, Kavel's free anonymous tier is used instead.
           </small>
         </div>
-
 
         <div id="gmk-status"></div>`,
       footer: `
@@ -25137,6 +26319,66 @@ openGeminiKeyModal() {
     const keyInput  = m.overlay.querySelector('#gmk-key');
     const modelSel  = m.overlay.querySelector('#gmk-model');
     const statusEl  = m.overlay.querySelector('#gmk-status');
+    const usageEl   = m.overlay.querySelector('#gmk-usage-block');
+
+    /* ---- Render this month's usage and cost ---- */
+    const renderUsage = async () => {
+      if (!usageEl) return;
+      try {
+        const u = await AIGateway.getThisMonth();
+        const month = new Date().toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+        const byModel = Object.entries(u.byModel || {})
+          .sort((a, b) => (b[1].cost || 0) - (a[1].cost || 0))
+          .slice(0, 4);
+        const modelLines = byModel.length
+          ? byModel.map(([m, d]) =>
+              `<div style="display:flex;justify-content:space-between;gap:12px;font-size:11.5px;color:var(--text-muted);margin-top:2px;">
+                <span style="font-family:ui-monospace,monospace;">${Utils.esc(m)}</span>
+                <span>${d.calls} call${d.calls === 1 ? '' : 's'} · ₱${d.cost.toFixed(2)}</span>
+              </div>`).join('')
+          : `<div class="text-xs text-muted" style="margin-top:4px;">No calls recorded this month.</div>`;
+
+        usageEl.innerHTML = `
+          <div class="card" style="padding:14px 16px;background:var(--bg);border-radius:10px;margin-bottom:16px;">
+            <div class="flex-between mb-8" style="flex-wrap:wrap;gap:8px;">
+              <div>
+                <div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);">
+                  Usage · ${Utils.esc(month)}
+                </div>
+                <div style="font-size:22px;font-weight:800;line-height:1.1;margin-top:2px;">
+                  ₱${u.cost.toFixed(2)}
+                </div>
+              </div>
+              <div class="flex gap-6">
+                <button class="btn btn-sm btn-ghost" id="gmk-clear-usage">Clear usage</button>
+                <button class="btn btn-sm btn-ghost" id="gmk-clear-cache">Clear cache</button>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);">
+              ${u.calls} call${u.calls === 1 ? '' : 's'}
+              · ${(u.promptTokens + u.outputTokens).toLocaleString()} tokens
+              (${u.promptTokens.toLocaleString()} in · ${u.outputTokens.toLocaleString()} out)
+            </div>
+            ${modelLines}
+            <div class="text-xs text-muted" style="margin-top:8px;line-height:1.5;">
+              Costs are approximate estimates. Check your actual Google AI Studio billing for exact figures.
+            </div>
+          </div>`;
+
+        usageEl.querySelector('#gmk-clear-usage').onclick = async () => {
+          await AIGateway.clearMonth();
+          UI.toast('Usage log cleared', 'success');
+          renderUsage();
+        };
+        usageEl.querySelector('#gmk-clear-cache').onclick = async () => {
+          const n = await AIGateway.clearCache();
+          UI.toast(`Cache cleared — ${n} entr${n === 1 ? 'y' : 'ies'} removed`, 'success');
+        };
+      } catch (e) {
+        usageEl.innerHTML = '';
+      }
+    };
+    renderUsage();
 
     m.overlay.querySelector('#gmk-toggle').addEventListener('click', () => {
       keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
@@ -25230,6 +26472,7 @@ openGeminiKeyModal() {
     m.overlay.querySelector('#gmk-save').onclick = async () => {
       const key = keyInput.value.trim();
       const model = modelSel.value;
+      const baseUrl = (m.overlay.querySelector('#gmk-base-url').value || '').trim();
 
       // No format check. The only reliable validator is Test Key / a real call.
       if (key && (key.length < 20 || /\s/.test(key))) {
@@ -25240,10 +26483,23 @@ openGeminiKeyModal() {
         UI.toast('Click Auto-Detect and pick a model before saving.', 'warning');
         return;
       }
+      // Basic base-URL validation: must be a valid https URL if provided.
+      if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+        UI.toast('Base URL must start with https:// or http://.', 'warning');
+        return;
+      }
+
       await DB.setSetting('pollinationsApiKey', m.overlay.querySelector('#gmk-pollinations').value.trim());
       await DB.setSetting('geminiApiKey', key);
       await DB.setSetting('geminiModel', model);
-      App.logActivity(key ? `Gemini config saved (model: ${model})` : 'Gemini config cleared', 'Settings');
+      await DB.setSetting('geminiBaseUrl', baseUrl);
+
+      App.logActivity(
+        key
+          ? `Gemini config saved (model: ${model}${baseUrl ? ', base: ' + baseUrl : ''})`
+          : 'Gemini config cleared',
+        'Settings'
+      );
       m.close();
       UI.toast(key ? 'Configuration saved' : 'Configuration cleared', 'success');
     };
@@ -29774,6 +31030,7 @@ async exportGroupingSetCSV(id) {
         display.classList.remove('rolling');
         display.innerHTML = renderPickerContent(chosen);
         State.pickerHistory.push(chosen.id);
+        KioskState.save('pickerHistory', State.pickerHistory);
         Pages.updatePickerHistory();
         if (presenterActive()) {
           Presenter.send({
@@ -29792,10 +31049,46 @@ async exportGroupingSetCSV(id) {
       return `<div class="picker-photo-fallback" style="background:${Utils.colorFor(Utils.fullName(l))};">${Utils.esc(Utils.initials(Utils.fullName(l)))}</div><div>${Utils.esc(Utils.fullName(l))}</div>`;
     }
   },
-  async timer(root) {
-    const TS = Pages._timerState = { total: 300, remaining: 300, running: false, interval: null };
+async timer(root) {
+    // ── Restore from sessionStorage if a timer was running when the
+    //    teacher navigated away. Elapsed time since the last tick is
+    //    subtracted from the remaining count so a paused timer does not
+    //    silently gain or lose time on re-entry.
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem('klaz.timer') || 'null'); } catch (e) {}
+    let initialRemaining = 300, initialTotal = 300, initialRunning = false;
+    if (saved && typeof saved === 'object') {
+      initialTotal = Number(saved.total) || 300;
+      initialRunning = saved.running === true;
+      initialRemaining = Number(saved.remaining);
+      if (isNaN(initialRemaining)) initialRemaining = initialTotal;
+      if (initialRunning && saved.savedAt) {
+        const drift = Math.floor((Date.now() - Number(saved.savedAt)) / 1000);
+        initialRemaining = Math.max(0, initialRemaining - Math.max(0, drift));
+      }
+    }
+
+    const TS = Pages._timerState = {
+      total: initialTotal,
+      remaining: initialRemaining,
+      running: false,                    // always start paused on re-entry
+      interval: null
+    };
     const presenterActive = () => Presenter.isOpen() && Presenter._toolId === 'timer';
+
+    const persist = () => {
+      try {
+        sessionStorage.setItem('klaz.timer', JSON.stringify({
+          total: TS.total,
+          remaining: TS.remaining,
+          running: TS.running,
+          savedAt: Date.now()
+        }));
+      } catch (e) {}
+    };
+
     const push = () => {
+      persist();
       if (presenterActive()) {
         Presenter.send({ remaining: TS.remaining, total: TS.total, running: TS.running });
       }
@@ -29880,6 +31173,11 @@ async exportGroupingSetCSV(id) {
       TS.running = false;
       renderCd(); push();
     };
+
+    // If the persisted timer was mid-countdown, resume automatically.
+    if (initialRunning && TS.remaining > 0) {
+      document.getElementById('cd-start').click();
+    }
 
     let swStart = 0, swElapsed = 0, swInterval = null;
     const swDisplay = document.getElementById('sw-display');
@@ -30804,6 +32102,8 @@ async exportGroupingSetCSV(id) {
   restoreOneWheelLearner(id) {
     State.wheelRemoved = (State.wheelRemoved || []).filter(x => x !== id);
     State.wheelRotation = 0;
+    KioskState.save('wheelRemoved', State.wheelRemoved);
+    KioskState.save('wheelRotation', 0);
     Pages.drawWheel();
     const svg = document.getElementById('wheel-svg');
     if (svg) { svg.style.transition = 'none'; svg.style.transform = 'rotate(0deg)'; }
@@ -30819,6 +32119,8 @@ async exportGroupingSetCSV(id) {
     const n = State.wheelRemoved.length;
     State.wheelRemoved = [];
     State.wheelRotation = 0;
+    KioskState.save('wheelRemoved', []);
+    KioskState.save('wheelRotation', 0);
     App.navigate('wheel');
     UI.toast(`Restored ${n} learner${n === 1 ? '' : 's'} to the wheel`, 'success');
   },
@@ -30948,6 +32250,8 @@ async exportGroupingSetCSV(id) {
     // 4 — Reset the logical state
     State.wheelRotation = 0;
     State.wheelWinnerId = null;
+    KioskState.save('wheelRotation', 0);
+    KioskState.save('wheelWinnerId', null);
 
     // 5 — Snap the wheel visually back to 0°
     const svg = document.getElementById('wheel-svg');
@@ -31286,12 +32590,15 @@ async exportGroupingSetCSV(id) {
       if (!winner) return;
 
       State.wheelWinnerId = winner.id;
+      KioskState.save('wheelWinnerId', State.wheelWinnerId);
       Pages.renderWheelResult(winner);
       App.logActivity('Wheel of Names picked: ' + Utils.fullName(winner), 'Teaching Tools');
 
       if (State.wheelSettings.autoRemove) {
       State.wheelRemoved.push(winner.id);
       State.wheelRotation = 0;
+      KioskState.save('wheelRemoved', State.wheelRemoved);
+      KioskState.save('wheelRotation', State.wheelRotation);
 
       // If that was the last learner, re-render the page so it shows the
       // "Everyone has been picked" empty state instead of a stale wheel.
@@ -32778,6 +34085,12 @@ if (cfg.mode === 'billiard') {
     }));
 
     Pages._bindPresenterButtons(root);
+
+    // Clear the persisted timer when the teacher leaves this page and
+    // the timer is not running, so a stale count doesn't reappear.
+    if (!TS.running) {
+      try { sessionStorage.removeItem('klaz.timer'); } catch (e) {}
+    }
   },
 
 async quizManager(root) {
@@ -33278,13 +34591,63 @@ _openClassListPrintModal() {
   const learners = State.learners;
   if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
 
+  // A schematic thumbnail per layout. Small enough to sit alongside the
+  // text without competing for attention, large enough to communicate
+  // shape at a glance.
+  const layoutThumb = (kind) => {
+    const grey = 'var(--border)';
+    const ink  = 'var(--text-muted)';
+    const accent = 'var(--deped-blue)';
+    const row = (y, w = 1) =>
+      `<rect x="4" y="${y}" width="${Math.round((72 - 8) * w)}" height="3" rx="1" fill="${grey}"/>`;
+    switch (kind) {
+      case 'standard':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${[6,12,18,24,30,36,42].map(y => row(y)).join('')}
+        </svg>`;
+      case 'detailed':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${[6,12,18,24,30,36,42].map(y => row(y)).join('')}
+          ${[6,12,18,24,30,36,42].map(y => `<rect x="58" y="${y}" width="10" height="3" rx="1" fill="${accent}" opacity="0.4"/>`).join('')}
+        </svg>`;
+      case 'with-photos':
+      case 'seating':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${[0,1,2,3].map(r => [0,1,2,3].map(c =>
+            `<circle cx="${10 + c*18}" cy="${9 + r*12}" r="4.5" fill="${grey}"/>`
+          ).join('')).join('')}
+        </svg>`;
+      case 'guardian':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${[6,12,18,24,30,36,42].map(y => `
+            <rect x="4" y="${y}" width="20" height="3" rx="1" fill="${grey}"/>
+            <rect x="28" y="${y}" width="20" height="3" rx="1" fill="${grey}"/>
+            <rect x="52" y="${y}" width="16" height="3" rx="1" fill="${accent}" opacity="0.4"/>
+          `).join('')}
+        </svg>`;
+      case 'signin':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${[6,12,18,24,30,36,42].map(y => `
+            <rect x="4" y="${y}" width="22" height="3" rx="1" fill="${grey}"/>
+            <rect x="30" y="${y}" width="16" height="3" rx="1" fill="${ink}" opacity="0.25"/>
+            <rect x="50" y="${y}" width="18" height="3" rx="1" fill="${ink}" opacity="0.25"/>
+          `).join('')}
+        </svg>`;
+      default:
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          ${row(20, 0.6)}
+          ${row(26, 0.8)}
+        </svg>`;
+    }
+  };
+
   const layouts = [
-    { id: 'standard',  label: 'Standard Class List',        desc: 'Name, LRN, sex, age. Clean and compact.' },
-    { id: 'detailed',  label: 'Detailed Class List',        desc: 'Adds guardian, contact, and status.' },
-    { id: 'with-photos', label: 'With Photos',              desc: 'Includes each learner\'s photo — good for substitutes.' },
-    { id: 'guardian',  label: 'Guardian Contact Sheet',     desc: 'Name + guardian + contact only. For calling parents.' },
-    { id: 'signin',    label: 'Sign-in Sheet',              desc: 'Blank columns for parent signature — meetings or pickups.' },
-    { id: 'seating',   label: 'Seating Reference',          desc: 'Photo grid — useful for seating charts and wall display.' }
+    { id: 'standard',    label: 'Standard Class List',    desc: 'Name, LRN, sex, age. Clean and compact.',            thumb: 'standard' },
+    { id: 'detailed',    label: 'Detailed Class List',    desc: 'Adds guardian, contact, and status.',                thumb: 'detailed' },
+    { id: 'with-photos', label: 'With Photos',            desc: 'Includes each learner\'s photo — good for substitutes.', thumb: 'with-photos' },
+    { id: 'guardian',    label: 'Guardian Contact Sheet', desc: 'Name + guardian + contact only. For calling parents.', thumb: 'guardian' },
+    { id: 'signin',      label: 'Sign-in Sheet',          desc: 'Blank columns for parent signature — meetings or pickups.', thumb: 'signin' },
+    { id: 'seating',     label: 'Seating Reference',      desc: 'Photo grid — useful for seating charts and wall display.', thumb: 'seating' }
   ];
 
   const m = UI.modal({
@@ -33299,8 +34662,15 @@ _openClassListPrintModal() {
         ${layouts.map(l => `
           <label class="cl-print-option" data-print-layout="${l.id}">
             <input type="radio" name="cl-print-layout" value="${l.id}" ${l.id === 'standard' ? 'checked' : ''} style="display:none;">
-            <div class="clpo-title">${Utils.esc(l.label)}</div>
-            <div class="clpo-desc">${Utils.esc(l.desc)}</div>
+            <div style="display:flex;gap:10px;align-items:flex-start;">
+              <div style="flex:0 0 72px;height:52px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:2px;box-sizing:border-box;">
+                ${layoutThumb(l.thumb)}
+              </div>
+              <div style="flex:1;min-width:0;">
+                <div class="clpo-title">${Utils.esc(l.label)}</div>
+                <div class="clpo-desc">${Utils.esc(l.desc)}</div>
+              </div>
+            </div>
           </label>
         `).join('')}
       </div>
@@ -33391,11 +34761,12 @@ exportClassListCSV() {
   App.logActivity('Class list exported as CSV (' + learners.length + ' learners)', 'Reports');
   UI.toast(`Exported ${learners.length} learners`, 'success');
 },
-printClassList(layout = 'standard', opts = {}) {
+async printClassList(layout = 'standard', opts = {}) {
   const cls = State.activeClass;
   if (!cls) { UI.toast('No class selected.', 'warning'); return; }
   const learners = State.learners;
   if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
+  if (!(await Pages._ensureSchoolProfileReady())) return;
 
   const o = Object.assign({
     includeHeader: true, includeSignature: true,
@@ -33887,8 +35258,9 @@ _clearMasterlistFilters() {
   App.navigate('masterlist');
 },
 
-_printMasterlist(learners, classById) {
+async _printMasterlist(learners, classById) {
   if (!learners.length) { UI.toast('Nothing to print with the current filters.', 'warning'); return; }
+  if (!(await Pages._ensureSchoolProfileReady())) return;
   const school = State.schools[0] || {};
   const teacher = State.currentUser || {};
 
@@ -35866,6 +37238,69 @@ _getTeacherDesignation() {
   }
   return 'Teacher';
 },
+
+/* ============================================================================
+   SCHOOL PROFILE PRINT GUARD
+   ----------------------------------------------------------------------------
+   Printed reports that rely on the school profile will render placeholder
+   text (like "Data required") if the profile is incomplete. This helper
+   checks the profile and offers the teacher a chance to fill it in before
+   the print dialog opens. Returns true if the caller should proceed.
+   ============================================================================ */
+async _ensureSchoolProfileReady() {
+  const school = State.schools[0] || {};
+  const missing = [];
+  if (!school.name)        missing.push('School Name');
+  if (!school.schoolId)    missing.push('School ID');
+  if (!school.region)      missing.push('Region');
+  if (!school.division)    missing.push('Division');
+  if (!school.schoolHead)  missing.push('School Head');
+
+  if (!missing.length) return true;
+
+  return new Promise(resolve => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+
+    const m = UI.modal({
+      title: 'Incomplete school profile',
+      size: 'modal-lg',
+      body: `
+        <div class="alert alert-warning mb-16">
+          ${icon('alert')}
+          <div>
+            Your printout will render placeholders like
+            <em>"Data required"</em> for the fields below. Fill them in
+            for a professional-looking report.
+          </div>
+        </div>
+        <div style="font-size:13.5px;line-height:1.9;">
+          <strong>Missing:</strong>
+          <ul style="margin:6px 0 0 18px;padding:0;color:var(--text-muted);">
+            ${missing.map(x => `<li>${Utils.esc(x)}</li>`).join('')}
+          </ul>
+        </div>
+        <p class="text-xs text-muted" style="margin-top:16px;line-height:1.6;">
+          You can also proceed and print anyway — the placeholders will
+          stay visible on paper so nothing is fabricated.
+        </p>
+      `,
+      footer: `
+        <button class="btn btn-outline" id="spr-print">Print anyway</button>
+        <button class="btn btn-primary" id="spr-edit">Fill in now</button>
+      `,
+      onClose: () => done(false)
+    });
+
+    m.overlay.querySelector('#spr-print').onclick = () => { done(true); m.close(); };
+    m.overlay.querySelector('#spr-edit').onclick = () => {
+      done(false);
+      m.close();
+      App.navigate('school-profile');
+    };
+  });
+},
+
 /* ============================================================================
    Wait for every <img> inside #print-area to finish decoding, then print.
    Required for external image files (DepEd seal, school logo) whose load
@@ -40572,7 +42007,10 @@ async _philIriGenerateAiIntervention(learner, record, flagged) {
       }
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const url = await AIGateway.buildUrl(model, key);
+
+    const _estimate = AIGateway.estimate(prompt, payload.generationConfig.maxOutputTokens, model);
+    console.log('[AI] PhilIRI Intervention estimate:', _estimate);
 
     try {
       // Simple retry on 429 / network blips
@@ -40819,6 +42257,7 @@ _philIriConfirmClearAiIntervention(learner, record) {
 },
 
 async _philIriPrintClassProfile(cls, learners, records) {
+  if (!(await Pages._ensureSchoolProfileReady())) return;
   // ── Reading level distribution ──
   const levels = { IND: 0, INS: 0, FR: 0, 'Non-Reader': 0, 'Not Assessed': 0 };
   learners.forEach(l => {
@@ -48005,11 +49444,17 @@ ${text}
       }
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const url = await AIGateway.buildUrl(model, key);
 
-    let delay = 1200;
-    let lastErr = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
+  // Cost estimate logged to the monthly usage tracker. For the lesson
+  // planner we do NOT block with a confirm dialog — it's the most-used
+  // feature and a per-call prompt would be friction. The usage tracker
+  // in API Configuration gives the teacher the running total.
+  const _estimate = AIGateway.estimate(prompt, payload.generationConfig.maxOutputTokens, model);
+  console.log('[AI] PowerPoint estimate:', _estimate);
+
+  let delay = 1200, lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
       if (S.cancelRequested) throw new Error('Generation cancelled.');
       let res;
       try {
@@ -48035,6 +49480,11 @@ ${text}
         throw new Error(errJson?.error?.message || `Gemini error: HTTP ${res.status}`);
       }
       const data = await res.json();
+
+      try {
+        await AIGateway.recordUsage(data?.usageMetadata, model);
+      } catch (e) { /* non-critical */ }
+
       const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!textOut) throw new Error('Gemini returned an empty response (possibly blocked by safety filters).');
       const cleaned = textOut.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
@@ -50986,10 +52436,17 @@ Do not add commentary, markdown fences, or extra fields.`;
       }
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+      const url = await AIGateway.buildUrl(model, key);
 
-    let delay = 1200, lastErr = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
+      // Cost estimate logged to the monthly usage tracker. For the lesson
+      // planner we do NOT block with a confirm dialog — it's the most-used
+      // feature and a per-call prompt would be friction. The usage tracker
+      // in API Configuration gives the teacher the running total.
+      const _estimate = AIGateway.estimate(prompt, payload.generationConfig.maxOutputTokens, model);
+      console.log('[AI] Rubric estimate:', _estimate);
+
+      let delay = 1200, lastErr = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
       let res;
       try {
         res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -51006,6 +52463,11 @@ Do not add commentary, markdown fences, or extra fields.`;
         throw new Error(errJson?.error?.message || `Gemini error: HTTP ${res.status}`);
       }
       const data = await res.json();
+
+      try {
+        await AIGateway.recordUsage(data?.usageMetadata, model);
+     } catch (e) { /* non-critical */ }
+
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) throw new Error('Gemini returned an empty response.');
 
@@ -51176,6 +52638,48 @@ Do not add commentary, markdown fences, or extra fields.`;
     S._container.querySelector('#rb-config').onclick  = () => Pages.openGeminiKeyModal();
     S._container.querySelector('#rb-library').onclick = () => openLibrary();
     S._container.querySelector('#rb-generate').onclick = generate;
+
+    /* ---- Unsaved-changes guard ---- */
+    Unsaved.register('rubric-builder', 'Rubric Builder (setup)', () => {
+      // The preview view has a saved rubric — nothing to draft there.
+      if (S.rubric) return null;
+      const i = S.inputs || {};
+      const hasContent = String(i.taskTitle || '').trim() || String(i.description || '').trim();
+      if (!hasContent) return null;
+      return {
+        inputs: JSON.parse(JSON.stringify(i))
+      };
+    });
+
+    const markRubricDirty = Utils.debounce(() => Unsaved.mark('rubric-builder'), 300);
+    S._container.addEventListener('input', markRubricDirty);
+    S._container.addEventListener('click', (e) => {
+      if (e.target.closest('.rb-task-type, .rb-style-option')) markRubricDirty();
+    });
+
+    /* ---- Draft restorer ----
+       No modal to reopen: the setup view is a pure projection of S.inputs.
+       Replace the inputs, reset the view to setup, and navigate back. */
+    Unsaved.registerRestorer('rubric-builder', async (payload) => {
+      if (!payload || !payload.inputs) return;
+
+      // Replace the entire inputs object so any keys that were not in the
+      // draft do not linger from a previous session. `Object.assign` onto
+      // the existing object would leave stale values behind.
+      S.inputs = JSON.parse(JSON.stringify(payload.inputs));
+
+      // Force the setup view — a preview may still be showing from before.
+      S.rubric = null;
+      S._savedId = null;
+      S.view = 'setup';
+
+      App.navigate('rubric-builder');
+
+      // Re-arm the guard after the render has completed. A short delay is
+      // needed because App.navigate() is asynchronous.
+      await new Promise(r => setTimeout(r, 120));
+      Unsaved.mark('rubric-builder');
+    });
   }
 
   /* ------------------------- Generate ------------------------- */
@@ -51219,6 +52723,7 @@ Do not add commentary, markdown fences, or extra fields.`;
       S.view = 'preview';
       S.isGenerating = false;
       S.stageMessage = '';
+      Unsaved.clear('rubric-builder');
       render();
 
       App.logActivity(`Rubric generated: "${rubric.title}" (${rubric.criteria.length} criteria, ${rubric.totalPoints} pts)`, 'Assessment');
@@ -51329,6 +52834,7 @@ Do not add commentary, markdown fences, or extra fields.`;
           S.rubric = null;
           S.view = 'setup';
           S._savedId = null;
+          Unsaved.clear('rubric-builder');
           render();
         }
       });
@@ -52798,6 +54304,83 @@ function otsuThreshold(imageData, region) {
   return threshold;
 }
 
+function otsuThreshold(imageData, region) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const x0 = Math.max(0, region ? region.x0 : 0);
+  const y0 = Math.max(0, region ? region.y0 : 0);
+  const x1 = Math.min(w - 1, region ? region.x1 : w - 1);
+  const y1 = Math.min(h - 1, region ? region.y1 : h - 1);
+  const hist = new Uint32Array(256);
+  let total = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * w + x) * 4;
+      const lum = (0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]) | 0;
+      hist[lum]++; total++;
+    }
+  }
+  if (!total) return 128;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, max = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > max) { max = between; threshold = t; }
+  }
+  return threshold;
+}
+
+/**
+ * Sauvola local adaptive thresholding.
+ * Per-pixel threshold from the local mean (μ) and std-dev (σ):
+ *    T(x,y) = μ(x,y) · ( 1 + k · (σ(x,y)/R − 1) )
+ * Two integral images give O(1) window queries.
+ */
+function sauvolaThreshold(gray, w, h, windowRadius = 14, k = 0.22, R = 128) {
+  const out = new Uint8Array(w * h);
+  const integral   = new Float64Array((w + 1) * (h + 1));
+  const integralSq = new Float64Array((w + 1) * (h + 1));
+
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0, rowSumSq = 0;
+    for (let x = 0; x < w; x++) {
+      const v = gray[y * w + x];
+      rowSum   += v;
+      rowSumSq += v * v;
+      integral  [(y + 1) * (w + 1) + (x + 1)] = integral  [y * (w + 1) + (x + 1)] + rowSum;
+      integralSq[(y + 1) * (w + 1) + (x + 1)] = integralSq[y * (w + 1) + (x + 1)] + rowSumSq;
+    }
+  }
+
+  const rectSum = (I, x0, y0, x1, y1) =>
+    I[(y1 + 1) * (w + 1) + (x1 + 1)] - I[y0 * (w + 1) + (x1 + 1)] -
+    I[(y1 + 1) * (w + 1) + x0]       + I[y0 * (w + 1) + x0];
+
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - windowRadius);
+    const y1 = Math.min(h - 1, y + windowRadius);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - windowRadius);
+      const x1 = Math.min(w - 1, x + windowRadius);
+      const n = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum   = rectSum(integral,   x0, y0, x1, y1);
+      const sumSq = rectSum(integralSq, x0, y0, x1, y1);
+      const mean = sum / n;
+      const variance = Math.max(0, sumSq / n - mean * mean);
+      const std = Math.sqrt(variance);
+      const t = mean * (1 + k * (std / R - 1));
+      out[y * w + x] = gray[y * w + x] < t ? 1 : 0;
+    }
+  }
+  return out;
+}
 /* ========================================================================
    FRAME QUALITY GATE — blur / exposure
    ======================================================================== */
@@ -52855,6 +54438,7 @@ function frameQuality(imageData) {
   const lapMean = lapSum / count;
   const variance = (lapSumSq / count) - (lapMean * lapMean);
 
+
   if (variance < CAL.minSharpness) {
     return { ok: false, reason: 'Image is blurry — hold steady' };
   }
@@ -52862,6 +54446,33 @@ function frameQuality(imageData) {
   return { ok: true, variance, mean, darkRatio };
 }
 
+/**
+ * 3×3 Laplacian unsharp mask applied in place to ImageData.
+ * strength = 0.6 is conservative.
+ */
+function sharpenFrame(imageData, strength = 0.6) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const src = new Uint8ClampedArray(d);
+  const K = [ 0, -1,  0,
+             -1,  5, -1,
+              0, -1,  0 ];
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let acc = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const j = ((y + ky) * w + (x + kx)) * 4 + c;
+            acc += src[j] * K[(ky + 1) * 3 + (kx + 1)];
+          }
+        }
+        const orig = src[i + c];
+        d[i + c] = Utils.clamp(orig + (acc - orig) * strength, 0, 255);
+      }
+    }
+  }
+}
 /* ========================================================================
    ARUCO DETECTION
    ------------------------------------------------------------------------
@@ -52886,22 +54497,20 @@ function frameQuality(imageData) {
 function detectArucoMarkers(imageData) {
   const w = imageData.width, h = imageData.height, d = imageData.data;
 
-  // ---- 1. Binarise — adaptive (Otsu) with a hard floor/ceiling ----
-  // A fixed threshold of 110 assumes a specific exposure. Otsu computes
-  // the split point from the frame's own histogram, which survives the
-  // lighting differences between a sunny classroom and a dim faculty room.
-  let globalThreshold = otsuThreshold(imageData);
-  // Clamp so we don't get pathological thresholds on near-uniform frames
-  // (e.g. an all-black cap or an all-white sheet with no marker in view).
-  globalThreshold = Utils.clamp(globalThreshold, 60, 200);
+  // ---- 1. Binarise — Sauvola local adaptive threshold ----
+  // Otsu computes one threshold for the whole frame and misclassifies
+  // half of a sheet that straddles a shadow edge. Sauvola thresholds
+  // per-pixel from the local mean and std-dev, surviving uneven light.
+  const gray = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    gray[j] = (0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]) | 0;
+  }
+  const binary = sauvolaThreshold(gray, w, h, 14, 0.22, 128);
+
+  // Keep the Otsu value around for the debug HUD only.
+  const globalThreshold = Utils.clamp(otsuThreshold(imageData), 60, 200);
   if (window.__OMR_DEBUG && typeof State !== 'undefined' && State._omrSessionRef) {
     State._omrSessionRef._dbgOtsu = globalThreshold;
-  }
-
-  const binary = new Uint8Array(w * h);
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-    const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-    binary[j] = lum < globalThreshold ? 1 : 0;
   }
 
   // ---- 2. Connected components on black pixels ----
@@ -53021,7 +54630,25 @@ function detectArucoMarkers(imageData) {
   const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
   if (cross(tlC, trC, brC) <= 0 || cross(trC, brC, blC) <= 0) return null;
 
-  return { TL: tlC, TR: trC, BL: blC, BR: brC, raw: best };
+  // ---- 7. Sub-pixel refine each of the four markers' corners ----
+  const refineMarkerCentroid = (c) => {
+    c.TL = refineCornerSubpixel(imageData, c.TL[0], c.TL[1]);
+    c.TR = refineCornerSubpixel(imageData, c.TR[0], c.TR[1]);
+    c.BL = refineCornerSubpixel(imageData, c.BL[0], c.BL[1]);
+    c.BR = refineCornerSubpixel(imageData, c.BR[0], c.BR[1]);
+  };
+  refineMarkerCentroid(tl);
+  refineMarkerCentroid(tr);
+  refineMarkerCentroid(bl);
+  refineMarkerCentroid(br);
+
+  // Recompute the refined centers
+  const tlR = [(tl.TL[0] + tl.BR[0]) / 2, (tl.TL[1] + tl.BR[1]) / 2];
+  const trR = [(tr.TL[0] + tr.BR[0]) / 2, (tr.TL[1] + tr.BR[1]) / 2];
+  const blR = [(bl.TL[0] + bl.BR[0]) / 2, (bl.TL[1] + bl.BR[1]) / 2];
+  const brR = [(br.TL[0] + br.BR[0]) / 2, (br.TL[1] + br.BR[1]) / 2];
+
+  return { TL: tlR, TR: trR, BL: blR, BR: brR, raw: best };
 }
 
 /** Perspective-warp a marker, sample its 4×4 grid, and match against the dictionary. */
@@ -53096,6 +54723,41 @@ function decodeArucoMarker(imageData, corners) {
     return null;
   }
   return { id: match.id, rotation: match.rotation };
+}
+
+/**
+ * Sub-pixel saddle-point refinement for a marker corner.
+ * Weighted centroid of how checkerboard-like each local pixel is.
+ */
+function refineCornerSubpixel(imageData, cx, cy, searchRadius = 4) {
+  const w = imageData.width, h = imageData.height, d = imageData.data;
+  const x0 = Math.max(1, Math.round(cx) - searchRadius);
+  const x1 = Math.min(w - 2, Math.round(cx) + searchRadius);
+  const y0 = Math.max(1, Math.round(cy) - searchRadius);
+  const y1 = Math.min(h - 2, Math.round(cy) + searchRadius);
+
+  const lum = (x, y) => {
+    const i = (y * w + x) * 4;
+    return 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+  };
+
+  let wx = 0, wy = 0, wsum = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const c  = lum(x, y);
+      const nw = lum(x - 1, y - 1);
+      const ne = lum(x + 1, y - 1);
+      const sw = lum(x - 1, y + 1);
+      const se = lum(x + 1, y + 1);
+      const weight = Math.abs(c - nw) + Math.abs(c - se)
+                   + Math.abs(c - ne) + Math.abs(c - sw);
+      wx += x * weight;
+      wy += y * weight;
+      wsum += weight;
+    }
+  }
+  if (wsum < 1e-6) return [cx, cy];
+  return [wx / wsum, wy / wsum];
 }
 
 /* ========================================================================
@@ -53561,20 +55223,43 @@ async function printSheets(assessmentId) {
           The scanner reads the version letter from the payload QR automatically.
         </div>
       </div>
-      <div class="grid grid-3 mb-16">
-        ${['A','B','C'].map(v => `
-          <label data-omr-form="${v}"
-                 style="cursor:pointer;padding:14px;border:2px solid var(--border);
-                        border-radius:10px;text-align:center;transition:all .15s;">
-            <input type="radio" name="omr-form" value="${v}"
-                   ${v === 'A' ? 'checked' : ''} style="display:none;">
-            <div style="font-size:22px;font-weight:900;">FORM ${v}</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-              ${v === 'A' ? 'Original order' : 'Shuffled order'}
-            </div>
-          </label>
-        `).join('')}
+
+      <div class="form-group">
+        <label style="font-weight:700;font-size:12px;">Base form</label>
+        <div class="grid grid-3 mb-16">
+          ${['A','B','C'].map(v => `
+            <label data-omr-form="${v}"
+                   style="cursor:pointer;padding:14px;border:2px solid var(--border);
+                          border-radius:10px;text-align:center;transition:all .15s;">
+              <input type="radio" name="omr-form" value="${v}"
+                     ${v === 'A' ? 'checked' : ''} style="display:none;">
+              <div style="font-size:22px;font-weight:900;">FORM ${v}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                ${v === 'A' ? 'Original order' : 'Shuffled order'}
+              </div>
+            </label>
+          `).join('')}
+        </div>
       </div>
+
+      <div class="form-group">
+        <label style="font-weight:700;font-size:12px;">How to distribute across learners</label>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <label class="auth-check" style="font-size:13px;">
+            <input type="radio" name="omr-dist" value="single" checked>
+            <span><strong>All learners get the same form.</strong> Use when seats are already separated or when running a single-form test.</span>
+          </label>
+          <label class="auth-check" style="font-size:13px;">
+            <input type="radio" name="omr-dist" value="checkered">
+            <span><strong>Rotate A / B / C down the roster.</strong> Best anti-copy for wide rosters — no two adjacent learners share a form.</span>
+          </label>
+          <label class="auth-check" style="font-size:13px;">
+            <input type="radio" name="omr-dist" value="split">
+            <span><strong>Split into thirds.</strong> First third A, second third B, third C. Easier to hand out by row.</span>
+          </label>
+        </div>
+      </div>
+
       <p class="text-sm text-muted" style="margin:0;">
         ${learners.length} active learner${learners.length === 1 ? '' : 's'} ·
         ${Math.ceil(learners.length / 2)} A4 landscape page${Math.ceil(learners.length / 2) === 1 ? '' : 's'} ·
@@ -53601,16 +55286,42 @@ async function printSheets(assessmentId) {
       overlay.querySelector('[data-omr-form="A"]').click();
 
       overlay.querySelector('#omr-form-go').onclick = () => {
-        const version = overlay.querySelector('input[name="omr-form"]:checked').value;
+        const version      = overlay.querySelector('input[name="omr-form"]:checked').value;
+        const distribution = overlay.querySelector('input[name="omr-dist"]:checked').value;
         close();
-        _buildAndPrintSheets(a, learners, qCount, version);
+        _buildAndPrintSheets(a, learners, qCount, version, distribution);
       };
     }
   });
 }
 
-function _buildAndPrintSheets(assessment, learners, qCount, version) {
+function _buildAndPrintSheets(assessment, learners, qCount, version, distribution) {
+  const dist = distribution || 'single';
+
+  // Assign each learner their form version up front so the print layout
+  // is deterministic. Rotating or splitting only changes the assignment
+  // pattern, not the sheet content itself.
+  const variantFor = (i) => {
+    if (dist === 'checkered') return ['A', 'B', 'C'][i % 3];
+    if (dist === 'split') {
+      const third = Math.ceil(learners.length / 3);
+      if (i < third) return 'A';
+      if (i < third * 2) return 'B';
+      return 'C';
+    }
+    return version;
+  };
+
+  const assignments = learners.map((l, i) => ({
+    learner: l,
+    version: variantFor(i)
+  }));
+
+  // Persist the "primary" version for backward compatibility with the
+  // scanner's fallback resolver. The per-sheet version is what actually
+  // matters when scanning, and it lives inside the payload QR.
   assessment.omrFormVersion = version;
+  assessment.omrDistribution = dist;
   assessment.omrSheetVersion = 2;   // ArUco sheet format
   DB.put('assessments', assessment).catch(() => {});
 
@@ -53621,13 +55332,23 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
   }
 
   const pagesHTML = [];
-  for (let i = 0; i < learners.length; i += 2) {
-    const left  = learners[i];
-    const right = learners[i + 1] || null;
-    const leftSheet = renderSheetHTML(assessment, left, qCount);
+  for (let i = 0; i < assignments.length; i += 2) {
+    const left  = assignments[i];
+    const right = assignments[i + 1] || null;
+
+    // renderSheetHTML accepts the learner and reads omrFormVersion from the
+    // assessment. We clone the assessment per call so the payload QR
+    // reflects the correct variant for that specific sheet.
+    const leftAssessment  = Object.assign({}, assessment, { omrFormVersion: left.version });
+    const leftSheet = renderSheetHTML(leftAssessment, left.learner, qCount);
+
     const rightSheet = right
-      ? renderSheetHTML(assessment, right, qCount)
+      ? (() => {
+          const rightAssessment = Object.assign({}, assessment, { omrFormVersion: right.version });
+          return renderSheetHTML(rightAssessment, right.learner, qCount);
+        })()
       : '';
+
     const pageClass = right ? 'omr-page' : 'omr-page omr-page-half';
     pagesHTML.push(`<div class="${pageClass}">${leftSheet}${rightSheet}</div>`);
   }
@@ -53656,8 +55377,11 @@ function _buildAndPrintSheets(assessment, learners, qCount, version) {
   document.getElementById('print-area').innerHTML =
     `<div style="padding:0;margin:0;">${pagesHTML.join('')}</div>`;
 
+  const distLabel = dist === 'checkered' ? 'rotated A/B/C'
+                  : dist === 'split'     ? 'split thirds A/B/C'
+                  : `all FORM ${version}`;
   App.logActivity(
-    `Answer sheets (FORM ${version}, ArUco) generated for "${assessment.title}" ` +
+    `Answer sheets (${distLabel}, ArUco) generated for "${assessment.title}" ` +
     `(${learners.length} learners, ${Math.ceil(learners.length / 2)} pages)`,
     'Assessments'
   );
@@ -53741,7 +55465,43 @@ function openScanner(assessmentId) {
     const ok = await ensureLibs();
     if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
 
-    const baseAnswerKey = (a.questions || []).map(q => {
+    // ── Pre-flight: warn about incomplete answer keys before scanning ──
+    {
+      const total = (a.questions || []).length;
+      const withKeys = (a.questions || []).filter(q => {
+        const type = (q.type || '').toLowerCase();
+        if (type !== 'multiple choice') return true;
+        return String(q.answer || '').trim().length > 0;
+      }).length;
+      const missing = total - withKeys;
+
+      if (missing > 0) {
+        const proceed = await new Promise(resolve => {
+          UI.confirm({
+            title: 'Incomplete answer key',
+            message:
+              `<strong>${missing}</strong> of ${total} multiple-choice questions have no ` +
+              `answer set. Those questions will be skipped in grading ` +
+              `(counted as ungraded — neither correct nor incorrect).<br><br>` +
+              `Scan anyway?`,
+            confirmText: 'Scan anyway',
+            confirmClass: 'btn-warning',
+            onConfirm: () => resolve(true),
+            onClose:   () => resolve(false)
+          });
+        });
+        if (!proceed) return;
+      }
+    }
+
+    // If the assessment has been frozen (i.e. at least one scan exists),
+    // use the frozen question list. This guarantees the positional index
+    // stored in `omrDetails[].q` matches the question it was recorded against.
+    const sourceQuestions = Array.isArray(a.frozenQuestions) && a.frozenQuestions.length
+      ? a.frozenQuestions
+      : (a.questions || []);
+
+    const baseAnswerKey = sourceQuestions.map(q => {
       const type = (q.type || '').toLowerCase();
       if (type !== 'multiple choice') return null;
       const choices = Array.isArray(q.choices) ? q.choices : [];
@@ -53772,23 +55532,30 @@ function openScanner(assessmentId) {
       lastCenters: null, torchOn: false, zoomIdx: 0, wakeLock: null,
       dupShownAt: new Map(), allDoneShown: false,
       _pendingSig: null, _pendingVotes: 0,
-      prefs: { sound: omrPref('sound', true), haptics: omrPref('haptics', true) }
+      prefs: {
+        sound:       omrPref('sound', true),
+        haptics:     omrPref('haptics', true),
+        diagnostics: omrPref('diagnostics', false)
+      }
     };
 
-        // ── Debug HUD ─────────────────────────────────────────────────────────
-    // Enable with:  window.__OMR_DEBUG = true   (in DevTools console)
-    // Displays live component/candidate/decoded counts over the camera feed.
+    // ── Diagnostics HUD ──────────────────────────────────────────────────
+    // Renders only when the teacher has enabled it from Scanner settings,
+    // OR when window.__OMR_DEBUG is set to true for power users.
     State._omrSessionRef = session;
 
     function updateDebugHUD() {
-      if (!window.__OMR_DEBUG) {
-        const existing = document.getElementById('omr-debug-hud');
-        if (existing) existing.remove();
+      const enabled = session.prefs.diagnostics || window.__OMR_DEBUG;
+      let hud = document.getElementById('omr-debug-hud');
+
+      if (!enabled) {
+        if (hud) hud.remove();
         return;
       }
-      let hud = document.getElementById('omr-debug-hud');
+
       if (!hud) {
         const host = overlay.querySelector('#omr-video-wrap') || overlay;
+        if (!host) return;
         hud = document.createElement('div');
         hud.id = 'omr-debug-hud';
         hud.style.cssText =
@@ -53799,13 +55566,32 @@ function openScanner(assessmentId) {
           'pointer-events:none;letter-spacing:.3px;';
         host.appendChild(hud);
       }
+
+      const found = session.found ? 'yes' : 'no';
+      const quality = session._dbgQuality || '—';
+      const otsu = session._dbgOtsu || '—';
+      const comp = session._dbgComponents || 0;
+      const cand = session._dbgCandidates || 0;
+      const dec  = session._dbgDecoded || 0;
+
+      // Give a plain-language hint when a stage rejects the frame, so a
+      // teacher without any background can tell what's wrong.
+      let hint = '';
+      if (!session.found) {
+        if (quality !== 'ok')                    hint = '→ frame rejected (quality)';
+        else if (comp === 0)                     hint = '→ no dark shapes found';
+        else if (cand < 4)                       hint = '→ too few square shapes';
+        else if (dec  < 4)                       hint = '→ markers not recognised';
+      }
+
       hud.textContent =
-        'components  ' + (session._dbgComponents || 0) + '\n' +
-        'candidates  ' + (session._dbgCandidates || 0) + '\n' +
-        'decoded     ' + (session._dbgDecoded    || 0) + '\n' +
-        'found       ' + (session.found ? 'yes' : 'no') + '\n' +
-        'quality     ' + (session._dbgQuality    || '—') + '\n' +
-        'otsu        ' + (session._dbgOtsu       || '—');
+        'quality     ' + quality + '\n' +
+        'otsu        ' + otsu + '\n' +
+        'components  ' + comp + '\n' +
+        'candidates  ' + cand + '\n' +
+        'decoded     ' + dec + '\n' +
+        'found       ' + found +
+        (hint ? '\n' + hint : '');
     }
 
     const WORK_LONG = 1280;
@@ -53860,6 +55646,15 @@ function openScanner(assessmentId) {
           <button type="button" class="zg-counter" id="zg-counter" aria-label="Show scanned sheets">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>
             <span><span id="zg-count">0</span><span class="zg-count-total">/${totalLearners}</span></span>
+          </button>
+
+          <button type="button" class="zg-counter" id="zg-batch-review" aria-label="Review flagged answers"
+                  style="top:58px;" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z"/>
+            </svg>
+            <span>Review</span>
           </button>
 
           <div class="zg-tools">
@@ -54030,7 +55825,7 @@ function openScanner(assessmentId) {
       closeScanner = () => modal.close();
 
       overlay.querySelector('#omr-close').onclick     = () => modal.close();
-      overlay.querySelector('#omr-calibrate').onclick = () => openCalibrationModal();
+      overlay.querySelector('#omr-calibrate').onclick = () => openCalibrationWizard();
     }
 
     /* ----------------------------------------------------------------
@@ -54328,6 +56123,7 @@ function openScanner(assessmentId) {
       session.ctx.drawImage(v, 0, 0, W, Hh);
       let img;
       try { img = session.ctx.getImageData(0, 0, W, Hh); } catch (e) { return; }
+      sharpenFrame(img, 0.6);
       session.geom = { W, H: Hh, vw, vh };
 
       const quality = frameQuality(img);
@@ -54481,7 +56277,9 @@ function openScanner(assessmentId) {
       const mmPerPxWork = pixelDist > 0 ? (anchorDistMM / pixelDist) : 0.15;
       const mmPerPx = mmPerPxWork / f;
 
-      if (SHEET.bubbleDiaMM / mmPerPxWork < 7) {
+      // Adaptive minimum: on high-res frames, 6 px is enough; on low-res, 8 px.
+      const minBubblePx = Math.max(6, Math.round(500 / Math.sqrt(W * Hh)));
+      if (SHEET.bubbleDiaMM / mmPerPxWork < minBubblePx) {
         drawOverlay(quad, '#f59e0b');
         setStatus('Move closer — fill the screen with the sheet', 'warn');
         return;
@@ -54496,6 +56294,22 @@ function openScanner(assessmentId) {
       const marks = [];
       const bubbleRwork = (SHEET.bubbleDiaMM * 0.5) / mmPerPxWork;
 
+      // ── Pass 1: sample every bubble to gather ratio statistics ──
+      const _ratioSamples = [];
+      for (const pos of positions) {
+        const probe = detectAnswerForQuestion(Hs, pos.choices, sample, mmPerPx, otsuThresh);
+        if (probe.metrics) {
+          for (const m of probe.metrics) {
+            if (m.valid) _ratioSamples.push(m.ratio);
+          }
+        }
+      }
+      const sheetThresh = calibrateSheetThresholds(_ratioSamples);
+      const _savedMarked = CAL.markedRatio, _savedGap = CAL.gapRatio;
+      CAL.markedRatio = sheetThresh.markedRatio;
+      CAL.gapRatio    = sheetThresh.gapRatio;
+
+      // ── Pass 2: run the real detection with the sheet-tuned thresholds ──
       for (const pos of positions) {
         const res = detectAnswerForQuestion(Hs, pos.choices, sample, mmPerPx, otsuThresh);
         if (res.choice !== null) filledCount++;
@@ -54524,6 +56338,11 @@ function openScanner(assessmentId) {
           });
         }
       }
+
+      // Restore global calibration for the next frame
+      CAL.markedRatio = _savedMarked;
+      CAL.gapRatio    = _savedGap;
+
       drawOverlay(quad, THEME.success, marks);
 
       // ---- Learner match ----
@@ -54543,14 +56362,43 @@ function openScanner(assessmentId) {
         if (t - shownAt > 6000) {
           session.dupShownAt.set(learner.id, t);
           feedback('warn');
+
           const dup = session.scanned.find(s => s.learner.id === learner.id);
-          showCard({
-            kind: 'warn',
-            title: `Already scanned · ${learner.firstName || Utils.fullName(learner)}`,
-            sub: 'Rescan to replace the earlier result.',
-            actions: [{ label: 'Rescan', fn: async () => { await removeResult(dup); setStatus('Hold the sheet in view to rescan', 'warn'); } }],
-            ms: 5000
-          });
+
+          // Compare the fresh read against the stored answers.
+          let diffs = 0;
+          for (let i = 0; i < perQuestion.length; i++) {
+            const stored = dup.answers[i] && dup.answers[i].override !== undefined
+              ? dup.answers[i].override
+              : (dup.answers[i] ? dup.answers[i].detected : null);
+            const fresh = perQuestion[i].choice;
+            if (stored !== fresh) diffs++;
+          }
+
+          if (diffs === 0) {
+            showCard({
+              kind: 'ok',
+              title: `Already scanned · ${learner.firstName || Utils.fullName(learner)}`,
+              sub: 'Identical read — no action needed.',
+              actions: [],
+              ms: 3500
+            });
+          } else {
+            showCard({
+              kind: 'warn',
+              title: `Different answers · ${learner.firstName || Utils.fullName(learner)}`,
+              sub: `${diffs} question${diffs === 1 ? '' : 's'} differ from the stored read.`,
+              actions: [
+                { label: 'View diff', fn: () => showDiff(learner, dup, perQuestion) },
+                { label: 'Replace', fn: async () => {
+                    await removeResult(dup);
+                    setStatus('Hold the sheet in view to rescan', 'warn');
+                  }
+                }
+              ],
+              ms: 8000
+            });
+          }
         }
         return;
       }
@@ -54583,6 +56431,27 @@ function openScanner(assessmentId) {
        Grade + commit
        ---------------------------------------------------------------- */
     function gradeAndCommit(learner, perQuestion, ambiguousCount, sheetVersion) {
+      // ── Printer test sheet: report pass/fail and do NOT persist ──
+      if (learner && learner.lrn === '000000000000') {
+        let _c = 0, _g = 0;
+        for (let i = 0; i < perQuestion.length; i++) {
+          const key = session.answerKey[i];
+          if (key === null || key === undefined) continue;
+          _g++;
+          const det = perQuestion[i];
+          if (det.choice === key) _c++;
+        }
+        const ok = _c === _g;
+        UI.toast(
+          ok ? `Printer OK — ${_c}/${_g} read correctly`
+             : `Printer test FAILED — ${_c}/${_g} read. Check toner / paper / lighting.`,
+          ok ? 'success' : 'error',
+          8000
+        );
+        App.logActivity(`Printer test: ${_c}/${_g} correct`, 'Assessments');
+        return;
+      }
+
       let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
       const detail = [];
       for (let i = 0; i < perQuestion.length; i++) {
@@ -54631,6 +56500,30 @@ function openScanner(assessmentId) {
 
       result.saving = (async () => {
         try {
+          // ── Freeze the question set on first scan ──
+          // From this point on, the OMR flow reads `frozenQuestions` rather
+          // than the live `questions` array, so a later edit in the
+          // Assessment Builder can never desync existing scans.
+          if (!session.assessment.frozenQuestions) {
+            session.assessment.frozenQuestions = JSON.parse(JSON.stringify(session.assessment.questions || []));
+            session.assessment.frozenAt = new Date().toISOString();
+            try {
+              const fresh = await DB.get('assessments', session.assessment.id);
+              if (fresh) {
+                fresh.frozenQuestions = session.assessment.frozenQuestions;
+                fresh.frozenAt = session.assessment.frozenAt;
+                fresh.updatedAt = session.assessment.frozenAt;
+                await DB.put('assessments', fresh);
+              }
+            } catch (e) {
+              console.warn('[OMR] Could not freeze assessment questions:', e);
+            }
+            App.logActivity(
+              `Assessment "${session.assessment.title}" frozen at ${session.assessment.frozenQuestions.length} item(s) for OMR`,
+              'Assessments'
+            );
+          }
+
           const existing = (await DB.getAllByIndex('assessmentResults', 'learnerId', learner.id))
             .find(r => r.assessmentId === session.assessment.id);
           result.prev = existing ? JSON.parse(JSON.stringify(existing)) : null;
@@ -54675,6 +56568,19 @@ function openScanner(assessmentId) {
         `OMR scanned: ${Utils.fullName(learner)} — ${percentage}% on "${session.assessment.title}"`,
         'Assessments'
       );
+
+      // Broadcast to any open analytics pages. Listeners that no longer
+      // exist simply ignore the event; this is cheaper than a polling loop
+      // and keeps the item-analysis page live without a full page reload.
+      try {
+        window.dispatchEvent(new CustomEvent('klaz:omr-scan-complete', {
+          detail: {
+            assessmentId: session.assessment.id,
+            learnerId: learner.id,
+            percentage
+          }
+        }));
+      } catch (e) { /* CustomEvent unsupported — degrade silently */ }
 
       if (totalLearners && session.scanned.length >= totalLearners && !session.allDoneShown) {
         session.allDoneShown = true;
@@ -54981,6 +56887,19 @@ function openScanner(assessmentId) {
 
       renderList();
       App.logActivity(`OMR review: ${Utils.fullName(result.learner)} — ${percentage}%`, 'Assessments');
+
+      // Same broadcast as gradeAndCommit: an edited score is a new data
+      // point for the item analysis just as much as a fresh scan is.
+      try {
+        window.dispatchEvent(new CustomEvent('klaz:omr-scan-complete', {
+          detail: {
+            assessmentId: session.assessment.id,
+            learnerId: result.learner.id,
+            percentage,
+            source: 'review'
+          }
+        }));
+      } catch (e) {}
     }
 
     /* ----------------------------------------------------------------
@@ -55061,6 +56980,42 @@ function openScanner(assessmentId) {
       requestAnimationFrame(() => el.classList.add('show'));
       if (cardTimer) clearTimeout(cardTimer);
       cardTimer = setTimeout(hideCard, ms);
+    }
+
+    function showDiff(learner, stored, fresh) {
+      const letters = 'ABCDE';
+      const rows = [];
+      for (let i = 0; i < fresh.length; i++) {
+        const s = stored.answers[i] && stored.answers[i].override !== undefined
+          ? stored.answers[i].override
+          : (stored.answers[i] ? stored.answers[i].detected : null);
+        const f = fresh[i].choice;
+        if (s === f) continue;
+        const key = stored.answers[i] ? stored.answers[i].key : null;
+        rows.push(`
+          <tr>
+            <td style="text-align:center;">Q${i + 1}</td>
+            <td style="text-align:center;">${s === null ? '—' : letters[s]}</td>
+            <td style="text-align:center;">${f === null ? '—' : letters[f]}</td>
+            <td style="text-align:center;color:${f === key ? 'var(--success)' : 'var(--danger)'};">
+              ${f === key ? '✓ now correct' : '✗ still wrong'}
+            </td>
+          </tr>`);
+      }
+      UI.modal({
+        title: `Diff · ${Utils.fullName(learner)}`,
+        body: `
+          <table class="data-table" style="font-size:13px;">
+            <thead><tr>
+              <th style="text-align:center;">Item</th>
+              <th style="text-align:center;">Stored</th>
+              <th style="text-align:center;">New read</th>
+              <th style="text-align:center;">Verdict</th>
+            </tr></thead>
+            <tbody>${rows.join('')}</tbody>
+          </table>`,
+        footer: `<button class="btn btn-primary" data-close>Close</button>`
+      });
     }
 
     function renderList() {
@@ -55151,6 +57106,18 @@ function openScanner(assessmentId) {
           });
         };
       });
+
+      // ── Toggle & bind the batch-review chip ──
+      const batchBtn = overlay.querySelector('#zg-batch-review');
+      if (batchBtn) {
+        const hasFlagged = session.scanned.some(r => !r.reviewedAt && r.answers.some(p =>
+          p.correct !== null && p.override === undefined &&
+          (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+           (p.confidence > 0 && p.confidence < 0.6))
+        ));
+        batchBtn.hidden = !hasFlagged;
+        if (hasFlagged) batchBtn.onclick = () => openBatchReview();
+      }
     }
 
     /* ----------------------------------------------------------------
@@ -55228,6 +57195,126 @@ function openScanner(assessmentId) {
       bodyEl.querySelectorAll('.zg-row').forEach(b => {
         b.onclick = () => showReviewSheet(session.scanned[Number(b.dataset.idx)]);
       });
+    }
+
+    
+
+    function openBatchReview() {
+      const flaggedRows = session.scanned
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => !r.reviewedAt && r.answers.some(p =>
+          p.correct !== null && p.override === undefined &&
+          (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+           (p.confidence > 0 && p.confidence < 0.6))
+        ));
+
+      if (!flaggedRows.length) {
+        UI.toast('Nothing to review — every sheet was read cleanly.', 'success');
+        return;
+      }
+
+      const edits = new Map();
+
+      const m = UI.modal({
+        title: `Batch Review · ${flaggedRows.length} sheet${flaggedRows.length === 1 ? '' : 's'}`,
+        size: 'modal-xl',
+        body: '<div id="omr-batch-body"></div>',
+        footer: `
+          <button class="btn btn-outline" id="omr-batch-cancel">Cancel</button>
+          <button class="btn btn-primary" id="omr-batch-save">
+            ${icon('save')} Save all changes
+          </button>
+        `
+      });
+
+      const bodyEl = m.overlay.querySelector('#omr-batch-body');
+      const letters = 'ABCDE';
+
+      const render = () => {
+        let html = '';
+        for (const { r, i: scanIdx } of flaggedRows) {
+          const fl = r.answers.filter(p =>
+            p.correct !== null && p.override === undefined &&
+            (p.status === 'ambiguous' || p.status === 'multiple' || p.status === 'blank' ||
+             (p.confidence > 0 && p.confidence < 0.6))
+          );
+          if (!fl.length) continue;
+          html += `
+            <div style="margin-bottom:20px;padding:14px;border:1px solid var(--border);border-radius:10px;">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                ${Utils.avatarHTML(r.learner, 34, 12)}
+                <div style="flex:1;min-width:0;">
+                  <div style="font-weight:800;font-size:13.5px;">${Utils.esc(Utils.fullName(r.learner))}</div>
+                  <div class="text-xs text-muted">${fl.length} flagged · ${r.percentage}% overall</div>
+                </div>
+              </div>`;
+          for (const p of fl) {
+            const key = `${scanIdx}-${p.q}`;
+            const eff = edits.has(key) ? edits.get(key)
+                      : (p.override !== undefined ? p.override : p.detected);
+            html += `
+              <div style="display:flex;gap:10px;align-items:center;padding:6px 0;border-top:1px dashed var(--border);">
+                <div style="min-width:44px;font-weight:800;font-size:12.5px;">Q${p.q + 1}</div>
+                <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                  ${Array.from({length: SHEET.choiceCount}, (_, i) =>
+                    `<button class="omr-batch-ch"
+                             data-key="${key}" data-c="${i}"
+                             style="width:34px;height:34px;border-radius:6px;
+                                    border:2px solid ${eff === i ? 'var(--deped-blue)' : 'var(--border)'};
+                                    background:${eff === i ? 'var(--light-blue)' : 'var(--card)'};
+                                    cursor:pointer;font-weight:700;font-size:12px;
+                                    color:${p.key === i ? 'var(--success)' : 'var(--text)'};">
+                       ${letters[i]}
+                     </button>`).join('')}
+                  <button class="omr-batch-ch"
+                          data-key="${key}" data-c="blank"
+                          style="width:52px;height:34px;border-radius:6px;
+                                 border:2px solid ${eff === null ? 'var(--deped-blue)' : 'var(--border)'};
+                                 background:${eff === null ? 'var(--light-blue)' : 'var(--card)'};
+                                 cursor:pointer;font-weight:700;font-size:11px;">
+                    Blank
+                  </button>
+                </div>
+                <div style="flex:1;font-size:11.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  ${Utils.esc(((session.assessment.questions[p.q] || {}).text || '').slice(0, 90))}
+                </div>
+              </div>`;
+          }
+          html += `</div>`;
+        }
+        bodyEl.innerHTML = html;
+
+        bodyEl.querySelectorAll('.omr-batch-ch').forEach(btn => {
+          btn.onclick = () => {
+            const [si, qi] = btn.dataset.key.split('-').map(Number);
+            const rec = session.scanned[si];
+            const p   = rec.answers[qi];
+            const val = btn.dataset.c === 'blank' ? null : Number(btn.dataset.c);
+            const orig = p.override !== undefined ? p.override : p.detected;
+            if (val === orig) edits.delete(btn.dataset.key);
+            else              edits.set(btn.dataset.key, val);
+            render();
+          };
+        });
+      };
+      render();
+
+      m.overlay.querySelector('#omr-batch-cancel').onclick = m.close;
+      m.overlay.querySelector('#omr-batch-save').onclick = async () => {
+        edits.forEach((val, key) => {
+          const [si, qi] = key.split('-').map(Number);
+          session.scanned[si].answers[qi].override = val;
+        });
+        const affected = new Set();
+        edits.forEach((_v, k) => affected.add(Number(k.split('-')[0])));
+        for (const si of affected) {
+          try { await commitReview(session.scanned[si]); }
+          catch (e) { console.warn('Persist failed for scan', si, e); }
+        }
+        renderList();
+        m.close();
+        UI.toast(`Saved changes to ${affected.size} sheet${affected.size === 1 ? '' : 's'}`, 'success');
+      };
     }
 
     function showReviewSheet(result) {
@@ -55380,6 +57467,13 @@ function openScanner(assessmentId) {
             <div class="zg-set-label">Vibrate on scan</div>
             <button type="button" class="zg-switch${session.prefs.haptics ? ' on' : ''}" data-pref="haptics" role="switch" aria-checked="${session.prefs.haptics}"><i></i></button>
           </div>
+          <div class="zg-set zg-set-row">
+            <div class="zg-set-label">
+              Show diagnostics overlay
+              <small>Displays live recognition counters. Useful when reporting a scan issue.</small>
+            </div>
+            <button type="button" class="zg-switch${session.prefs.diagnostics ? ' on' : ''}" data-pref="diagnostics" role="switch" aria-checked="${session.prefs.diagnostics}"><i></i></button>
+          </div>
           <button type="button" class="zg-btn ghost" id="zg-adv" style="width:100%;margin-top:6px;">Advanced calibration…</button>
           <p class="zg-fine">${CAL.calibratedAt ? 'Last calibrated ' + Utils.esc(Utils.formatDateTime(CAL.calibratedAt)) + '.' : 'Using factory defaults.'} Settings are stored on this device.</p>
         `
@@ -55410,6 +57504,10 @@ function openScanner(assessmentId) {
           b.classList.toggle('on', session.prefs[key]);
           b.setAttribute('aria-checked', String(session.prefs[key]));
           if (session.prefs[key]) feedback('ok');
+
+          // Apply the diagnostics change immediately so the teacher does
+          // not have to reopen the scanner to see the HUD appear or vanish.
+          if (key === 'diagnostics') updateDebugHUD();
         };
       });
       bodyEl.querySelector('#zg-adv').onclick = () => openCalibrationModal();
@@ -55520,6 +57618,139 @@ function openScanner(assessmentId) {
       };
     }
 
+    function openCalibrationWizard() {
+      let step = 0;
+      const answers = { pencil: 'hb', lighting: 'good', rate: 'normal' };
+
+      const draw = (overlay) => {
+        const body = overlay.querySelector('#omr-wiz-body');
+        const foot = overlay.querySelector('#omr-wiz-foot');
+
+        if (step === 0) {
+          body.innerHTML = `
+            <p style="font-size:13.5px;line-height:1.6;margin-bottom:16px;">
+              Three quick questions. KlazAssist will pick the right detector
+              settings automatically.
+            </p>
+            <div class="form-group">
+              <label>What writing instrument do your learners use?</label>
+              <div class="flex gap-8" style="flex-wrap:wrap;">
+                ${[
+                  { v: 'pencil', label: 'Pencil' },
+                  { v: 'hb',     label: 'HB / #2 pencil (default)' },
+                  { v: 'pen',    label: 'Ballpen / marker' }
+                ].map(o => `
+                  <button type="button" class="omr-wiz-choice ${answers.pencil === o.v ? 'active' : ''}"
+                          data-key="pencil" data-val="${o.v}"
+                          style="padding:10px 16px;border-radius:10px;
+                                 border:2px solid ${answers.pencil === o.v ? 'var(--deped-blue)' : 'var(--border)'};
+                                 background:${answers.pencil === o.v ? 'var(--light-blue)' : 'var(--card)'};
+                                 cursor:pointer;font-weight:700;font-size:13px;">
+                    ${o.label}
+                  </button>`).join('')}
+              </div>
+            </div>`;
+        } else if (step === 1) {
+          body.innerHTML = `
+            <div class="form-group">
+              <label>How is the classroom lighting when you scan?</label>
+              <div class="flex gap-8" style="flex-wrap:wrap;">
+                ${[
+                  { v: 'good', label: 'Bright and even' },
+                  { v: 'mixed', label: 'Mixed / some shadows' },
+                  { v: 'poor', label: 'Dim or glary' }
+                ].map(o => `
+                  <button type="button" class="omr-wiz-choice ${answers.lighting === o.v ? 'active' : ''}"
+                          data-key="lighting" data-val="${o.v}"
+                          style="padding:10px 16px;border-radius:10px;
+                                 border:2px solid ${answers.lighting === o.v ? 'var(--deped-blue)' : 'var(--border)'};
+                                 background:${answers.lighting === o.v ? 'var(--light-blue)' : 'var(--card)'};
+                                 cursor:pointer;font-weight:700;font-size:13px;">
+                    ${o.label}
+                  </button>`).join('')}
+              </div>
+            </div>`;
+        } else if (step === 2) {
+          body.innerHTML = `
+            <div class="form-group">
+              <label>How fast do you scan?</label>
+              <div class="flex gap-8" style="flex-wrap:wrap;">
+                ${[
+                  { v: 'slow',   label: 'Carefully (2–3 seconds per sheet)' },
+                  { v: 'normal', label: 'At a steady pace' },
+                  { v: 'fast',   label: 'Quickly (1 second per sheet)' }
+                ].map(o => `
+                  <button type="button" class="omr-wiz-choice ${answers.rate === o.v ? 'active' : ''}"
+                          data-key="rate" data-val="${o.v}"
+                          style="padding:10px 16px;border-radius:10px;
+                                 border:2px solid ${answers.rate === o.v ? 'var(--deped-blue)' : 'var(--border)'};
+                                 background:${answers.rate === o.v ? 'var(--light-blue)' : 'var(--card)'};
+                                 cursor:pointer;font-weight:700;font-size:13px;">
+                    ${o.label}
+                  </button>`).join('')}
+              </div>
+            </div>
+            <p class="text-xs text-muted" style="margin-top:14px;">
+              Fast scanning requires two agreeing frames before a result commits.
+              Slow scanning can use a single frame.
+            </p>`;
+        }
+
+        body.querySelectorAll('.omr-wiz-choice').forEach(btn => {
+          btn.onclick = () => { answers[btn.dataset.key] = btn.dataset.val; draw(overlay); };
+        });
+
+        foot.innerHTML = `
+          ${step > 0 ? '<button class="btn btn-outline" data-prev>Back</button>' : ''}
+          ${step < 2
+            ? '<button class="btn btn-primary" data-next>Continue</button>'
+            : '<button class="btn btn-primary" data-apply>Apply settings</button>'}`;
+        const prev = foot.querySelector('[data-prev]');
+        if (prev) prev.onclick = () => { step--; draw(overlay); };
+        const next = foot.querySelector('[data-next]');
+        if (next) next.onclick = () => { step++; draw(overlay); };
+        const apply = foot.querySelector('[data-apply]');
+        if (apply) apply.onclick = async () => {
+          const patch = {};
+
+          if (answers.pencil === 'pencil') {
+            patch.markedRatio = 0.72; patch.fillStrong = 0.35;
+          } else if (answers.pencil === 'pen') {
+            patch.markedRatio = 0.55; patch.fillStrong = 0.55;
+          } else {
+            patch.markedRatio = 0.65; patch.fillStrong = 0.48;
+          }
+
+          if (answers.lighting === 'mixed') {
+            patch.maxReprojErrPx = 5.0;
+          } else if (answers.lighting === 'poor') {
+            patch.maxReprojErrPx = 6.5;
+            patch.minSharpness   = 40;
+          } else {
+            patch.maxReprojErrPx = 3.5;
+            patch.minSharpness   = 60;
+          }
+
+          if (answers.rate === 'fast')       patch.confirmFrames = 3;
+          else if (answers.rate === 'slow')  patch.confirmFrames = 1;
+          else                               patch.confirmFrames = 2;
+
+          await saveCalibration(patch);
+          overlay.close();
+          UI.toast('Calibration applied', 'success');
+          App.logActivity('OMR calibration wizard completed', 'Assessments');
+        };
+      };
+
+      const m = UI.modal({
+        title: 'Calibration Wizard',
+        size: 'modal-lg',
+        body: '<div id="omr-wiz-body"></div>',
+        footer: '<div id="omr-wiz-foot" style="display:flex;gap:8px;justify-content:flex-end;width:100%;"></div>'
+      });
+      draw(m.overlay);
+    }
+
     /* ----------------------------------------------------------------
        Camera error display
        ---------------------------------------------------------------- */
@@ -55582,6 +57813,23 @@ function openScanner(assessmentId) {
       State.learners.filter(Utils.isActiveLearner)
     );
 
+    // If there are already-scanned sheets from within the last 4 hours,
+    // tell the teacher this is a resumed session rather than a fresh one.
+    if (session.scanned.length) {
+      const mostRecent = session.scanned[session.scanned.length - 1].scannedAt;
+      const ageMs = Date.now() - new Date(mostRecent).getTime();
+      if (ageMs < 4 * 60 * 60 * 1000) {
+        setStatus(
+          `Resumed — ${session.scanned.length} sheet${session.scanned.length === 1 ? '' : 's'} already scanned`,
+          'ok'
+        );
+        UI.toast(
+          `Resumed previous scan session (${session.scanned.length} sheet${session.scanned.length === 1 ? '' : 's'})`,
+          'info', 4500
+        );
+      }
+    }
+
     renderList();
     await startCamera();
   })();
@@ -55609,6 +57857,55 @@ function openScanner(assessmentId) {
       }
     }
     return { correct, incorrect, blank, ambiguous, multiple };
+  }
+
+    function computeReviewCounts(details) {
+    let correct = 0, incorrect = 0, blank = 0, ambiguous = 0, multiple = 0;
+    for (const p of details) {
+      if (p.correct === null || p.correct === undefined) continue;
+      switch (p.status) {
+        case 'correct':   correct++; break;
+        case 'ambiguous': correct++; ambiguous++; break;
+        case 'blank':     blank++;    incorrect++; break;
+        case 'multiple':  multiple++; incorrect++; break;
+        case 'incorrect': incorrect++; break;
+        default:
+          if (p.correct) correct++; else incorrect++;
+      }
+    }
+    return { correct, incorrect, blank, ambiguous, multiple };
+  }
+
+  /**
+   * Given all bubble ratio samples from one sheet, find the natural
+   * two-class split. Falls back to the global calibration when the
+   * distribution is not clearly bimodal.
+   */
+  function calibrateSheetThresholds(ratios) {
+    const valid = ratios.filter(r => r > 0 && r < 1.5);
+    if (valid.length < 15) {
+      return { markedRatio: CAL.markedRatio, gapRatio: CAL.gapRatio };
+    }
+    const sorted = valid.slice().sort((a, b) => a - b);
+    const n = sorted.length;
+    const total = sorted.reduce((a, b) => a + b, 0);
+    let sumB = 0, bestT = 0.65, bestVar = -1;
+
+    for (let i = 1; i < n; i++) {
+      sumB += sorted[i - 1];
+      const wB = i / n, wF = 1 - wB;
+      const mB = sumB / i;
+      const mF = (total - sumB) / (n - i);
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > bestVar) { bestVar = between; bestT = (mB + mF) / 2; }
+    }
+    if (bestT > 0.30 && bestT < 0.95) {
+      return {
+        markedRatio: Utils.clamp(bestT * 0.92, 0.30, 0.85),
+        gapRatio:    Utils.clamp(0.78 + (0.68 - bestT) * 0.25, 0.62, 0.90)
+      };
+    }
+    return { markedRatio: CAL.markedRatio, gapRatio: CAL.gapRatio };
   }
 
   async function hydrateScanResults(assessmentId, learners) {
@@ -56016,7 +58313,11 @@ function openScanner(assessmentId) {
   }
 
   function computeAnswerKeyForVersion(assessment, version) {
-    const baseKey = (assessment.questions || []).map(q => {
+    const sourceQuestions = Array.isArray(assessment.frozenQuestions) && assessment.frozenQuestions.length
+      ? assessment.frozenQuestions
+      : (assessment.questions || []);
+
+    const baseKey = sourceQuestions.map(q => {
       const type = (q.type || '').toLowerCase();
       if (type !== 'multiple choice') return null;
       const choices = Array.isArray(q.choices) ? q.choices : [];
@@ -56164,8 +58465,105 @@ function openScanner(assessmentId) {
       });
     });
   }
+  /**
+   * Print a test sheet for the given assessment with the correct answers
+   * already shaded for the first N questions. Scans normally; if the read
+   * matches the shaded key, printer and scanner agree.
+   */
+  async function printTestSheet(assessmentId, questionsToShade = 10) {
+    const a = await DB.get('assessments', assessmentId);
+    if (!a) { UI.toast('Assessment not found.', 'error'); return; }
+    if (!a.questions || !a.questions.length) {
+      UI.toast('Add questions first.', 'warning'); return;
+    }
+    const ok = await ensureLibs();
+    if (!ok) { UI.toast('QR libraries not available.', 'error'); return; }
+
+    const qCount = a.questions.length;
+    const shadeCount = Math.min(questionsToShade, qCount);
+
+    const key = a.questions.map(q => {
+      const type = (q.type || '').toLowerCase();
+      if (type !== 'multiple choice') return null;
+      const choices = Array.isArray(q.choices) ? q.choices : [];
+      const clean = choices.map((c, i) => Utils.stripChoiceLetter(c, i));
+      const idx = clean.findIndex(c => c.toLowerCase() === String(q.answer || '').trim().toLowerCase());
+      return idx >= 0 ? idx : null;
+    });
+
+    const testLearner = {
+      id: '__printer_test__',
+      lrn: '000000000000',
+      firstName: 'PRINTER',
+      middleName: '',
+      lastName: 'TEST',
+      sex: '',
+      photo: ''
+    };
+
+    const sheetHTML = renderSheetHTML(
+      Object.assign({}, a, { omrFormVersion: 'T' }),
+      testLearner,
+      qCount
+    );
+
+    const styleId = 'omr-test-print-css';
+    const prior = document.getElementById(styleId);
+    if (prior) prior.remove();
+    const st = document.createElement('style');
+    st.id = styleId;
+    st.media = 'print';
+    st.textContent = `
+      @page { size: A5 portrait; margin: 0; }
+      #print-area { padding: 0 !important; margin: 0 !important; }
+      .omr-test-wrap { width: 148.5mm; height: 210mm; margin: 0 auto; background: #fff; }
+    `;
+    document.head.appendChild(st);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'omr-test-wrap';
+    wrap.innerHTML = sheetHTML;
+
+    const bubbles = wrap.querySelectorAll('div[style*="border-radius:50%"][style*="background:#fff"]');
+    const positions = bubblePositions(qCount);
+    const byKey = new Map();
+    let k = 0;
+    for (const pos of positions) {
+      for (let c = 0; c < SHEET.choiceCount; c++) {
+        byKey.set(`${pos.q}-${c}`, bubbles[k]);
+        k++;
+      }
+    }
+    for (let q = 0; q < shadeCount; q++) {
+      const c = key[q];
+      if (c === null || c === undefined) continue;
+      const div = byKey.get(`${q}-${c}`);
+      if (div) {
+        div.style.background = '#000';
+        div.style.borderColor = '#000';
+      }
+    }
+
+    document.getElementById('print-area').innerHTML = wrap.outerHTML;
+
+    App.logActivity(
+      `Printer test sheet printed — ${shadeCount} answers pre-shaded for "${a.title}"`,
+      'Assessments'
+    );
+
+    Pages._waitForPrintImagesThen(() => {
+      window.print();
+      setTimeout(() => {
+        document.getElementById('print-area').innerHTML = '';
+        const s = document.getElementById(styleId);
+        if (s) s.remove();
+      }, 1200);
+    });
+  }
+
   return {
     printSheets,
+    printTestSheet,
     openScanner,
     openResultsManager,
     SHEET,
@@ -58026,6 +60424,93 @@ Pages.openBehaviorModal = async function (id) {
 
   const overlay = m.overlay;
 
+  /* ---- Unsaved-changes guard ---- */
+  Unsaved.register(
+    'behavior-entry',
+    existing
+      ? 'Behavior: ' + Utils.fullName(State.learners.find(l => l.id === e.learnerId) || {})
+      : 'New Behavior Entry',
+    () => {
+      if (!overlay) return null;
+      const read = (sel) => {
+        const el = overlay.querySelector(sel);
+        return el ? el.value : '';
+      };
+      const description = read('#bh-desc').trim();
+      const actionTaken = read('#bh-action').trim();
+      const followUp    = read('#bh-follow').trim();
+      // Nothing typed → nothing to draft.
+      if (!description && !actionTaken && !followUp) return null;
+
+      return {
+        existingId: existing ? existing.id : null,
+        learnerId:   read('#bh-learner'),
+        date:        read('#bh-date'),
+        category:    selectedCat,
+        severity:    selectedSev,
+        description,
+        actionTaken,
+        followUpDate: read('#bh-follow-date'),
+        followUp,
+        status:      read('#bh-status'),
+        isPrivate:   overlay.querySelector('#bh-private').checked
+      };
+    }
+  );
+
+  const markBehaviorDirty = Utils.debounce(() => Unsaved.mark('behavior-entry'), 300);
+  overlay.addEventListener('input', markBehaviorDirty);
+  overlay.querySelectorAll('[data-bh-cat], [data-bh-sev]').forEach(b =>
+    b.addEventListener('click', markBehaviorDirty)
+  );
+
+  /* ---- Draft restorer ----
+     Reopens this modal with the saved draft, either on top of the same
+     DB record (if the draft was an edit) or as a fresh entry. Values are
+     applied after the modal has settled, then the guard is re-armed so
+     that navigating away again re-triggers the three-way prompt. */
+  Unsaved.registerRestorer('behavior-entry', async (payload) => {
+    if (!payload) return;
+
+    await Pages.openBehaviorModal(payload.existingId || null);
+    // Give UI.modal's internal 50 ms focus timeout time to fire.
+    await new Promise(r => setTimeout(r, 80));
+
+    const ov = document.querySelector('.modal-overlay.show');
+    if (!ov) return;
+
+    const set = (sel, v) => {
+      const el = ov.querySelector(sel);
+      if (el && v !== undefined && v !== null) el.value = v;
+    };
+
+    set('#bh-learner',     payload.learnerId);
+    set('#bh-date',        payload.date);
+    set('#bh-desc',        payload.description);
+    set('#bh-action',      payload.actionTaken);
+    set('#bh-follow-date', payload.followUpDate);
+    set('#bh-follow',      payload.followUp);
+    set('#bh-status',      payload.status);
+
+    const priv = ov.querySelector('#bh-private');
+    if (priv) priv.checked = !!payload.isPrivate;
+
+    // Category and severity are chip buttons, not inputs. Clicking them
+    // is what updates the internal `selectedCat` / `selectedSev` state.
+    if (payload.category) {
+      const catBtn = ov.querySelector(`[data-bh-cat="${CSS.escape(payload.category)}"]`);
+      if (catBtn) catBtn.click();
+    }
+    if (payload.severity) {
+      const sevBtn = ov.querySelector(`[data-bh-sev="${CSS.escape(payload.severity)}"]`);
+      if (sevBtn) sevBtn.click();
+    }
+
+    // Re-arm the guard so the teacher can navigate away again and get a
+    // fresh three-way prompt for the restored-but-still-unsaved values.
+    Unsaved.mark('behavior-entry');
+  });
+
   /* ---- Category chips ---- */
   let selectedCat = e ? e.category : BEHAVIOR_CATEGORIES[0].id;
   const catGrid   = overlay.querySelector('#bh-cat-grid');
@@ -58058,7 +60543,10 @@ Pages.openBehaviorModal = async function (id) {
   });
 
   /* ---- Cancel ---- */
-  overlay.querySelector('[data-cancel]').onclick = m.close;
+  overlay.querySelector('[data-cancel]').onclick = () => {
+    Unsaved.clear('behavior-entry');
+    m.close();
+  };
 
   /* ---- Save ---- */
   overlay.querySelector('#bh-save').onclick = async () => {
@@ -58100,6 +60588,7 @@ Pages.openBehaviorModal = async function (id) {
 
     try {
       await DB.put('behaviorLogs', rec);
+      Unsaved.clear('behavior-entry');
       App.logActivity(existing ? 'Behavior entry updated' : 'Behavior entry added', 'Behavior');
       m.close();
       App.navigate('behavior');
@@ -58272,6 +60761,8 @@ Pages._gbOpenColumnMenu = function (col, clientX, clientY) {
     <button type="button" data-act="rename">${icon('edit')} Rename assessment</button>
     <button type="button" data-act="open">${icon('settings')} Open in Builder</button>
     <div class="ctx-divider"></div>
+    <button type="button" data-act="fill">${icon('edit')} Fill column with a value…</button>
+    <div class="ctx-divider"></div>
     <button type="button" data-act="clear" class="danger">${icon('xCircle')} Clear scores (keep column)</button>
     <button type="button" data-act="delete" class="danger">${icon('trash')} Delete column &amp; scores</button>
   `;
@@ -58309,6 +60800,68 @@ Pages._gbOpenColumnMenu = function (col, clientX, clientY) {
 
       if (act === 'open') {
         Pages.openAssessmentModal(col.assessmentId);
+        return;
+      }
+
+      if (act === 'fill') {
+        const max = Number(col.maxScore) || 100;
+        UI.prompt({
+          title: 'Fill Column',
+          message: `Set every learner's score for <strong>${Utils.esc(col.sub || col.label)}</strong> to a single value. Existing scores are overwritten. The column stays. Maximum is ${max}.`,
+          placeholder: `Enter a number between 0 and ${max}`,
+          confirmText: 'Fill column',
+          onConfirm: async (v) => {
+            const n = Number(v);
+            if (isNaN(n) || n < 0 || n > max) {
+              UI.toast(`Score must be a number between 0 and ${max}.`, 'warning');
+              return;
+            }
+
+            const cls = State.activeClass;
+            if (!cls) return;
+            const learners = State.learners;
+            if (!learners.length) return;
+
+            const all = await DB.getAll('assessmentResults');
+            const byLearner = new Map();
+            all.filter(r => r.assessmentId === col.assessmentId)
+               .forEach(r => byLearner.set(r.learnerId, r));
+
+            const toWrite = [];
+            learners.forEach(l => {
+              let rec = byLearner.get(l.id);
+              if (!rec) {
+                rec = {
+                  id: Utils.uid('r-'),
+                  learnerId: l.id,
+                  assessmentId: col.assessmentId,
+                  classId: cls.id,
+                  createdAt: new Date().toISOString()
+                };
+              }
+              rec.score      = n;
+              rec.maxScore   = max;
+              rec.percentage = GradingEngine.calculatePercentageScore(n, max);
+              rec.updatedAt  = new Date().toISOString();
+              toWrite.push(rec);
+            });
+
+            try {
+              await DB.bulkWrite('assessmentResults', toWrite, 'put');
+            } catch (err) {
+              console.error('[Gradebook] Column fill failed:', err);
+              UI.toast('Fill failed — the database rejected the write.', 'error', 6000);
+              return;
+            }
+
+            App.logActivity(
+              `Filled column "${col.sub || col.label}" with ${n} for ${toWrite.length} learner(s)`,
+              'Grading'
+            );
+            UI.toast(`Filled ${toWrite.length} score(s) with ${n}`, 'success', 2500);
+            App.navigate('gradebook');
+          }
+        });
         return;
       }
 
@@ -60036,15 +62589,43 @@ if (choice.save) {
     });
   },
 
-  async _restore(moduleId, payload) {
+  /* Opens a modal, waits for it to settle, then returns a small "apply"
+     function that writes values into the modal's fields. Every restorer
+     that lives on top of a UI.modal ends up needing this. */
+  async _prefillModal(openFn, delayMs = 80) {
+    await openFn();
+    await new Promise(r => setTimeout(r, delayMs));
+    const ov = document.querySelector('.modal-overlay.show');
+    if (!ov) return null;
+    return {
+      overlay: ov,
+      set(sel, v) {
+        const el = ov.querySelector(sel);
+        if (el && v !== undefined && v !== null) el.value = v;
+      },
+      check(sel, on) {
+        const el = ov.querySelector(sel);
+        if (el) el.checked = !!on;
+      },
+      click(sel) {
+        const el = ov.querySelector(sel);
+        if (el) el.click();
+      }
+    };
+  },
+
+  async _restore(moduleId, payload) {   
     const restorer = this._restorers.get(moduleId);
     if (restorer) {
       try {
         await restorer(payload);
-        this._drafts.delete(moduleId);
-        this._persist();
+        // Do NOT delete the draft here. The restorer only re-opens the
+        // editor with the draft's values — the teacher still has to click
+        // Save. If they cancel, the draft must remain available for a
+        // second attempt. The module's own save handler calls
+        // Unsaved.clear(id), which is what actually removes the draft.
         this._reflectBadge();
-        UI.toast('Draft restored', 'success');
+        UI.toast('Draft restored — remember to save.', 'success', 3500);
         return;
       } catch (e) {
         console.error('[Unsaved] restore handler threw:', e);

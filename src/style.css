@@ -6759,6 +6759,38 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 .gb-sheet tbody td.gb-sticky-2,
 .gb-sheet tfoot td.gb-sticky-2 { left: 44px; }
 
+/* Sticky right columns — Reported grade and per-row actions */
+.gb-sheet thead th.gb-sticky-right-1,
+.gb-sheet thead th.gb-sticky-right-2 {
+  position: sticky;
+  z-index: 6;
+  background: var(--bg);
+}
+.gb-sheet thead th.gb-sticky-right-1 { right: 44px; box-shadow: -6px 0 8px -4px rgba(16,42,67,0.10); }
+.gb-sheet thead th.gb-sticky-right-2 { right: 0; }
+
+.gb-sheet tbody td.gb-sticky-right-1,
+.gb-sheet tbody td.gb-sticky-right-2,
+.gb-sheet tfoot td.gb-sticky-right-1,
+.gb-sheet tfoot td.gb-sticky-right-2 {
+  position: sticky;
+  z-index: 2;
+  background: var(--card);
+}
+.gb-sheet tbody td.gb-sticky-right-1,
+.gb-sheet tfoot td.gb-sticky-right-1 {
+  right: 44px;
+  box-shadow: -6px 0 8px -4px rgba(16,42,67,0.10);
+}
+.gb-sheet tbody td.gb-sticky-right-2,
+.gb-sheet tfoot td.gb-sticky-right-2 { right: 0; }
+
+/* Hover tint carries through to the pinned right columns */
+.gb-sheet tbody tr:hover td.gb-sticky-right-1,
+.gb-sheet tbody tr:hover td.gb-sticky-right-2 {
+  background: var(--light-blue);
+}
+
 /* Row hover highlights sticky cells too */
 .gb-sheet tbody tr:hover td.gb-sticky-1,
 .gb-sheet tbody tr:hover td.gb-sticky-2 {
@@ -6829,6 +6861,41 @@ svg.chart { width: 100%; height: 100%; overflow: visible; }
 .gb-sheet thead th .gb-col-resize.active {
   background: var(--deped-blue);
   opacity: 0.8;
+}
+
+/* Column menu button — always visible on touch, hover-only on desktop */
+.gb-sheet thead th { position: relative; }
+.gb-sheet thead th .gb-col-menu-btn {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.gb-sheet thead th:hover .gb-col-menu-btn,
+.gb-sheet thead th:focus-within .gb-col-menu-btn { opacity: 1; }
+.gb-sheet thead th .gb-col-menu-btn:hover {
+  background: var(--light-blue);
+  color: var(--deped-blue);
+}
+@media (hover: none) {
+  .gb-sheet thead th .gb-col-menu-btn { opacity: 1; }
 }
 
 /* Hide the EX sub-columns by default */
