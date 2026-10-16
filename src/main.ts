@@ -1,4 +1,4 @@
-  // @ts-nocheck
+// @ts-nocheck
 import './style.css';
 import { prepareRestoreData } from './backup-restore-core.js';
 import { getAcademicTermOptionsForPolicy, normalizeAcademicTermForPolicy } from './academic-terms.js';
@@ -18,6 +18,12 @@ import {
   type PhilIriGstSet,
   type PhilIriReadingLevel
 } from './phil-iri-materials';
+import {
+  WHO_LOADED          as WHO_GROWTH_LOADED,
+  ageInMonths         as whoAgeInMonths,
+  classifyBMI         as whoClassifyBMI,
+  classifyHeightForAge as whoClassifyHeightForAge
+} from './who-growth-reference';
 
 /* ============================================================================
    KlazAssist v2.0.0 — Offline-First Teacher Toolkit · pydjianPH
@@ -114,6 +120,7 @@ const PRO_FEATURES = {
   // Official DepEd forms — critical for reporting
   'sf1':                  { tier: 'pro', label: 'SF1 — School Register' },
   'sf2':                  { tier: 'pro', label: 'SF2 — Daily Attendance' },
+  'sf8':                  { tier: 'pro', label: "SF8 — Learner's Basic Health & Nutrition Report" },
   'sf9':                  { tier: 'pro', label: "SF9 — Learner's Report" },
 
   // Power-user analytics
@@ -216,6 +223,110 @@ const SF9_LEARNING_AREAS = {
     'Physical Education and Health'
   ]
 };
+
+/* ============================================================================
+   SF8 — LEARNER'S BASIC HEALTH AND NUTRITION REPORT
+   ----------------------------------------------------------------------------
+   Column model matches the official DepEd Central Office SF8 template.
+   The ADDRESS column is intentionally omitted — it belongs on SF1, not SF8.
+
+   VERIFICATION NOTE: KlazAssist encodes the SF8 layout from the well-known
+   DepEd template. Verify against your Division's current official sheet
+   before submission, and treat this as a working aid, not a certified
+   reproduction.
+   ============================================================================ */
+const SF8_COLUMNS = [
+  { id: 'idx',           label: '#',                                                          width: 36,  single: true  },
+  { id: 'lrn',           label: 'LRN',                                                        width: 110, single: true  },
+  { id: 'name',          label: "LEARNER'S NAME\n(Last Name, First Name, M.I.)",              width: 230, single: false },
+  { id: 'sex',           label: 'Sex\n(M/F)',                                                 width: 46,  single: true  },
+  { id: 'birthDate',     label: 'BIRTH DATE\n(mm/dd/yyyy)',                                   width: 100, single: true  },
+  { id: 'age',           label: 'AGE as of\n1st Friday June',                                 width: 70,  single: true  },
+  { id: 'weight',        label: 'WEIGHT\n(kg)',                                               width: 66,  single: true  },
+  { id: 'height',        label: 'HEIGHT\n(m)',                                                width: 66,  single: true  },
+  { id: 'heightSq',      label: 'HEIGHT²\n(m²)',                                              width: 66,  single: true  },
+  { id: 'bmi',           label: 'BMI\n(kg/m²)',                                               width: 66,  single: true  },
+  { id: 'heightForAge',  label: 'HEIGHT FOR AGE\n(Stunted / Normal / Tall)',                  width: 100, single: false },
+  { id: 'nutritional',   label: 'NUTRITIONAL STATUS\n(Wasted / Normal / Overweight / Obese)', width: 130, single: false },
+  { id: 'dewormDate',    label: 'DEWORMING\nDate Given',                                      width: 100, single: true  },
+  { id: 'dewormPills',   label: 'DEWORMING\nNo. of Tablets',                                  width: 80,  single: true  },
+  { id: 'immunization',  label: 'IMMUNIZATION\n(Complete / Incomplete)',                      width: 110, single: false },
+  { id: 'remarks',       label: 'REMARKS',                                                    width: 150, single: false }
+];
+
+/* Normalized health data shape — everything lives on learner.sf8 so we never
+   have to touch the base learner record's existing fields. */
+function _sf8BlankRecord() {
+  return {
+    weight: '',
+    height: '',
+    heightForAge: '',
+    nutritionalStatus: '',
+    dewormingDate: '',
+    dewormingTablets: '',
+    immunization: '',
+    remarks: ''
+  };
+}
+
+/* Compute a learner's age as of the SF8 cutoff date: the 1st Friday of June
+   of the class's School Year. Returns '' when the birth date is missing or
+   the computed value is out of range. Never throws. */
+function _sf8AgeAt(birthDate, schoolYear) {
+  if (!birthDate) return '';
+  const b = new Date(birthDate);
+  if (isNaN(b)) return '';
+  const startYear = parseInt(String(schoolYear || '').slice(0, 4), 10) || new Date().getFullYear();
+  const cutoff = new Date(startYear, 5, 1);              // June = month 5
+  while (cutoff.getDay() !== 5) cutoff.setDate(cutoff.getDate() + 1);   // Fri = 5
+  let age = cutoff.getFullYear() - b.getFullYear();
+  const m = cutoff.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && cutoff.getDate() < b.getDate())) age--;
+  return age >= 0 && age < 150 ? age : '';
+}
+/* Compute BMI from weight (kg) and height (m). */
+function _sf8BMI(weight, height) {
+  const w = Number(weight), h = Number(height);
+  if (!w || !h || h <= 0) return null;
+  return Math.round((w / (h * h)) * 100) / 100;
+}
+
+/* ----------------------------------------------------------------------------
+   Classify a learner's Height-for-Age and BMI-for-Age using the WHO Growth
+   Reference (5–19 years).
+
+   Returns { bmi, heightForAge, nutritionalStatus }. Every field is optional
+   and will be '' when the data required to compute it is missing — this
+   function never throws.
+
+   - Height-for-Age uses the WHO height-for-age table (input in cm).
+   - Nutritional Status uses the WHO BMI-for-age table (input in kg/m²).
+   - Both fall back to '' when the WHO tables are not loaded, so the
+     teacher's own value is preserved.
+   ---------------------------------------------------------------------------- */
+function _sf8Classify(l, referenceDate) {
+  const out = { bmi: null, heightForAge: '', nutritionalStatus: '' };
+  if (!l || !l.sf8) return out;
+
+  const w = Number(l.sf8.weight);
+  const h = Number(l.sf8.height);
+  out.bmi = _sf8BMI(w, h);
+
+  const sex = Utils.normalizeSex(l.sex);
+  const ageMonths = whoAgeInMonths(l.birthDate, referenceDate);
+  if (!sex || ageMonths == null) return out;
+
+  if (out.bmi) {
+    const cat = whoClassifyBMI(out.bmi, sex, ageMonths);
+    if (cat) out.nutritionalStatus = cat;
+  }
+  if (h && h > 0) {
+    // WHO expects height in centimetres.
+    const hfa = whoClassifyHeightForAge(h * 100, sex, ageMonths);
+    if (hfa) out.heightForAge = hfa;
+  }
+  return out;
+}
 
 /* ============================================================================
    GRADE LEVELS — canonical dropdown source
@@ -4920,7 +5031,7 @@ const HUB_CHILDREN = {
   'parent-communication': ['parent-notes', 'parent-digest'],
   'assessments':          ['assessment-builder', 'quiz-manager'],
   'performance':          ['class-performance', 'learner-performance', 'item-analysis'],
-  'school-forms':         ['sf1', 'sf2', 'sf9'],
+  'school-forms':         ['sf1', 'sf2', 'sf8', 'sf9'],
   'rosters':              ['class-list', 'masterlist'],
   'reports-and-export':   ['printable-reports', 'export-center'],
   'settings':             ['security-settings', 'teacher-profile', 'school-profile', 'activity-log', 'about'],
@@ -11355,41 +11466,136 @@ const XlsxWriter = {
     return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${this._escXml(value)}</t></is></c>`;
   },
 
-  buildSheet(rows, cols) {
-    let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
-    xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
-    if (cols && cols.length) {
-      xml += '<cols>';
-      cols.forEach((c, i) => {
-        xml += `<col min="${i+1}" max="${i+1}" width="${c.width || 12}" customWidth="1"/>`;
-      });
-      xml += '</cols>';
-    }
-    xml += '<sheetData>';
-    (rows || []).forEach((row, r) => {
-      xml += `<row r="${r+1}">`;
-      (row || []).forEach((cell, c) => {
-        const ref = this._colLetter(c) + (r + 1);
-        if (cell && typeof cell === 'object' && 'v' in cell) {
-          xml += this._cellXml(ref, cell.v, cell.style);
-        } else {
-          xml += this._cellXml(ref, cell);
-        }
-      });
-      xml += '</row>';
+buildSheet(rows, cols, merges) {
+  let xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  xml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+
+  // Column widths — only emitted when `cols` is a real array.
+  if (Array.isArray(cols) && cols.length) {
+    xml += '<cols>';
+    cols.forEach((c, i) => {
+      const w = c && typeof c.width === 'number' && c.width > 0 ? c.width : 12;
+      xml += `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`;
     });
-    xml += '</sheetData>';
-    xml += this._buildMergesXml(cols && cols._merges);
-    xml += '</worksheet>';
-    return xml;
-  },
+    xml += '</cols>';
+  }
+
+  xml += '<sheetData>';
+  (rows || []).forEach((row, r) => {
+    xml += `<row r="${r + 1}">`;
+    (row || []).forEach((cell, c) => {
+      const ref = this._colLetter(c) + (r + 1);
+      if (cell && typeof cell === 'object' && 'v' in cell) {
+        xml += this._cellXml(ref, cell.v, cell.style);
+      } else {
+        xml += this._cellXml(ref, cell);
+      }
+    });
+    xml += '</row>';
+  });
+  xml += '</sheetData>';
+
+  xml += this._buildMergesXml(merges);
+  xml += '</worksheet>';
+  return xml;
+},
 
   _buildMergesXml(merges) {
-    if (!merges || !merges.length) return '';
+    if (!Array.isArray(merges) || !merges.length) return '';
     return `<mergeCells count="${merges.length}">` +
       merges.map(ref => `<mergeCell ref="${ref}"/>`).join('') +
       `</mergeCells>`;
   },
+
+/**
+ * Auto-fit column widths from the content of every row.
+ *
+ * @param {Array}   rows    Array of rows, each row an array of cells.
+ *                          A cell is either a string, a number, or a
+ *                          { v, style } object (as produced by `cell()`).
+ * @param {Array}   merges  Optional list of merge ranges ("A1:C1"). Only
+ *                          cells inside a HORIZONTAL merge are skipped —
+ *                          their text spills across the range, so no single
+ *                          column should be sized to fit it. Vertically-
+ *                          merged cells (e.g. a header spanning two rows)
+ *                          still count, because their text DOES have to
+ *                          fit within that column's width.
+ * @param {Object}  opts    { min, max, padding }
+ * @returns {Array}         Column descriptors: [{ width }, ...], one per
+ *                          column that appears in the sheet.
+ */
+autoFitColumns(rows, merges = [], opts = {}) {
+  const MIN     = opts.min     != null ? opts.min     : 5;
+  const MAX     = opts.max     != null ? opts.max     : 40;
+  const PADDING = opts.padding != null ? opts.padding : 2;
+
+  // Local letter → 0-based index helper. XlsxWriter only ships
+  // `_colLetter` (index → letters), so the reverse lives here.
+  const colLetterToIndex = (letters) => {
+    let n = 0;
+    const s = String(letters || '').toUpperCase();
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code < 65 || code > 90) continue;
+      n = n * 26 + (code - 64);
+    }
+    return n - 1;
+  };
+
+  // Build the skip-set — ONLY horizontal (or rectangular) merges.
+  const mergedCells = new Set();
+  (merges || []).forEach(range => {
+    const parts = String(range).split(':');
+    if (parts.length !== 2) return;
+    const sc = colLetterToIndex(parts[0].replace(/\d+/g, ''));
+    const ec = colLetterToIndex(parts[1].replace(/\d+/g, ''));
+    const sr = parseInt(parts[0].replace(/[A-Z]+/gi, ''), 10);
+    const er = parseInt(parts[1].replace(/[A-Z]+/gi, ''), 10);
+    if (isNaN(sr) || isNaN(er) || sc < 0 || ec < 0) return;
+    if (sc === ec) return;   // vertical merge — DO NOT skip
+    for (let r = sr; r <= er; r++) {
+      for (let c = sc; c <= ec; c++) {
+        mergedCells.add(c + '-' + r);
+      }
+    }
+  });
+
+  // Scan every cell. Track the longest single line per column.
+  const widths = {};
+  rows.forEach((row, rIdx) => {
+    const rowNum = rIdx + 1;
+    (row || []).forEach((cell, cIdx) => {
+      if (mergedCells.has(cIdx + '-' + rowNum)) return;
+
+      let v = '';
+      if (cell && typeof cell === 'object' && 'v' in cell) {
+        v = String(cell.v == null ? '' : cell.v);
+      } else if (cell != null) {
+        v = String(cell);
+      }
+      if (!v) return;
+
+      // Multi-line cells only need the width of their longest single line.
+      const longest = v.split('\n').reduce((a, b) => (a.length >= b.length ? a : b), '');
+      if (!widths[cIdx] || widths[cIdx] < longest.length) {
+        widths[cIdx] = longest.length;
+      }
+    });
+  });
+
+  // Highest column index present anywhere in the sheet.
+  let maxIdx = 0;
+  rows.forEach(row => {
+    if (Array.isArray(row) && row.length - 1 > maxIdx) maxIdx = row.length - 1;
+  });
+
+  const out = [];
+  for (let i = 0; i <= maxIdx; i++) {
+    const w = widths[i] || 0;
+    out.push({ width: Math.min(MAX, Math.max(MIN, w + PADDING)) });
+  }
+  return out;
+},
 
 
   _buildZip(files) {
@@ -11476,10 +11682,11 @@ const XlsxWriter = {
     const styles =
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-      `<fonts count="3">` +
+      `<fonts count="4">` +
       `<font><sz val="11"/><name val="Calibri"/></font>` +
       `<font><b/><sz val="11"/><name val="Calibri"/></font>` +
       `<font><b/><sz val="14"/><name val="Calibri"/></font>` +
+      `<font><i/><sz val="10"/><name val="Calibri"/></font>` +   /* NEW — font 3, italic 10 */
       `</fonts>` +
       `<fills count="4">` +
       `<fill><patternFill patternType="none"/></fill>` +
@@ -11492,7 +11699,7 @@ const XlsxWriter = {
       `<border><left style="thin"><color rgb="FF888888"/></left><right style="thin"><color rgb="FF888888"/></right><top style="thin"><color rgb="FF888888"/></top><bottom style="thin"><color rgb="FF888888"/></bottom><diagonal/></border>` +
       `</borders>` +
       `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-      `<cellXfs count="6">` +
+      `<cellXfs count="8">` +                                     /* 6 → 8 */
       // 0 — default
       `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
       // 1 — bold
@@ -11503,8 +11710,12 @@ const XlsxWriter = {
       `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>` +
       // 4 — title
       `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>` +
-      // 5 — total row (bold + light gray fill + border + centered)
+      // 5 — total row
       `<xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +
+      // 6 — centered, regular weight, size 11 (for sub-titles)
+      `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>` +
+      // 7 — centered, italic, size 10 (for scope notes)
+      `<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>` +
       `</cellXfs>` +
       `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
       `</styleSheet>`;
@@ -11517,9 +11728,10 @@ const XlsxWriter = {
       { name: 'xl/styles.xml', data: this._strToBytes(styles) }
     ];
     sheets.forEach((s, i) => {
-      const colsWithMerges = Object.assign({}, s.cols || {});
-      if (s.merges) Object.defineProperty(colsWithMerges, '_merges', { value: s.merges, enumerable: false });
-      files.push({ name: `xl/worksheets/sheet${i+1}.xml`, data: this._strToBytes(this.buildSheet(s.rows, colsWithMerges)) });
+      files.push({
+        name: `xl/worksheets/sheet${i+1}.xml`,
+        data: this._strToBytes(this.buildSheet(s.rows, s.cols, s.merges))
+      });
     });
     return this._buildZip(files);
   },
@@ -38276,7 +38488,6 @@ async sf1(root) {
       </div>
     </div>
 
-    <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this preview and the exported .xlsx are functional, DepEd-labeled renderings built from your data. KlazAssist could not verify exact official SF1 template geometry (page size, merged cells, column widths) against a live source. Verify against your school/division's current SF1 template before submission.</div></div>
 
     ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
     ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
@@ -38372,7 +38583,6 @@ async sf1(root) {
     const defaultMonth = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
     root.innerHTML = `
       <div class="page-head"><div><h2>SF2 — Daily Attendance Report of Learners</h2><p>Generated from your recorded attendance data</p></div></div>
-      <div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Template fidelity notice:</strong> this is a functional, DepEd-labeled rendering built from your data — KlazAssist could not verify exact official SF2 template geometry against a live source. Fields it cannot determine show "Data required" instead of a fabricated value. Verify against your Division's current SF2 instructions before submission.</div></div>
       <div class="card mb-16">
         <div class="form-row">
           <div class="form-group"><label>Class</label>
@@ -38391,59 +38601,164 @@ async sf1(root) {
     root.querySelector('#sf2-current').onclick = () => { monthInput.value = defaultMonth; };
     root.querySelector('#sf2-generate').onclick = () => this.generateSF2Preview(root.querySelector('#sf2-class').value, monthInput.value);
   },
-  async generateSF2Preview(classId, monthStr) {
-    const cls = State.classes.find(c => c.id === classId);
-    const preview = document.getElementById('sf2-preview');
-    if (!cls || !monthStr) return;
-    const school = State.schools[0] || {};
-    const teacher = State.currentUser || {};
-    const learners = Utils.sortAlpha((await DB.getAllByIndex('learners', 'classId', cls.id)) || [], 'lastName');
-    const allAtt = await DB.getAll('attendance');
-    const monthAtt = allAtt.filter(a => a.classId === cls.id && (a.date||'').startsWith(monthStr));
-    const dates = Array.from(new Set(monthAtt.map(a => a.date))).sort();
-    const val = ValidationEngine.validateSF2({ school, cls, learners, dates });
+async generateSF2Preview(classId, monthStr) {
+  const cls = State.classes.find(c => c.id === classId);
+  const preview = document.getElementById('sf2-preview');
+  if (!cls || !monthStr) return;
+  const school = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const learners = Utils.sortAlpha((await DB.getAllByIndex('learners', 'classId', cls.id)) || [], 'lastName');
+  const allAtt = await DB.getAll('attendance');
+  const monthAtt = allAtt.filter(a => a.classId === cls.id && (a.date||'').startsWith(monthStr));
 
-    const byLearnerDate = {};
-    monthAtt.forEach(a => { byLearnerDate[a.learnerId + '|' + a.date] = a.status; });
-    const codeFor = (status) => AttendancePolicy.codes[status] !== undefined ? AttendancePolicy.codes[status] : (status || '');
+  /* ── Build the full class-day grid for the month ─────────────────────
+     Every Mon–Fri in the selected month becomes a column, regardless of
+     whether attendance was recorded on that day. This matches the SF2
+     template, which shows every school day of the month.
 
-    const rows = learners.map((l, i) => {
-      let present=0, absent=0, late=0, excused=0;
-      const cells = dates.map(d => {
-        const st = byLearnerDate[l.id + '|' + d];
-        if (st === 'Present') present++; else if (st === 'Absent') absent++; else if (st === 'Late') { late++; present++; } else if (st === 'Excused') { excused++; present++; }
-        return `<td>${st ? codeFor(st) : ''}</td>`;
-      }).join('');
-      const pct = dates.length ? Utils.round((present/dates.length)*100,1) : 0;
-      return { html: `<tr><td>${i+1}</td><td class="sf2-name">${Utils.esc(Utils.fullName(l))}</td>${cells}<td>${present}</td><td>${absent}</td><td>${pct}%</td></tr>`, l, present, absent, late, excused };
+     Days marked as Holiday on the DepEd calendar are excluded. */
+  const [yearStr, monthNumStr] = monthStr.split('-');
+  const year = Number(yearStr), monthIdx = Number(monthNumStr) - 1;
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+
+  // Pull DepEd holiday dates for this month (source: 'deped', category: 'Holiday')
+  let holidayDates = new Set();
+  try {
+    const cal = await DB.getAll('calendarEvents');
+    cal.forEach(e => {
+      if (e.source === 'deped' && e.category === 'Holiday' && (e.date || '').startsWith(monthStr)) {
+        holidayDates.add(e.date);
+      }
     });
-    const totalPresentDays = rows.reduce((s,r) => s+r.present, 0);
-    const adaPct = (learners.length && dates.length) ? Utils.round((totalPresentDays/(learners.length*dates.length))*100,1) : null;
-    const male = learners.filter(l => l.sex === 'Male').length;
-    const female = learners.filter(l => l.sex === 'Female').length;
+  } catch (e) { /* non-critical */ }
 
-    preview.innerHTML = `
-      ${val.errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot generate SF2 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${val.errors.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-      ${val.warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${val.warnings.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-      <div class="card mb-16">
-        <div class="card-head"><h3>Preview</h3>
-          <button class="btn btn-primary" id="sf2-print" ${val.errors.length ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button></div>
-        ${dates.length === 0 ? UI.emptyState({icon:'calendar', title:'No attendance recorded for this month', message:'Record attendance for this class and month first.'})
-        : `<div class="table-wrap" style="max-height:420px;"><table class="data-table" style="font-size:11px;">
-            <thead><tr><th>#</th><th>Learner</th>${dates.map(d => `<th>${d.slice(8)}</th>`).join('')}<th>Present</th><th>Absent</th><th>%</th></tr></thead>
-            <tbody>${rows.map(r=>r.html).join('')}</tbody>
-          </table></div>
+  const dates = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(year, monthIdx, d);
+    const dow = dt.getDay();
+    if (dow === 0 || dow === 6) continue;                       // skip weekends
+    const iso = `${year}-${String(monthIdx+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if (holidayDates.has(iso)) continue;                        // skip holidays
+    dates.push(iso);
+  }
+
+  const val = ValidationEngine.validateSF2({ school, cls, learners, dates });
+
+  const byLearnerDate = {};
+  monthAtt.forEach(a => { byLearnerDate[a.learnerId + '|' + a.date] = a.status; });
+  const codeFor = (status) => AttendancePolicy.codes[status] !== undefined ? AttendancePolicy.codes[status] : (status || '');
+
+  // ── Per-learner rows ────────────────────────────────────────────────
+  const rows = learners.map((l, i) => {
+    let present = 0, absent = 0, late = 0, excused = 0;
+    // Track last consecutive absence streak for the 5+ rule
+    let curStreak = 0, maxStreak = 0;
+    const cells = dates.map(d => {
+      const st = byLearnerDate[l.id + '|' + d];
+      if (st === 'Present') { present++; curStreak = 0; }
+      else if (st === 'Absent') { absent++; curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
+      else if (st === 'Late') { late++; present++; curStreak = 0; }
+      else if (st === 'Excused') { excused++; present++; curStreak = 0; }
+      return `<td>${st ? codeFor(st) : ''}</td>`;
+    }).join('');
+    const pct = dates.length ? Utils.round((present/dates.length)*100,1) : 0;
+    return {
+      html: `<tr><td>${i+1}</td><td class="sf2-name">${Utils.esc(Utils.fullName(l))}</td>${cells}<td>${present}</td><td>${absent}</td><td>${pct}%</td></tr>`,
+      l, present, absent, late, excused, maxStreak
+    };
+  });
+
+  // ── Computed summary stats ──────────────────────────────────────────
+  const totalPresentDays = rows.reduce((s,r) => s + r.present, 0);
+  const adaPct = (learners.length && dates.length) ? Utils.round((totalPresentDays/(learners.length*dates.length))*100,1) : null;
+  const male   = learners.filter(l => Utils.normalizeSex(l.sex) === 'Male').length;
+  const female = learners.filter(l => Utils.normalizeSex(l.sex) === 'Female').length;
+
+  // Learners absent 5+ consecutive days during this month
+  const chronicallyAbsent = rows
+    .filter(r => r.maxStreak >= 5)
+    .map(r => Utils.fullName(r.l));
+
+  // Late enrollees — learners whose first attendance record for this
+  // class lands after the 1st Friday of the school year.
+  const syStartYear = parseInt(String(cls.schoolYear || '').slice(0, 4), 10) || year;
+  const firstFriday = (() => {
+    const d = new Date(syStartYear, 5, 1);
+    while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  })();
+  const firstSeen = {};
+  monthAtt.forEach(a => {
+    if (!firstSeen[a.learnerId] || a.date < firstSeen[a.learnerId]) firstSeen[a.learnerId] = a.date;
+  });
+  const lateEnrollees = learners
+    .filter(l => firstSeen[l.id] && firstSeen[l.id] > firstFriday)
+    .map(l => Utils.fullName(l));
+
+  // ── Render ──────────────────────────────────────────────────────────
+  const weekdayLetter = (iso) => ['S','M','T','W','T','F','S'][new Date(iso + 'T00:00:00').getDay()];
+
+  preview.innerHTML = `
+    ${val.errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot generate SF2 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${val.errors.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${val.warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${val.warnings.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+
+    <div class="card mb-16">
+      <div class="card-head">
+        <h3>Preview · ${dates.length} class day${dates.length === 1 ? '' : 's'}</h3>
+        <button class="btn btn-primary" id="sf2-print" ${val.errors.length || dates.length === 0 ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
+      </div>
+      ${dates.length === 0
+        ? UI.emptyState({icon:'calendar', title:'No class days in this month', message:'Every weekday was either a weekend or flagged as a DepEd holiday.'})
+        : `<div class="table-wrap" style="max-height:460px;">
+            <table class="data-table" style="font-size:11px;">
+              <thead><tr>
+                <th>#</th><th>Learner</th>
+                ${dates.map(d => `<th style="min-width:22px;">
+                  <div style="font-size:8px;font-weight:500;opacity:.6;line-height:1;">${weekdayLetter(d)}</div>
+                  <div>${d.slice(8)}</div>
+                </th>`).join('')}
+                <th>Present</th><th>Absent</th><th>%</th>
+              </tr></thead>
+              <tbody>${rows.map(r=>r.html).join('')}</tbody>
+            </table>
+          </div>
           <div class="grid grid-4 mt-16">
-            <div class="stat-card"><div class="stat-label">School Days Recorded</div><div class="stat-value">${dates.length}</div></div>
-            <div class="stat-card"><div class="stat-label">Male / Female</div><div class="stat-value">${male} / ${female}</div></div>
-            <div class="stat-card"><div class="stat-label">Average Daily Attendance</div><div class="stat-value">${adaPct !== null ? adaPct+'%' : 'Data required'}</div></div>
-            <div class="stat-card"><div class="stat-label">Transferred In/Out</div><div class="stat-value text-xs">Data required</div></div>
-          </div>`}
-      </div>`;
-    const printBtn = preview.querySelector('#sf2-print');
-    if (printBtn) printBtn.addEventListener('click', () => this.printSF2({ school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr }));
-  },
-  printSF2({ school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr }) {
+            <div class="stat-card">
+              <div class="stat-label">School Days</div>
+              <div class="stat-value">${dates.length}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Male / Female</div>
+              <div class="stat-value">${male} / ${female}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Average Daily Attendance</div>
+              <div class="stat-value">${adaPct !== null ? adaPct+'%' : '—'}</div>
+            </div>
+            <div class="stat-card ${chronicallyAbsent.length ? 'accent-danger' : ''}">
+              <div class="stat-label">Absent 5+ Consecutive Days</div>
+              <div class="stat-value">${chronicallyAbsent.length}</div>
+              ${chronicallyAbsent.length
+                ? `<div class="text-xs text-muted" title="${Utils.attr(chronicallyAbsent.join(', '))}">${Utils.esc(chronicallyAbsent.slice(0,2).join(', '))}${chronicallyAbsent.length > 2 ? ' +' + (chronicallyAbsent.length - 2) + ' more' : ''}</div>`
+                : `<div class="text-xs text-muted">No cases</div>`}
+            </div>
+          </div>
+          ${lateEnrollees.length ? `
+            <div class="alert alert-info mt-16" style="margin-bottom:0;">
+              ${icon('info')}
+              <div><strong>${lateEnrollees.length}</strong> late enrollee${lateEnrollees.length === 1 ? '' : 's'} detected (first recorded attendance after the 1st Friday): ${Utils.esc(lateEnrollees.join(', '))}</div>
+            </div>` : ''}`
+      }
+    </div>`;
+
+  const printBtn = preview.querySelector('#sf2-print');
+  if (printBtn) printBtn.addEventListener('click', () => this.printSF2({
+    school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr,
+    chronicallyAbsent, lateEnrollees
+  }));
+},
+  printSF2({ school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr,
+           chronicallyAbsent = [], lateEnrollees = [] }) {
     const monthLabel = new Date(monthStr + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
     const req = (v) => v && String(v).trim() ? Utils.esc(v) : '<span style="color:#b00;">Data required</span>';
     const logoHeaderSF2 = `
@@ -38483,10 +38798,34 @@ async sf1(root) {
           <strong>Attendance Codes:</strong> (blank) = Present &nbsp; A = Absent &nbsp; L = Late &nbsp; E = Excused.
           <em>Verify these codes against your Division's current SF2 instructions before submission.</em>
         </div>
-        <table style="margin-top:10px;width:auto;">
-          <tr><td><strong>Male</strong></td><td>${male}</td><td><strong>Female</strong></td><td>${female}</td><td><strong>Total</strong></td><td>${learners.length}</td></tr>
-          <tr><td colspan="2"><strong>Average Daily Attendance</strong></td><td colspan="2">${adaPct !== null ? adaPct + '%' : 'Data required'}</td><td colspan="2"><strong>Registered Learners:</strong> ${learners.length}</td></tr>
-          <tr><td colspan="2"><strong>Late Enrollment</strong></td><td colspan="2">Data required</td><td colspan="2"><strong>Learners Absent 5+ Consecutive Days</strong>: Data required</td></tr>
+        <table class="sf2-summary-table" style="margin-top:10px;width:auto;">
+          <tr>
+            <td><strong>Male</strong></td><td>${male}</td>
+            <td><strong>Female</strong></td><td>${female}</td>
+            <td><strong>Total</strong></td><td>${learners.length}</td>
+          </tr>
+          <tr>
+            <td colspan="2"><strong>Average Daily Attendance</strong></td>
+            <td colspan="2">${adaPct !== null ? adaPct + '%' : '—'}</td>
+            <td colspan="2"><strong>Registered Learners:</strong> ${learners.length}</td>
+          </tr>
+          <tr>
+            <td colspan="2"><strong>Late Enrollment</strong></td>
+            <td colspan="2">${lateEnrollees.length}</td>
+            <td colspan="2"><strong>Learners Absent 5+ Consecutive Days:</strong> ${chronicallyAbsent.length}</td>
+          </tr>
+          ${chronicallyAbsent.length ? `
+            <tr>
+              <td colspan="6" style="font-size:7pt;line-height:1.4;">
+                <strong>Absent 5+ consecutive days:</strong> ${chronicallyAbsent.map(Utils.esc).join(', ')}
+              </td>
+            </tr>` : ''}
+          ${lateEnrollees.length ? `
+            <tr>
+              <td colspan="6" style="font-size:7pt;line-height:1.4;">
+                <strong>Late enrollees:</strong> ${lateEnrollees.map(Utils.esc).join(', ')}
+              </td>
+            </tr>` : ''}
         </table>
         <div class="sf2-sign">
            <div>
@@ -38506,6 +38845,1115 @@ async sf1(root) {
     this.saveReportSnapshot({ reportType: 'SF2', classId: cls.id, learnerId: null, templateVersion: 'SF2-BESTEFFORT-1', policyVersion: cls.gradingPolicyVersion || null, context: { monthStr } });
     window.print();
   },
+
+  /* ============================================================================
+     SF8 — LEARNER'S BASIC HEALTH AND NUTRITION REPORT
+     ============================================================================ */
+  async sf8(root) {
+    const cls = State.activeClass;
+    if (!cls) {
+      root.innerHTML = `<div class="card">${UI.emptyState({
+        icon: 'users', title: 'No class selected',
+        message: 'Create or select a class first.',
+        actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+      })}</div>`;
+      return;
+    }
+    if (!State.learners.length) {
+      root.innerHTML = `<div class="card">${UI.emptyState({
+        icon: 'users', title: 'No learners in this class',
+        message: 'Add learners before preparing the SF8.',
+        actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+      })}</div>`;
+      return;
+    }
+
+    const school = State.schools[0] || {};
+    const teacher = State.currentUser || {};
+
+    /* ---- Warn when the WHO reference tables are empty ---- */
+    if (!WHO_GROWTH_LOADED) {
+      // Non-blocking: the SF8 still works, it just won't auto-classify.
+      setTimeout(() => {
+        UI.toast(
+          'WHO growth reference not loaded — SF8 will not auto-classify ' +
+          'Height-for-Age or Nutritional Status. Add who-growth-reference.json ' +
+          'and rebuild.',
+          'warning', 9000
+        );
+      }, 400);
+    }
+
+    /* ---- Prefill learner.sf8 from existing weight/height if missing ---- */
+    for (const l of State.learners) {
+      if (!l.sf8) l.sf8 = _sf8BlankRecord();
+      if (!l.sf8.weight && l.weight) l.sf8.weight = String(l.weight);
+      if (!l.sf8.height && l.height) l.sf8.height = String(l.height);
+
+      // Auto-classify on first paint when the record has weight+height but
+      // the WHO labels are still empty. Ensures the SF8 is always correct
+      // even for learners entered before this feature shipped.
+      //
+      // NOTE: the local variable is named `classification`, NOT `cls`.
+      // `cls` is already bound to State.activeClass in the enclosing scope;
+      // reusing the name here creates confusing shadowing and, in some
+      // browsers, a TDZ error inside later callbacks.
+      if (l.sf8.weight && l.sf8.height &&
+          (!l.sf8.nutritionalStatus || !l.sf8.heightForAge)) {
+        const classification = _sf8Classify(l);
+        if (classification.nutritionalStatus && !l.sf8.nutritionalStatus) {
+          l.sf8.nutritionalStatus = classification.nutritionalStatus;
+        }
+        if (classification.heightForAge && !l.sf8.heightForAge) {
+          l.sf8.heightForAge = classification.heightForAge;
+        }
+      }
+    }
+
+    const males   = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+    const females = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+    const others  = State.learners.filter(l => {
+      const n = Utils.normalizeSex(l.sex);
+      return n !== 'Male' && n !== 'Female';
+    });
+
+    const withWeight = State.learners.filter(l => l.sf8.weight && l.sf8.height).length;
+    const withStatus = State.learners.filter(l => l.sf8.nutritionalStatus).length;
+    const withDeworm = State.learners.filter(l => l.sf8.dewormingDate).length;
+
+    const errors = [], warnings = [];
+    if (!school.name)       errors.push('School Name is missing (Settings → School Profile).');
+    if (!school.schoolId)   errors.push('School ID is missing (Settings → School Profile).');
+    if (!school.region)     warnings.push('Region is missing.');
+    if (!school.division)   warnings.push('Division is missing.');
+    if (!school.schoolHead) warnings.push('School Head name is missing.');
+    if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing.');
+    if (!withWeight)        warnings.push('No learner has weight/height recorded yet — BMI cannot be computed.');
+
+    /* ---- Render SF8 editor ---- */
+    root.innerHTML = `
+      <div class="page-head">
+        <div>
+          <h2>SF8 — Learner's Basic Health and Nutrition Report</h2>
+          <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'}</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-outline" id="sf8-switch">${icon('users')} Switch Class</button>
+          <button class="btn btn-outline" id="sf8-export" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
+          <button class="btn btn-primary" id="sf8-print" ${errors.length ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
+        </div>
+      </div>
+
+      <div class="alert alert-warning mb-16" style="align-items:flex-start;">
+        ${icon('alert')}
+        <div>
+          <strong>Before you submit:</strong> KlazAssist encodes the SF8 from the well-known DepEd template,
+          but the exact cell geometry of your Division's current sheet was not independently re-derived from the
+          primary PDF. Compare against your Division's current official template before submission.
+          The <em>Suggest</em> nutritional status uses a simplified BMI band — the official DepEd classification
+          uses age- and sex-specific BMI-for-age tables. <strong>Override it as needed.</strong>
+        </div>
+      </div>
+
+      ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
+        <strong>Cannot export SF8 — missing required information:</strong>
+        <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+      </div></div>` : ''}
+      ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
+        <strong>Warnings:</strong>
+        <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+      </div></div>` : ''}
+
+      <div class="grid grid-4 mb-16">
+        <div class="stat-card"><div class="stat-label">Total Learners</div><div class="stat-value">${State.learners.length}</div></div>
+        <div class="stat-card accent-success"><div class="stat-label">Male</div><div class="stat-value">${males.length}</div></div>
+        <div class="stat-card accent-danger"><div class="stat-label">Female</div><div class="stat-value">${females.length}</div></div>
+        <div class="stat-card ${others.length ? 'accent-warning' : ''}"><div class="stat-label">Unrecorded Sex</div><div class="stat-value">${others.length}</div></div>
+      </div>
+
+      <div class="card mb-16">
+        <div class="card-head">
+          <h3>Health &amp; Nutrition Data</h3>
+          <span class="text-xs text-muted">${withWeight} with weight+height · ${withStatus} classified · ${withDeworm} dewormed</span>
+        </div>
+        <p class="text-sm text-muted mb-12">
+          Enter each learner's measurements. BMI is computed automatically from weight and height.
+          The <em>Suggest</em> button next to a row will fill in the nutritional band based on the BMI.
+          Values save on blur.
+        </p>
+        <div class="sf8-editor-wrap">
+          <table class="sf8-editor-table">
+            <thead>
+              <tr>
+                <th style="width:34px;">#</th>
+                <th style="min-width:170px;text-align:center;">Learner</th>
+                <th style="width:70px;text-align:center;">Sex</th>
+                <th style="width:56px;text-align:center;">Age</th>
+                <th style="width:76px;text-align:center;">Weight<br><span class="sf8-th-sub">(kg)</span></th>
+                <th style="width:76px; text-align:center;">Height<br><span class="sf8-th-sub">(m)</span></th>
+                <th style="width:70px; text-align:center;">BMI<br><span class="sf8-th-sub">(kg/m²)</span></th>
+                <th style="width:130px;text-align:center;">Height for Age</th>
+                <th style="width:150px;text-align:center;">Nutritional Status</th>
+                <th style="width:130px;text-align:center;">Deworming Date</th>
+                <th style="width:80px;text-align:center;">Tablets</th>
+                <th style="width:130px;text-align:center;">Immunization</th>
+                <th style="min-width:140px;text-align:center;">Remarks</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${males.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#dbe7fb;font-weight:700;text-align:center;letter-spacing:1px;">MALE · ${males.length}</td></tr>` : ''}
+              ${males.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
+              ${females.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#fce7f3;font-weight:700;text-align:center;letter-spacing:1px;">FEMALE · ${females.length}</td></tr>` : ''}
+              ${females.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
+              ${others.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#fef3c7;font-weight:700;text-align:center;letter-spacing:1px;">UNRECORDED SEX · ${others.length}</td></tr>` : ''}
+              ${others.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="flex gap-8" style="justify-content:flex-end;flex-wrap:wrap;">
+          <button class="btn btn-outline" id="sf8-autofill-bmi">${icon('chart')} Recompute Classifications</button>
+          <button class="btn btn-primary" id="sf8-save-all">${icon('save')} Save All Changes</button>
+        </div>
+      </div>
+    `;
+
+    /* ---- Wire controls ---- */
+    root.querySelector('#sf8-switch').onclick    = () => App.openClassSelector();
+    root.querySelector('#sf8-export').onclick    = () => Pages._sf8ExportXLSX(cls, school, teacher);
+    root.querySelector('#sf8-print').onclick     = () => Pages._sf8Print(cls, school, teacher);
+    root.querySelector('#sf8-save-all').onclick  = () => Pages._sf8PersistAll();
+
+    root.querySelector('#sf8-autofill-bmi').onclick = async () => {
+      let count = 0;
+      for (const l of State.learners) {
+        if (!l.sf8) l.sf8 = _sf8BlankRecord();
+
+        // NOTE: `classification`, NOT `cls` — see the shadowing note in the
+        // prefill loop above.
+        const classification = _sf8Classify(l);
+        let touched = false;
+
+        if (classification.nutritionalStatus &&
+            classification.nutritionalStatus !== l.sf8.nutritionalStatus) {
+          l.sf8.nutritionalStatus = classification.nutritionalStatus;
+          touched = true;
+        }
+        if (classification.heightForAge &&
+            classification.heightForAge !== l.sf8.heightForAge) {
+          l.sf8.heightForAge = classification.heightForAge;
+          touched = true;
+        }
+
+        if (touched) count++;
+      }
+
+      if (count) {
+        await Pages._sf8PersistAll();
+        App.navigate('school-forms');
+        UI.toast(
+          `Recomputed classifications for ${count} learner${count === 1 ? '' : 's'}`,
+          'success'
+        );
+      } else {
+        UI.toast('No changes needed.', 'info');
+      }
+    };
+
+    /* ---- Live field handlers ---- */
+    root.querySelectorAll('[data-sf8-field]').forEach(inp => {
+      const learnerId = inp.dataset.sf8Learner;
+      const field     = inp.dataset.sf8Field;
+
+      const handleFieldChange = () => {
+        const l = State.learners.find(x => x.id === learnerId);
+        if (!l) return;
+        if (!l.sf8) l.sf8 = _sf8BlankRecord();
+
+        l.sf8[field] = String(inp.value || '').trim();
+
+        // When weight or height changes, recompute BMI plus the two WHO
+        // classifications for this row and paint them into the UI.
+        //
+        // NOTE: the local variable is named `classification`, NOT `cls`,
+        // to avoid shadowing the outer `cls = State.activeClass` binding.
+        if (field === 'weight' || field === 'height') {
+          const classification = _sf8Classify(l);
+
+          // BMI cell — always updated
+          const bmiCell = root.querySelector(`[data-sf8-bmi="${CSS.escape(learnerId)}"]`);
+          if (bmiCell) {
+            bmiCell.textContent = classification.bmi !== null ? classification.bmi : '—';
+          }
+
+          // Height for Age dropdown — only overwritten when WHO produced a value
+          if (classification.heightForAge) {
+            l.sf8.heightForAge = classification.heightForAge;
+            const hfaSel = root.querySelector(
+              `select[data-sf8-learner="${CSS.escape(learnerId)}"][data-sf8-field="heightForAge"]`
+            );
+            if (hfaSel) hfaSel.value = classification.heightForAge;
+          }
+
+          // Nutritional Status dropdown — same rule
+          if (classification.nutritionalStatus) {
+            l.sf8.nutritionalStatus = classification.nutritionalStatus;
+            const nsSel = root.querySelector(
+              `select[data-sf8-learner="${CSS.escape(learnerId)}"][data-sf8-field="nutritionalStatus"]`
+            );
+            if (nsSel) nsSel.value = classification.nutritionalStatus;
+          }
+        }
+      };
+
+      // `input` covers text fields and (modern) selects.
+      // `change` is the belt-and-braces fallback for older Safari / WebView
+      // builds that do not fire `input` on <select> elements.
+      inp.addEventListener('input',  handleFieldChange);
+      inp.addEventListener('change', handleFieldChange);
+
+      inp.addEventListener('blur', () => {
+        Pages._sf8PersistOne(learnerId);
+      });
+    });
+
+    root.querySelectorAll('[data-sf8-suggest]').forEach(btn => {
+      btn.onclick = async () => {
+        const l = State.learners.find(x => x.id === btn.dataset.sf8Suggest);
+        if (!l) return;
+        if (!l.sf8) l.sf8 = _sf8BlankRecord();
+
+        // NOTE: `classification`, NOT `cls` — see the shadowing note in the
+        // prefill loop above.
+        const classification = _sf8Classify(l);
+        if (!classification.nutritionalStatus) {
+          UI.toast(
+            'Cannot classify — the learner needs a birth date and sex, ' +
+            'and the WHO reference tables must be loaded.',
+            'warning', 5000
+          );
+          return;
+        }
+        l.sf8.nutritionalStatus = classification.nutritionalStatus;
+        if (classification.heightForAge) {
+          l.sf8.heightForAge = classification.heightForAge;
+        }
+        await Pages._sf8PersistOne(l.id);
+        App.navigate('school-forms');
+      };
+    });
+  },
+
+  /* Row renderer for one SF8 table row. */
+  _sf8RowHTML(l, displayIdx) {
+    // Defensive: a learner added while this page was open may not yet have
+    // an `sf8` object on their record. Create one on the fly so the row
+    // still renders instead of throwing and killing the whole page.
+    if (!l.sf8) l.sf8 = _sf8BlankRecord();
+
+    const bmi = _sf8BMI(l.sf8.weight, l.sf8.height);
+    const sexLetter = Utils.normalizeSex(l.sex) === 'Male' ? 'M'
+                    : Utils.normalizeSex(l.sex) === 'Female' ? 'F' : '';
+    const field = (name, value, opts = {}) => {
+      const t = opts.type === 'date' ? 'date' : 'text';
+      return `<input type="${t}"
+                     class="form-control sf8-input"
+                     data-sf8-field="${Utils.attr(name)}"
+                     data-sf8-learner="${Utils.attr(l.id)}"
+                     value="${Utils.attr(value || '')}"
+                     placeholder="${Utils.attr(opts.placeholder || '')}">`;
+    };
+    /* Age is read-only and auto-computed from the birth date using the SF8
+      cutoff (1st Friday of June of the class's School Year), so the editor
+      always matches what gets printed. */
+    const ageValue = _sf8AgeAt(l.birthDate, (State.activeClass && State.activeClass.schoolYear) || State.schoolYear);
+    return `<tr>
+      <td style="text-align:center;color:var(--text-muted);">${displayIdx}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${Utils.avatarHTML(l, 26, 10)}
+          <div style="min-width:0;">
+            <div style="font-weight:600;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${Utils.esc(Utils.displayName(l))}
+            </div>
+            <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+          </div>
+        </div>
+      </td>
+      <td style="text-align:center;font-weight:700;">${sexLetter}</td>
+      <td style="text-align:center;font-weight:600;color:var(--text);">${ageValue !== '' ? ageValue : '—'}</td>
+      <td>${field('weight', l.sf8.weight, { placeholder: '0.0' })}</td>
+      <td>${field('height', l.sf8.height, { placeholder: '0.00' })}</td>
+      <td style="text-align:center;font-weight:700;color:var(--deped-blue);" data-sf8-bmi="${Utils.attr(l.id)}">${bmi !== null ? bmi : '—'}</td>
+      <td>
+        <select class="form-control sf8-input"
+                data-sf8-field="heightForAge"
+                data-sf8-learner="${Utils.attr(l.id)}">
+          <option value="">—</option>
+          ${['Stunted','Normal','Tall'].map(v =>
+            `<option value="${v}" ${l.sf8.heightForAge === v ? 'selected' : ''}>${v}</option>`
+          ).join('')}
+        </select>
+      </td>
+      <td>
+        <div class="flex gap-4" style="align-items:center;">
+          <select class="form-control sf8-input" style="flex:1;"
+                  data-sf8-field="nutritionalStatus"
+                  data-sf8-learner="${Utils.attr(l.id)}">
+            <option value="">—</option>
+            ${['Severely Wasted','Wasted','Normal','Overweight','Obese'].map(v =>
+              `<option value="${v}" ${l.sf8.nutritionalStatus === v ? 'selected' : ''}>${v}</option>`
+            ).join('')}
+          </select>
+          <button type="button" class="icon-btn" data-sf8-suggest="${Utils.attr(l.id)}"
+                  title="Suggest based on BMI" style="width:28px;height:28px;flex-shrink:0;">
+            ${icon('star')}
+          </button>
+        </div>
+      </td>
+      <td>${field('dewormingDate', l.sf8.dewormingDate, { type: 'date' })}</td>
+      <td>${field('dewormingTablets', l.sf8.dewormingTablets, { placeholder: '0' })}</td>
+      <td>
+        <select class="form-control sf8-input"
+                data-sf8-field="immunization"
+                data-sf8-learner="${Utils.attr(l.id)}">
+          <option value="">—</option>
+          ${['Complete','Incomplete'].map(v =>
+            `<option value="${v}" ${l.sf8.immunization === v ? 'selected' : ''}>${v}</option>`
+          ).join('')}
+        </select>
+      </td>
+      <td>${field('remarks', l.sf8.remarks)}</td>
+    </tr>`;
+  },
+
+  /* Persist one learner's SF8 record. */
+  async _sf8PersistOne(learnerId) {
+    const l = State.learners.find(x => x.id === learnerId);
+    if (!l) return;
+    try {
+      if (l.sf8.weight) l.weight = l.sf8.weight;
+      if (l.sf8.height) l.height = l.sf8.height;
+      l.updatedAt = new Date().toISOString();
+      await DB.put('learners', l);
+      App.showAutosave('saved');
+    } catch (e) {
+      console.warn('[SF8] Save failed:', e);
+    }
+  },
+
+  /* Persist every learner's SF8 record. */
+  async _sf8PersistAll() {
+    try {
+      const writes = State.learners.map(l => {
+        if (l.sf8.weight) l.weight = l.sf8.weight;
+        if (l.sf8.height) l.height = l.sf8.height;
+        l.updatedAt = new Date().toISOString();
+        return l;
+      });
+      await DB.bulkWrite('learners', writes, 'put');
+      App.showAutosave('saved');
+      App.logActivity('SF8 health data saved for ' + State.learners.length + ' learners', 'Reports');
+    } catch (e) {
+      console.error('[SF8] Bulk save failed:', e);
+      UI.toast('Failed to save SF8 data: ' + (e.message || ''), 'error', 5000);
+    }
+  },
+
+  /* ---------------------------------------------------------------------------
+     SF8 — pixel-perfect PRINT layout
+     A4 landscape · 17 columns compressed to fit · Male / Female / TOTAL blocks.
+     --------------------------------------------------------------------------- */
+_sf8Print(cls, school, teacher) {
+  const esc = Utils.esc;
+  const req = (v) => v && String(v).trim() ? esc(v) : '';
+
+  const learners = State.learners.slice();
+  const males   = learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+  const females = learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+  const others  = learners.filter(l => {
+    const n = Utils.normalizeSex(l.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+
+  const schoolYear = cls.schoolYear || State.schoolYear || '';
+  const startYear = parseInt(String(schoolYear).slice(0, 4), 10) || new Date().getFullYear();
+  const firstFridayJune = (() => {
+    const d = new Date(startYear, 5, 1);
+    while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+    return d;
+  })();
+  const ageAt = (birthDate) => {
+    if (!birthDate) return '';
+    const b = new Date(birthDate);
+    if (isNaN(b)) return '';
+    let age = firstFridayJune.getFullYear() - b.getFullYear();
+    const m = firstFridayJune.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && firstFridayJune.getDate() < b.getDate())) age--;
+    return age >= 0 && age < 150 ? age : '';
+  };
+
+  const birthForSF8 = (l) => {
+    if (!l.birthDate) return '';
+    const m = String(l.birthDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[2]}/${m[3]}/${m[1]}` : l.birthDate;
+  };
+
+  const nameForSF8 = (l) => {
+    const last = (l.lastName || '').toUpperCase();
+    const given = [l.firstName, l.middleName ? l.middleName.charAt(0).toUpperCase() + '.' : '']
+      .filter(Boolean).map(s => s.toUpperCase());
+    return given.length ? `${last}, ${given.join(' ')}` : last;
+  };
+
+  const sexLetter = (l) => {
+    const n = Utils.normalizeSex(l.sex);
+    return n === 'Male' ? 'M' : n === 'Female' ? 'F' : '';
+  };
+
+  // NOTE: 16 columns total (Central Office SF8 template has no ADDRESS column).
+  let runningIdx = 0;
+  const learnerRow = (l) => {
+    runningIdx++;
+    const bmi = _sf8BMI(l.sf8.weight, l.sf8.height);
+    const hSq = (l.sf8.height && Number(l.sf8.height) > 0)
+      ? Math.round(Math.pow(Number(l.sf8.height), 2) * 10000) / 10000 : '';
+    return `<tr>
+      <td class="sf8-c-idx">${runningIdx}</td>
+      <td class="sf8-c-lrn">${esc(l.lrn || '')}</td>
+      <td class="sf8-c-name">${esc(nameForSF8(l))}</td>
+      <td class="sf8-c-sex">${sexLetter(l)}</td>
+      <td class="sf8-c-birth">${esc(birthForSF8(l))}</td>
+      <td class="sf8-c-age">${ageAt(l.birthDate)}</td>
+      <td class="sf8-c-num">${esc(l.sf8.weight || '')}</td>
+      <td class="sf8-c-num">${esc(l.sf8.height || '')}</td>
+      <td class="sf8-c-num">${hSq !== '' ? hSq : ''}</td>
+      <td class="sf8-c-num">${bmi !== null ? bmi : ''}</td>
+      <td class="sf8-c-status">${esc(l.sf8.heightForAge || '')}</td>
+      <td class="sf8-c-status">${esc(l.sf8.nutritionalStatus || '')}</td>
+      <td class="sf8-c-date">${esc(l.sf8.dewormingDate || '')}</td>
+      <td class="sf8-c-num">${esc(l.sf8.dewormingTablets || '')}</td>
+      <td class="sf8-c-status">${esc(l.sf8.immunization || '')}</td>
+      <td class="sf8-c-remarks">${esc(l.sf8.remarks || '')}</td>
+    </tr>`;
+  };
+
+  const sectionRow = (label, count, bg) =>
+    `<tr class="sf8-section-row">
+      <td colspan="16" style="background:${bg};font-weight:700;text-align:center;letter-spacing:1px;">
+        ${esc(label)} · ${count}
+      </td>
+    </tr>`;
+
+  runningIdx = 0;
+  const maleRows   = males.map(learnerRow).join('');
+  const femaleRows = females.map(learnerRow).join('');
+  const otherRows  = others.map(learnerRow).join('');
+
+  const totalMale   = males.length;
+  const totalFemale = females.length;
+  const totalAll    = learners.length;
+
+  const countStatus = (arr, key, val) => arr.filter(l => l.sf8[key] === val).length;
+  const severelyWasted = countStatus(learners, 'nutritionalStatus', 'Severely Wasted');
+  const wasted         = countStatus(learners, 'nutritionalStatus', 'Wasted');
+  const normal         = countStatus(learners, 'nutritionalStatus', 'Normal');
+  const overweight     = countStatus(learners, 'nutritionalStatus', 'Overweight');
+  const obese          = countStatus(learners, 'nutritionalStatus', 'Obese');
+  const stunted        = countStatus(learners, 'heightForAge', 'Stunted');
+  const tall           = countStatus(learners, 'heightForAge', 'Tall');
+  const dewormed       = learners.filter(l => l.sf8.dewormingDate).length;
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-sf8">
+
+      <div class="sf8-header">
+        <div class="sf8-header-logo">
+          <img src="${Utils.attr(school.depedSeal || DEPED_SEAL_PATH)}" alt="DepEd Seal"
+               onerror="this.style.visibility='hidden';">
+        </div>
+        <div class="sf8-header-text">
+          <div class="sf8-republic">Republic of the Philippines</div>
+          <div class="sf8-deped">Department of Education</div>
+          <div class="sf8-region">${req(school.region) || ''}</div>
+          <div class="sf8-division">${req(school.division) || ''}</div>
+          <div class="sf8-district">${req(school.district) || ''}</div>
+          <div class="sf8-schoolname">${req(school.name) || ''}</div>
+        </div>
+        <div class="sf8-header-logo">
+          ${school.schoolLogo
+            ? `<img src="${Utils.attr(school.schoolLogo)}" alt="School Seal" onerror="this.style.visibility='hidden';">`
+            : ''}
+        </div>
+      </div>
+
+      <div class="sf8-title-block">
+        <div class="sf8-main-title">School Form 8 (SF 8)</div>
+        <div class="sf8-sub-title">Learner's Basic Health and Nutrition Report</div>
+        
+      </div>
+
+      <table class="sf8-meta">
+        <tr>
+          <td><strong>School ID:</strong> ${req(school.schoolId) || ''}</td>
+          <td><strong>Region:</strong> ${req(school.region) || ''}</td>
+          <td><strong>Division:</strong> ${req(school.division) || ''}</td>
+        </tr>
+        <tr>
+          <td><strong>School Name:</strong> ${req(school.name) || ''}</td>
+          <td><strong>School Year:</strong> ${esc(schoolYear)}</td>
+          <td><strong>District:</strong> ${req(school.district) || ''}</td>
+        </tr>
+        <tr>
+          <td><strong>Grade &amp; Section:</strong> ${esc(cls.gradeLevel)} - ${esc(cls.section)}</td>
+          <td colspan="2"><strong>Section Adviser:</strong> ${req(cls.adviser || teacher.fullName) || ''}</td>
+        </tr>
+      </table>
+
+      <table class="sf8-table">
+        <colgroup>
+          <col class="sf8-col-idx">
+          <col class="sf8-col-lrn">
+          <col class="sf8-col-name">
+          <col class="sf8-col-sex">
+          <col class="sf8-col-birth">
+          <col class="sf8-col-age">
+          <col class="sf8-col-num">
+          <col class="sf8-col-num">
+          <col class="sf8-col-num">
+          <col class="sf8-col-num">
+          <col class="sf8-col-status">
+          <col class="sf8-col-status">
+          <col class="sf8-col-date">
+          <col class="sf8-col-num">
+          <col class="sf8-col-status">
+          <col class="sf8-col-remarks">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>LRN</th>
+            <th>LEARNER'S NAME<br>(Last Name, First Name, M.I.)</th>
+            <th>Sex<br>(M/F)</th>
+            <th>BIRTH DATE<br>(mm/dd/yyyy)</th>
+            <th>AGE as of<br>1st Friday June</th>
+            <th>WEIGHT<br>(kg)</th>
+            <th>HEIGHT<br>(m)</th>
+            <th>HEIGHT²<br>(m²)</th>
+            <th>BMI<br>(kg/m²)</th>
+            <th>HEIGHT<br>FOR AGE</th>
+            <th>NUTRITIONAL<br>STATUS</th>
+            <th>DEWORMING<br>Date Given</th>
+            <th>DEWORMING<br>No. of Tablets</th>
+            <th>IMMUNIZATION<br>(Complete/Incomplete)</th>
+            <th>REMARKS</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${males.length   ? sectionRow('MALE', males.length, '#dbe7fb') + maleRows   : ''}
+          ${females.length ? sectionRow('FEMALE', females.length, '#fce7f3') + femaleRows : ''}
+          ${others.length  ? sectionRow('UNRECORDED SEX', others.length, '#fef3c7') + otherRows : ''}
+          <tr class="sf8-total-row">
+            <td colspan="16" style="text-align:center;font-weight:800;">
+              TOTAL MALE: ${totalMale} &nbsp;·&nbsp; TOTAL FEMALE: ${totalFemale} &nbsp;·&nbsp; COMBINED: ${totalAll}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <table class="sf8-summary">
+        <tr>
+          <td colspan="2" class="sf8-summary-head">NUTRITIONAL STATUS SUMMARY</td>
+          <td colspan="2" class="sf8-summary-head">HEIGHT FOR AGE SUMMARY</td>
+          <td colspan="2" class="sf8-summary-head">DEWORMING</td>
+        </tr>
+        <tr>
+          <td>Severely Wasted:</td><td class="sf8-summary-num">${severelyWasted}</td>
+          <td>Stunted:</td><td class="sf8-summary-num">${stunted}</td>
+          <td>Dewormed:</td><td class="sf8-summary-num">${dewormed}</td>
+        </tr>
+        <tr>
+          <td>Wasted:</td><td class="sf8-summary-num">${wasted}</td>
+          <td>Tall:</td><td class="sf8-summary-num">${tall}</td>
+          <td>Not Dewormed:</td><td class="sf8-summary-num">${totalAll - dewormed}</td>
+        </tr>
+        <tr>
+          <td>Normal:</td><td class="sf8-summary-num">${normal}</td>
+          <td colspan="2"></td>
+          <td colspan="2"></td>
+        </tr>
+        <tr>
+          <td>Overweight:</td><td class="sf8-summary-num">${overweight}</td>
+          <td colspan="2"></td>
+          <td colspan="2"></td>
+        </tr>
+        <tr>
+          <td>Obese:</td><td class="sf8-summary-num">${obese}</td>
+          <td colspan="2"></td>
+          <td colspan="2"></td>
+        </tr>
+      </table>
+
+      <table class="sf8-signatures">
+        <tr>
+          <td style="width:50%;">
+            <div class="sf8-sign-label">Prepared by:</div>
+            <div class="sf8-sign-name">${req(Licensing.getReportSignatory(cls)) || ''}</div>
+            <div class="sf8-sign-line"></div>
+            <div class="sf8-sign-role">Adviser / Class Teacher</div>
+          </td>
+          <td style="width:50%;">
+            <div class="sf8-sign-label">Attested by:</div>
+            <div class="sf8-sign-name">${req(school.schoolHead) || ''}</div>
+            <div class="sf8-sign-line"></div>
+            <div class="sf8-sign-role">School Head</div>
+          </td>
+        </tr>
+      </table>
+
+      <div class="sf8-footer">
+        <span>Generated by KlazAssist · ${Utils.formatDate(Utils.todayISO())}</span>
+        <span>Not an official DepEd system — verify before submission</span>
+      </div>
+
+    </div>`;
+
+  App.logActivity(`SF8 printed — ${cls.gradeLevel} - ${cls.section} (${totalAll} learners)`, 'Reports');
+
+  const styleId = 'sf8-print-page';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = '@page { size: A4 landscape; margin: 0.5cm; }';
+  document.head.appendChild(st);
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+},
+
+/* ---------------------------------------------------------------------------
+   SF8 — .xlsx export
+   ---------------------------------------------------------------------------
+   Column layout matches the DepEd Central Office SF8 header exactly:
+
+     A  No.
+     B  LRN
+     C  Learner's Name (Last Name, First Name, Name Extension, Middle Name)
+     D  Birthdate (MM/DD/YYYY)
+     E  Age
+     F  Weight (kg)
+     G  Height (m)
+     H  Height² (m²)
+     I  BMI (kg/m²)          ┐ under "Nutritional Status"
+     J  BMI Category          ┘ parent header
+     K  Height for Age (HFA)
+     L  Remarks
+
+   Supplementary columns (kept per user requirement, placed AFTER Remarks
+   so the official 12-column block stays intact):
+
+     M  Deworming — Date Given     ┐ under "Deworming" parent header
+     N  Deworming — No. of Tablets ┘
+     O  Immunization
+
+   The header is a TRUE two-tier block:
+     • Row h1 — parent headers, with vertical merges on every single-tier
+                column and horizontal merges on the two multi-tier parents
+     • Row h2 — sub-headers for the two multi-tier parents
+
+   Every header cell uses style 2, which is centered both horizontally
+   and vertically with wrapText enabled. Column widths are computed
+   from actual content via XlsxWriter.autoFitColumns().
+   --------------------------------------------------------------------------- */
+_sf8ExportXLSX(cls, school, teacher) {
+  if (!window.XlsxWriter && !XlsxWriter) {
+    UI.toast('XLSX writer not available.', 'error');
+    return;
+  }
+
+  const colIdx = (letters) => {
+    let n = 0;
+    for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n - 1;
+  };
+  const S = (spec) => {
+    const keys = Object.keys(spec);
+    if (!keys.length) return [];
+    const maxIdx = Math.max(...keys.map(colIdx));
+    const row = new Array(maxIdx + 1).fill('');
+    keys.forEach(k => { row[colIdx(k)] = spec[k]; });
+    return row;
+  };
+  const cell = (v, style) => ({ v: v === null || v === undefined ? '' : v, style });
+  const R = (n) => new Array(n).fill('');
+
+  const learners = State.learners.slice();
+  const males   = learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+  const females = learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+  const others  = learners.filter(l => {
+    const n = Utils.normalizeSex(l.sex);
+    return n !== 'Male' && n !== 'Female';
+  });
+
+  const schoolYear = cls.schoolYear || State.schoolYear || '';
+  const startYear  = parseInt(String(schoolYear).slice(0, 4), 10) || new Date().getFullYear();
+
+  /* Age cut-off: 1st Friday of June (DepEd-prescribed reference date) */
+  const firstFridayJune = (() => {
+    const d = new Date(startYear, 5, 1);
+    while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+    return d;
+  })();
+
+  const ageAt = (birthDate) => {
+    if (!birthDate) return '';
+    const b = new Date(birthDate);
+    if (isNaN(b)) return '';
+    let age = firstFridayJune.getFullYear() - b.getFullYear();
+    const m = firstFridayJune.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && firstFridayJune.getDate() < b.getDate())) age--;
+    return age >= 0 && age < 150 ? age : '';
+  };
+
+  const birthForSF8 = (l) => {
+    if (!l.birthDate) return '';
+    const m = String(l.birthDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[2]}/${m[3]}/${m[1]}` : l.birthDate;
+  };
+
+  /* Name format per the template header:
+     "Last Name, First Name, Name Extension, Middle Name"
+     — Extension comes BEFORE Middle Name. */
+  const nameForSF8 = (l) => {
+    const last = (l.lastName || '').toUpperCase();
+    const parts = [l.firstName, l.suffix, l.middleName]
+      .filter(Boolean).map(s => String(s).toUpperCase());
+    return parts.length ? `${last}, ${parts.join(', ')}` : last;
+  };
+
+  /* BMI Category — the numeric classification band (a pre-set list). */
+  const bmiCategoryOf = (l) => {
+    const bmi = _sf8BMI(l.sf8.weight, l.sf8.height);
+    if (bmi === null) return '';
+    if (bmi < 16)    return 'Severely Wasted';
+    if (bmi < 18.5)  return 'Wasted';
+    if (bmi < 25)    return 'Normal';
+    if (bmi < 30)    return 'Overweight';
+    return 'Obese';
+  };
+
+  /* ---- Row accumulation ---- */
+  const rows   = [];
+  const merges = [];
+
+  /* ================================================================
+     TITLE BLOCK
+     ================================================================ */
+
+rows.push(S({ A: cell('School Form 8 (SF 8)', 4) }));                       // title  — bold, size 14, centered
+merges.push(`A${rows.length}:L${rows.length}`);
+
+rows.push(S({ A: cell("Learner's Basic Health and Nutrition Report", 6) })); // subtitle — regular, centered
+merges.push(`A${rows.length}:L${rows.length}`);
+
+rows.push(S({ A: cell('(For All Grade Levels)', 7) }));                      // scope note — italic, centered
+merges.push(`A${rows.length}:L${rows.length}`);
+
+  rows.push(R(1));   // spacer
+
+  /* ================================================================
+     SCHOOL METADATA
+     ================================================================
+     Value cells span 3 columns each, so a long school name never forces
+     column B (LRN) to widen beyond what LRN itself needs.
+     ================================================================ */
+  /* Metadata rows — every cell in a merged span carries style 3 (bordered)
+    so the value cell's border draws fully around B:D, F:H, and J:L. The
+    label cells (A, E, I) use style 1 (bold, no border) and stand alone. */
+  const metaRow = (spec) => {
+    const obj = {};
+    'ABCDEFGHIJKL'.split('').forEach(c => { obj[c] = cell('', 3); });
+    obj.A = cell(spec.A || '', 1);
+    obj.E = cell(spec.E || '', 1);
+    obj.I = cell(spec.I || '', 1);
+    if (spec.B !== undefined) obj.B = cell(spec.B, 3);
+    if (spec.F !== undefined) obj.F = cell(spec.F, 3);
+    if (spec.J !== undefined) obj.J = cell(spec.J, 3);
+    return S(obj);
+  };
+
+  rows.push(metaRow({
+    A: 'School Name', B: school.name || '',
+    E: 'District',    F: school.district || '',
+    I: 'Division',    J: school.division || ''
+  }));
+  merges.push(`B${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:H${rows.length}`);
+  merges.push(`J${rows.length}:L${rows.length}`);
+
+  rows.push(metaRow({
+    A: 'School ID', B: school.schoolId || '',
+    E: 'Region',    F: school.region || '',
+    I: 'School Year', J: schoolYear
+  }));
+  merges.push(`B${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:H${rows.length}`);
+  merges.push(`J${rows.length}:L${rows.length}`);
+
+  rows.push(metaRow({
+    A: 'Grade',   B: cls.gradeLevel || '',
+    E: 'Section', F: cls.section || ''
+  }));
+  merges.push(`B${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:H${rows.length}`);
+
+  rows.push(R(1));   // spacer
+
+  /* ================================================================
+     TWO-TIER HEADER
+     ================================================================
+     Row h1 — parent headers (all cells centered via style 2)
+     Row h2 — sub-headers under the two multi-tier parents
+     ================================================================ */
+  const h1 = rows.length + 1;
+  const h2 = h1 + 1;
+
+  /* Row h1 — parent headers */
+  rows.push(S({
+    A: cell('No.', 2),
+    B: cell('LRN', 2),
+    C: cell("Learner's Name\n(Last Name, First Name, Name Extension, Middle Name)", 2),
+    D: cell('Birthdate\n(MM/DD/YYYY)', 2),
+    E: cell('Age', 2),
+    F: cell('Weight\n(kg)', 2),
+    G: cell('Height\n(m)', 2),
+    H: cell('Height²\n(m²)', 2),
+    I: cell('Nutritional Status', 2),
+    K: cell('Height for\nAge (HFA)', 2),
+    L: cell('Immunization', 2),
+    M: cell('Deworming', 2),
+    O: cell('Remarks', 2)
+  }));
+
+  /* Vertical merges — single-tier columns span both header rows */
+  merges.push(`A${h1}:A${h2}`);   // No.
+  merges.push(`B${h1}:B${h2}`);   // LRN
+  merges.push(`C${h1}:C${h2}`);   // Name
+  merges.push(`D${h1}:D${h2}`);   // Birthdate
+  merges.push(`E${h1}:E${h2}`);   // Age
+  merges.push(`F${h1}:F${h2}`);   // Weight
+  merges.push(`G${h1}:G${h2}`);   // Height
+  merges.push(`H${h1}:H${h2}`);   // Height²
+  merges.push(`K${h1}:K${h2}`);   // HFA
+  merges.push(`L${h1}:L${h2}`);   // Remarks
+  merges.push(`O${h1}:O${h2}`);   // Immunization
+
+  /* Horizontal merges — multi-tier parents span their sub-columns */
+  merges.push(`I${h1}:J${h1}`);   // "Nutritional Status"
+  merges.push(`M${h1}:N${h1}`);   // "Deworming"
+
+  /* Row h2 — sub-headers, centered (style 2).
+    Every cell A–O carries style 2 so the vertical merges above render with
+    a complete border on every viewer. Cells with no visible label get an
+    empty string but keep the style, which is what produces the border. */
+  const h2cells = {};
+    'ABCDEFGHIJKLMNO'.split('').forEach(c => { h2cells[c] = cell('', 2); });
+    h2cells.I = cell('BMI\n(kg/m²)', 2);
+    h2cells.J = cell('BMI Category', 2);
+    h2cells.M = cell('Date Given', 2);
+    h2cells.N = cell('No. of Tablets', 2);
+    rows.push(S(h2cells));
+
+  /* ================================================================
+     LEARNER ROWS
+     ================================================================ */
+  let runningIdx = 0;
+  const pushLearner = (l) => {
+    runningIdx++;
+    const bmi = _sf8BMI(l.sf8.weight, l.sf8.height);
+    const hSq = (l.sf8.height && Number(l.sf8.height) > 0)
+      ? Math.round(Math.pow(Number(l.sf8.height), 2) * 10000) / 10000 : '';
+    rows.push(S({
+      A: cell(runningIdx, 3),
+      B: cell(l.lrn || '', 3),
+      C: cell(nameForSF8(l), 3),
+      D: cell(birthForSF8(l), 3),
+      E: cell(ageAt(l.birthDate), 3),
+      F: cell(l.sf8.weight || '', 3),
+      G: cell(l.sf8.height || '', 3),
+      H: cell(hSq, 3),
+      I: cell(bmi !== null ? bmi : '', 3),
+      J: cell(bmiCategoryOf(l), 3),
+      K: cell(l.sf8.heightForAge || '', 3),
+      L: cell(l.sf8.immunization || '', 3),
+      M: cell(l.sf8.dewormingDate || '', 3),
+      N: cell(l.sf8.dewormingTablets || '', 3),
+      O: cell(l.sf8.remarks || '', 3)
+    }));
+  };
+
+  /* Section band helper — every cell in the merged A:O span carries style 2
+    so the border renders completely around the whole band. Only column A
+    holds the label; the rest are styled empty cells. */
+  const sectionRow = (label) => {
+    const obj = {};
+    'ABCDEFGHIJKLMNO'.split('').forEach(c => {
+      obj[c] = cell(c === 'A' ? label : '', 2);
+    });
+    return S(obj);
+  };
+
+  if (males.length) {
+    rows.push(sectionRow('MALE'));
+    merges.push(`A${rows.length}:O${rows.length}`);
+    males.forEach(pushLearner);
+  }
+  if (females.length) {
+    rows.push(sectionRow('FEMALE'));
+    merges.push(`A${rows.length}:O${rows.length}`);
+    females.forEach(pushLearner);
+  }
+  if (others.length) {
+    rows.push(sectionRow('UNRECORDED SEX'));
+    merges.push(`A${rows.length}:O${rows.length}`);
+    others.forEach(pushLearner);
+  }
+
+  rows.push(R(1));   // spacer
+
+  /* ================================================================
+     SUMMARY TABLES
+     ================================================================ */
+
+  /* ---- Nutritional Status summary ---- */
+  rows.push(S({ A: cell('NUTRITIONAL STATUS SUMMARY TABLE', 1) }));
+  merges.push(`A${rows.length}:G${rows.length}`);
+
+  rows.push(S({
+    A: cell('Sex', 2),
+    B: cell('Severely Wasted', 2),
+    C: cell('Wasted', 2),
+    D: cell('Normal', 2),
+    E: cell('Overweight', 2),
+    F: cell('Obese', 2),
+    G: cell('TOTAL', 2)
+  }));
+
+  const nsRow = (label, list) => {
+    const sw = list.filter(l => bmiCategoryOf(l) === 'Severely Wasted').length;
+    const w  = list.filter(l => bmiCategoryOf(l) === 'Wasted').length;
+    const n  = list.filter(l => bmiCategoryOf(l) === 'Normal').length;
+    const ow = list.filter(l => bmiCategoryOf(l) === 'Overweight').length;
+    const ob = list.filter(l => bmiCategoryOf(l) === 'Obese').length;
+    return S({
+      A: cell(label, 2), B: cell(sw, 3), C: cell(w, 3),
+      D: cell(n, 3), E: cell(ow, 3), F: cell(ob, 3), G: cell(list.length, 3)
+    });
+  };
+  rows.push(nsRow('MALE', males));
+  rows.push(nsRow('FEMALE', females));
+  rows.push(nsRow('TOTAL', learners));
+
+  rows.push(R(1));
+
+  /* ---- Height-for-Age summary ---- */
+  rows.push(S({ A: cell('HEIGHT FOR AGE (HFA) SUMMARY TABLE', 1) }));
+  merges.push(`A${rows.length}:E${rows.length}`);
+
+  rows.push(S({
+    A: cell('Sex', 2), B: cell('Stunted', 2),
+    C: cell('Normal', 2), D: cell('Tall', 2), E: cell('TOTAL', 2)
+  }));
+
+  const hfaRow = (label, list) => {
+    const st = list.filter(l => l.sf8.heightForAge === 'Stunted').length;
+    const nm = list.filter(l => l.sf8.heightForAge === 'Normal').length;
+    const tl = list.filter(l => l.sf8.heightForAge === 'Tall').length;
+    return S({
+      A: cell(label, 2), B: cell(st, 3), C: cell(nm, 3),
+      D: cell(tl, 3), E: cell(list.length, 3)
+    });
+  };
+  rows.push(hfaRow('MALE', males));
+  rows.push(hfaRow('FEMALE', females));
+  rows.push(hfaRow('TOTAL', learners));
+
+  rows.push(R(1));
+
+  /* ================================================================
+    SIGNATORIES
+    ================================================================
+    Each label/name/role spans A:D and F:J, so a long signatory name
+    (or the 23-character "Adviser / Class Teacher" role) never forces
+    column A or column F to widen beyond what the data rows actually
+    need. The merges are horizontal, so autoFitColumns skips them.
+    ================================================================ */
+  rows.push(S({
+    A: cell('Prepared by:', 1),
+    F: cell('Attested by:', 1)
+  }));
+  merges.push(`A${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:J${rows.length}`);
+
+  /* Signatory names — fill B–D and G–J with style 3 so the merged
+    bordered cells render completely. */
+  const sigNameRow = {};
+  'ABCDEFGHIJ'.split('').forEach(c => { sigNameRow[c] = cell('', 1); });
+  sigNameRow.A = cell(Licensing.getReportSignatory(cls) || '', 1);
+  sigNameRow.F = cell(school.schoolHead || '', 1);
+  rows.push(S(sigNameRow));
+  merges.push(`A${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:J${rows.length}`);
+
+  rows.push(S({
+    A: cell('Adviser / Class Teacher', 0),
+    F: cell('School Head', 0)
+  }));
+  merges.push(`A${rows.length}:D${rows.length}`);
+  merges.push(`F${rows.length}:J${rows.length}`);
+
+  /* ================================================================
+     AUTO-FIT COLUMN WIDTHS
+     ================================================================
+     Computed from the actual content of every non-merged cell.
+     Long learner names are allowed to widen column C up to 35 chars;
+     everything else is capped at the same limit but will typically
+     settle much narrower. Merged header/title/metadata cells are
+     skipped so their text doesn't inflate a single column.
+     ================================================================ */
+  const cols = XlsxWriter.autoFitColumns(rows, merges, {
+    min: 8,
+    max: 38,
+    padding: 2
+  });
+
+  const safeSy      = String(schoolYear).replace(/[^0-9A-Za-z]/g, '_');
+  const safeGrade   = String(cls.gradeLevel || '').replace(/[^0-9A-Za-z]+/g, '_');
+  const safeSection = String(cls.section || '').replace(/[^0-9A-Za-z]+/g, '_');
+  const filename    = `SF8_${safeSy}_${safeGrade}_${safeSection}_${Utils.timestamp()}.xlsx`;
+
+  try {
+    XlsxWriter.download(filename, [{
+      name: 'Learner_Health_Nutrition_Report',
+      rows, cols, merges
+    }]);
+    App.logActivity(`SF8 exported — ${males.length} male, ${females.length} female`, 'Reports');
+    UI.toast('SF8 (.xlsx) exported', 'success');
+  } catch (e) {
+    console.error('[SF8 export]', e);
+    UI.toast('SF8 export failed: ' + (e.message || ''), 'error', 6000);
+  }
+},
 
   /* ============================================================================
      SF9 — Learner's Performance Report Card (SY 2026-2027)
@@ -59187,9 +60635,10 @@ Pages._schoolFormsHub = function (root) {
     stateKey: '_schoolFormsHubTab',
     defaultTab: 'sf1',
     tabs: [
-      { id: 'sf1', label: 'SF1 — School Register',     icon: 'file',     render: (c) => Pages.sf1(c) },
-      { id: 'sf2', label: 'SF2 — Daily Attendance',    icon: 'calendar', render: (c) => Pages.sf2(c) },
-      { id: 'sf9', label: 'SF9 — Learner’s Report',    icon: 'file',     render: (c) => Pages.sf9(c) }
+      { id: 'sf1', label: 'SF1 — School Register',            icon: 'file',     render: (c) => Pages.sf1(c) },
+      { id: 'sf2', label: 'SF2 — Daily Attendance',           icon: 'calendar', render: (c) => Pages.sf2(c) },
+      { id: 'sf8', label: 'SF8 — Health & Nutrition Report',  icon: 'chart',    render: (c) => Pages.sf8(c) },
+      { id: 'sf9', label: 'SF9 — Learner’s Report',           icon: 'file',     render: (c) => Pages.sf9(c) }
     ]
   });
 };
@@ -59263,6 +60712,7 @@ const aliases = {
   'pedagogy-library': 'pedagogyLibrary',
   'parent-digest': 'parentDigest',
   'phil-iri': 'philIri',
+  'sf8': 'sf8',
   'sync': 'sync',             
 };
 /* ------------------------------------------------------------------------
