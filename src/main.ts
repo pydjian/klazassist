@@ -5031,7 +5031,7 @@ const HUB_CHILDREN = {
   'parent-communication': ['parent-notes', 'parent-digest'],
   'assessments':          ['assessment-builder', 'quiz-manager'],
   'performance':          ['class-performance', 'learner-performance', 'item-analysis'],
-  'school-forms':         ['sf1', 'sf2', 'sf8', 'sf9'],
+  'school-forms':         ['sf1', 'sf2', 'sf5', 'sf8', 'sf9'],
   'rosters':              ['class-list', 'masterlist'],
   'reports-and-export':   ['printable-reports', 'export-center'],
   'settings':             ['security-settings', 'teacher-profile', 'school-profile', 'activity-log', 'about'],
@@ -11072,44 +11072,108 @@ const DocxWriter = {
   /* Convert block text into <w:r> run elements, applying bold/italic. */
   _run(text, opts = {}) {
     const rPr = [];
-    if (opts.bold)   rPr.push('<w:b/>');
-    if (opts.italic) rPr.push('<w:i/>');
-    if (opts.color)  rPr.push(`<w:color w:val="${this._escXml(opts.color)}"/>`);
-    if (opts.size)   rPr.push(`<w:sz w:val="${Math.round(opts.size * 2)}"/>`);
+    // CT_RPr requires rFonts first, then b/i/caps, then color, then sz.
+    if (opts.fontFace) {
+      const f = this._escXml(opts.fontFace);
+      rPr.push(`<w:rFonts w:ascii="${f}" w:hAnsi="${f}" w:cs="${f}"/>`);
+    }
+    if (opts.bold)    rPr.push('<w:b/>');
+    if (opts.italic)  rPr.push('<w:i/>');
+    if (opts.allCaps) rPr.push('<w:caps/>');
+    if (opts.color)   rPr.push(`<w:color w:val="${this._escXml(opts.color)}"/>`);
+    if (opts.size)    rPr.push(`<w:sz w:val="${Math.round(opts.size * 2)}"/>`);
     const rPrXml = rPr.length ? `<w:rPr>${rPr.join('')}</w:rPr>` : '';
+
+    // Strip characters that XML 1.0 forbids outright (control chars, NUL,
+    // vertical tab, etc.). The AI occasionally emits these inside inline
+    // data URLs and they poison the entire XML document.
+    const cleaned = this._escXml(text)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+
+    // An empty <w:t/> is invalid OOXML. If there is no text to write,
+    // emit either nothing, or a bare <w:r> that carries only its <w:rPr>
+    // (which Word accepts as a valid empty run).
+    if (!cleaned) {
+      return rPrXml ? `<w:r>${rPrXml}</w:r>` : '';
+    }
     // Preserve leading/trailing spaces with xml:space="preserve"
-    return `<w:r>${rPrXml}<w:t xml:space="preserve">${this._escXml(text)}</w:t></w:r>`;
+    return `<w:r>${rPrXml}<w:t xml:space="preserve">${cleaned}</w:t></w:r>`;
   },
 
   _para(text, opts = {}) {
+    // OOXML CT_PPr requires a strict child order. Emitting these out of
+    // sequence produces schema-invalid XML that Word rejects with the
+    // generic "unreadable content" dialog.
+    // Sequence: pStyle → numPr → pBdr → shd → spacing → ind → jc.
     const pPr = [];
-    if (opts.align)   pPr.push(`<w:jc w:val="${this._escXml(opts.align)}"/>`);
     if (opts.style)   pPr.push(`<w:pStyle w:val="${this._escXml(opts.style)}"/>`);
-    if (opts.spacing) pPr.push(`<w:spacing w:before="${opts.spacing.before || 0}" w:after="${opts.spacing.after || 0}"/>`);
     if (opts.numId)   pPr.push(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${opts.numId}"/></w:numPr>`);
+    if (opts.borderBottom) {
+      const b = opts.borderBottom;
+      pPr.push(
+        `<w:pBdr>` +
+          `<w:bottom w:val="single" w:sz="${b.sz || 12}" w:space="${b.space != null ? b.space : 1}" w:color="${b.color || '000000'}"/>` +
+        `</w:pBdr>`
+      );
+    }
+    if (opts.spacing) {
+      const s = opts.spacing;
+      const line = s.line ? ` w:line="${s.line}" w:lineRule="${s.lineRule || 'auto'}"` : '';
+      pPr.push(`<w:spacing w:before="${s.before || 0}" w:after="${s.after || 0}"${line}/>`);
+    }
+    // An explicit <w:ind> on the paragraph itself always wins over the
+    // value declared in <w:abstractNum>'s <w:lvl>. Relying on the list
+    // definition alone is unreliable across Word versions, which is why
+    // the previous attempt produced a flush-left list.
+    if (opts.indent) {
+      const ind = opts.indent;
+      const attrs = [];
+      if (ind.left     != null) attrs.push(`w:left="${ind.left}"`);
+      if (ind.right    != null) attrs.push(`w:right="${ind.right}"`);
+      if (ind.firstLine!= null) attrs.push(`w:firstLine="${ind.firstLine}"`);
+      if (ind.hanging  != null) attrs.push(`w:hanging="${ind.hanging}"`);
+      if (attrs.length) pPr.push(`<w:ind ${attrs.join(' ')}/>`);
+    }
+    if (opts.align) pPr.push(`<w:jc w:val="${this._escXml(opts.align)}"/>`);
     const pPrXml = pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : '';
     return `<w:p>${pPrXml}${this._run(text, opts)}</w:p>`;
   },
 
-  _table(rows, hasHeader) {
+  _table(rows, hasHeader, colWidths) {
     if (!Array.isArray(rows) || !rows.length) return '';
     const colCount = Math.max(...rows.map(r => Array.isArray(r) ? r.length : 0));
     if (colCount === 0) return '';
 
-    // Distribute width evenly; Word only uses these as hints.
-    const totalTwips = 9360;   // ~6.5 inches
-    const colTwips   = Math.floor(totalTwips / colCount);
+    const totalTwips = 9360;   // ~6.5 inches — the printable text width
 
-    const gridXml = `<w:tblGrid>${Array(colCount).fill(`<w:gridCol w:w="${colTwips}"/>`).join('')}</w:tblGrid>`;
+    // Column widths: if the caller supplied an array of relative weights,
+    // proportion each column against the total. Otherwise fall back to
+    // even distribution, which keeps every existing caller unchanged.
+    let colTwips;
+    if (Array.isArray(colWidths) && colWidths.length === colCount) {
+      const sumWeights = colWidths.reduce((a, b) => a + (Number(b) || 0), 0);
+      if (sumWeights > 0) {
+        colTwips = colWidths.map(w =>
+          Math.max(240, Math.floor(totalTwips * (Number(w) || 0) / sumWeights))
+        );
+      } else {
+        colTwips = Array(colCount).fill(Math.floor(totalTwips / colCount));
+      }
+    } else {
+      colTwips = Array(colCount).fill(Math.floor(totalTwips / colCount));
+    }
+
+    const gridXml = `<w:tblGrid>${colTwips.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`;
 
     const rowXml = rows.map((row, ri) => {
-      const cells = (row || []).map(cell => {
+      const cells = (row || []).map((cell, ci) => {
         const isObj = cell && typeof cell === 'object';
         const text  = isObj ? (cell.text || '') : String(cell == null ? '' : cell);
         const bold  = isObj ? !!cell.bold : (hasHeader && ri === 0);
         const align = isObj && cell.align ? cell.align : 'left';
+        const width = colTwips[ci] || Math.floor(totalTwips / colCount);
         const cellPara = `<w:p><w:pPr><w:jc w:val="${this._escXml(align)}"/></w:pPr>${this._run(text, { bold })}</w:p>`;
-        return `<w:tc><w:tcPr><w:tcW w:w="${colTwips}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>${cellPara}</w:tc>`;
+        return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>${cellPara}</w:tc>`;
       }).join('');
       return `<w:tr>${cells}</w:tr>`;
     }).join('');
@@ -11137,7 +11201,7 @@ const DocxWriter = {
   },
 
   /* Image handling: decode a data URL into binary and register the media part. */
-  _imageBlock(dataURL, media, rels, widthMM, heightMM) {
+  _imageBlock(dataURL, media, rels, widthMM, heightMM, align) {
     const m = String(dataURL || '').match(/^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/i);
     if (!m) return '';
     const ext = m[1].toLowerCase() === 'jpg' ? 'jpeg' : m[1].toLowerCase();
@@ -11158,42 +11222,45 @@ const DocxWriter = {
     const cx = Math.round((widthMM || 40) * 36000);
     const cy = Math.round((heightMM || 40) * 36000);
 
-    return `<w:p>
-      <w:r>
-        <w:drawing>
-          <wp:inline distT="0" distB="0" distL="0" distR="0"
-                     xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
-            <wp:extent cx="${cx}" cy="${cy}"/>
-            <wp:effectExtent l="0" t="0" r="0" b="0"/>
-            <wp:docPr id="${media.length}" name="Image${media.length}"/>
-            <wp:cNvGraphicFramePr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-              <a:graphicFrameLocks noChangeAspect="1"/>
-            </wp:cNvGraphicFramePr>
-            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                  <pic:nvPicPr>
-                    <pic:cNvPr id="${media.length}" name="${this._escXml(mediaName)}"/>
-                    <pic:cNvPicPr/>
-                  </pic:nvPicPr>
-                  <pic:blipFill>
-                    <a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${rId}"/>
-                    <a:stretch><a:fillRect/></a:stretch>
-                  </pic:blipFill>
-                  <pic:spPr>
-                    <a:xfrm>
-                      <a:off x="0" y="0"/>
-                      <a:ext cx="${cx}" cy="${cy}"/>
-                    </a:xfrm>
-                    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-                  </pic:spPr>
-                </pic:pic>
-              </a:graphicData>
-            </a:graphic>
-          </wp:inline>
-        </w:drawing>
-      </w:r>
-    </w:p>`;
+    const jc = align ? `<w:jc w:val="${this._escXml(align)}"/>` : '';
+    const pPrXml = jc ? `<w:pPr>${jc}</w:pPr>` : '';
+
+    return `<w:p>${pPrXml}` +
+      `<w:r>` +
+        `<w:drawing>` +
+          `<wp:inline distT="0" distB="0" distL="0" distR="0" ` +
+                     `xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">` +
+            `<wp:extent cx="${cx}" cy="${cy}"/>` +
+            `<wp:effectExtent l="0" t="0" r="0" b="0"/>` +
+            `<wp:docPr id="${media.length}" name="Image${media.length}"/>` +
+            `<wp:cNvGraphicFramePr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+              `<a:graphicFrameLocks noChangeAspect="1"/>` +
+            `</wp:cNvGraphicFramePr>` +
+            `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+              `<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+                `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+                  `<pic:nvPicPr>` +
+                    `<pic:cNvPr id="${media.length}" name="${this._escXml(mediaName)}"/>` +
+                    `<pic:cNvPicPr/>` +
+                  `</pic:nvPicPr>` +
+                  `<pic:blipFill>` +
+                    `<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${rId}"/>` +
+                    `<a:stretch><a:fillRect/></a:stretch>` +
+                  `</pic:blipFill>` +
+                  `<pic:spPr>` +
+                    `<a:xfrm>` +
+                      `<a:off x="0" y="0"/>` +
+                      `<a:ext cx="${cx}" cy="${cy}"/>` +
+                    `</a:xfrm>` +
+                    `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>` +
+                  `</pic:spPr>` +
+                `</pic:pic>` +
+              `</a:graphicData>` +
+            `</a:graphic>` +
+          `</wp:inline>` +
+        `</w:drawing>` +
+      `</w:r>` +
+    `</w:p>`;
   },
 
   /** Generate and download a .docx file. */
@@ -11204,15 +11271,44 @@ const DocxWriter = {
     const bodyXml = (blocks || []).map(b => {
       if (!b || !b.type) return '';
       switch (b.type) {
-        case 'h1':       return this._para(b.text, { style: 'Heading1', bold: true, size: 15 });
-        case 'h2':       return this._para(b.text, { style: 'Heading2', bold: true, size: 13 });
-        case 'h3':       return this._para(b.text, { style: 'Heading3', bold: true, size: 11.5 });
-        case 'p':        return this._para(b.text, { bold: b.bold, italic: b.italic, align: b.align });
-        case 'bullet':   return this._para(b.text, { numId: 2 });
-        case 'number':   return this._para(b.text, { numId: 1 });
+        case 'h1':       return this._para(b.text, { style: 'Heading1', bold: true, size: 15, fontFace: b.fontFace, align: b.align });
+        case 'h2':       return this._para(b.text, { style: 'Heading2', bold: true, size: 13, fontFace: b.fontFace, align: b.align });
+        case 'h3':       return this._para(b.text, { style: 'Heading3', bold: true, size: 11.5, fontFace: b.fontFace, align: b.align });
+        case 'p':        return this._para(b.text, {
+          bold:         b.bold,
+          italic:       b.italic,
+          align:        b.align,
+          fontFace:     b.fontFace,
+          size:         b.size,
+          allCaps:      b.allCaps,
+          color:        b.color,
+          borderBottom: b.borderBottom,
+          spacing:      b.spacing
+        });
+        // 'choice' renders a multiple-choice option. The letter label is
+        // part of the paragraph text (not a Word list), so it never
+        // continues past Z across questions. A hanging indent aligns the
+        // option text under itself: letter at 828 twips, text at 1188.
+        // 828 twips ≈ 0.575 in — half the earlier value, tuned to sit
+        // closer to the question stem without crowding it.
+        case 'choice':   return this._para(b.text, {
+          indent: { left: 828, hanging: 360 },
+          fontFace: b.fontFace, size: b.size, spacing: b.spacing
+        });
+        // 'bullet' is kept as an alias so any existing caller that still
+        // emits { type: 'bullet' } renders identically to a choice.
+        case 'bullet':   return this._para(b.text, {
+          indent: { left: 828, hanging: 360 },
+          fontFace: b.fontFace, size: b.size, spacing: b.spacing
+        });
+        case 'number':   return this._para(b.text, {
+          numId: 1,
+          indent: { left: 720, hanging: 360 },
+          fontFace: b.fontFace, size: b.size, spacing: b.spacing
+        });
         case 'pagebreak':return this._pageBreak();
-        case 'table':    return this._table(b.rows, b.header);
-        case 'image':    return this._imageBlock(b.dataURL, media, rels, b.widthMM, b.heightMM);
+        case 'table':    return this._table(b.rows, b.header, b.colWidths);
+        case 'image':    return this._imageBlock(b.dataURL, media, rels, b.widthMM, b.heightMM, b.align);
         default:         return '';
       }
     }).join('\n');
@@ -11233,28 +11329,52 @@ const DocxWriter = {
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
         `<w:docDefaults>` +
-          `<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>` +
+          // Default body font matches the print CSS: Times New Roman 11pt.
+          // Individual runs may override the font via their own <w:rFonts>.
+          `<w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>` +
           `<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>` +
         `</w:docDefaults>` +
         `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
         `<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style>` +
-        `<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>` +
+        // Heading2 carries a 0.75pt bottom border to match the print CSS
+        // rule under each exam part heading.
+        `<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr><w:spacing w:before="200" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>` +
         `<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr><w:rPr><w:b/><w:sz w:val="23"/></w:rPr></w:style>` +
         `<w:style w:type="numbering" w:styleId="NumberList"><w:name w:val="Number List"/></w:style>` +
+        // TableGrid is referenced by <w:tblStyle w:val="TableGrid"/> in
+        // _table(). Without this definition, Word may fail the whole
+        // document with "unreadable content".
+        `<w:style w:type="table" w:styleId="TableGrid">` +
+          `<w:name w:val="Table Grid"/>` +
+          `<w:tblPr>` +
+            `<w:tblBorders>` +
+              `<w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+              `<w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+              `<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+              `<w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+              `<w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+              `<w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>` +
+            `</w:tblBorders>` +
+          `</w:tblPr>` +
+        `</w:style>` +
       `</w:styles>`;
 
-    // Numbering definitions for ordered and unordered lists.
+    // Numbering definitions for ordered lists only.
+    // numId 1 = decimal (used by <ol>) — matches the print CSS's decimal list-style.
+    //
+    // Multiple-choice choices do NOT use a Word list. Each choice is a plain
+    // paragraph with a literal "A. " prefix and a hanging indent, applied by
+    // the 'choice' block type in the dispatcher below. Word's upperLetter
+    // numbering runs as one continuous list across the whole document, which
+    // produces A, B, C, D, E, F…Z, AA… instead of restarting at A per
+    // question. Rendering the letters as literal text avoids that entirely.
     const numberingXml =
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">` +
         `<w:abstractNum w:abstractNumId="0">` +
           `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>` +
         `</w:abstractNum>` +
-        `<w:abstractNum w:abstractNumId="1">` +
-          `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>` +
-        `</w:abstractNum>` +
         `<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>` +
-        `<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>` +
       `</w:numbering>`;
 
     const contentTypes =
@@ -11330,7 +11450,11 @@ function htmlToDocxBlocks(html) {
   };
 
   const walkList = (listEl, kind) => {
-    // kind: 'number' | 'bullet'
+    // kind: 'number' | 'choice'
+    //   'number' → <ol> questions, uses Word's decimal list (numId 1).
+    //   'choice' → <ul> multiple-choice options, renders the letter label
+    //              as literal text with a hanging indent. See Edit 2 in
+    //              DocxWriter.build for the reasoning.
     Array.from(listEl.children).forEach(li => {
       if ((li.tagName || '').toLowerCase() !== 'li') return;
       // Detect nested lists so we can descend after emitting the parent item.
@@ -11341,10 +11465,14 @@ function htmlToDocxBlocks(html) {
       const clone = li.cloneNode(true);
       clone.querySelectorAll('ul, ol').forEach(n => n.remove());
       const text = textOf(clone);
+
+      // Do NOT strip the leading "A. " / "B) " / "(C) " label. It is the
+      // visible letter for this option, and no Word list engine will
+      // supply one.
       if (text) blocks.push({ type: kind, text });
       nested.forEach(n => {
         const tag = (n.tagName || '').toLowerCase();
-        walkList(n, tag === 'ol' ? 'number' : 'bullet');
+        walkList(n, tag === 'ol' ? 'number' : 'choice');
       });
     });
   };
@@ -11371,7 +11499,7 @@ function htmlToDocxBlocks(html) {
         return;
       }
       case 'ol': walkList(node, 'number'); return;
-      case 'ul': walkList(node, 'bullet'); return;
+      case 'ul': walkList(node, 'choice'); return;
       case 'table': {
         const rows = Array.from(node.querySelectorAll('tr')).map(tr => {
           return Array.from(tr.querySelectorAll('th, td')).map(cell => ({
@@ -11382,7 +11510,21 @@ function htmlToDocxBlocks(html) {
         });
         if (rows.length) {
           const hasHeader = (node.querySelector('th') != null);
-          blocks.push({ type: 'table', rows, header: hasHeader });
+          const block = { type: 'table', rows, header: hasHeader };
+
+          // Optional proportional column widths: a table may carry
+          //   data-col-widths="1,9"
+          // to declare that column 1 should get 10 % of the width and
+          // column 2 the remaining 90 %. Without the attribute, the
+          // table falls back to even distribution.
+          const widthsAttr = node.getAttribute('data-col-widths');
+          if (widthsAttr) {
+            const parsed = widthsAttr.split(',')
+              .map(s => Number(s.trim()))
+              .filter(n => Number.isFinite(n) && n > 0);
+            if (parsed.length) block.colWidths = parsed;
+          }
+          blocks.push(block);
         }
         return;
       }
@@ -11398,8 +11540,23 @@ function htmlToDocxBlocks(html) {
       }
       case 'br': blocks.push({ type: 'pagebreak' }); return;
       case 'hr': blocks.push({ type: 'pagebreak' }); return;
-      default:
+      default: {
+        // A bare <div>, <span>, <strong>, <sup>, <sub>, etc. with text
+        // but no block-level children would lose its content — the old
+        // default case recursed into element children only, so any direct
+        // text node was silently discarded. This is how "Directions: …"
+        // lines and <sup> exponents disappeared from the exported document.
+        const BLOCK_TAGS = ['p','h1','h2','h3','h4','ol','ul','table','img','div'];
+        const hasBlockChild = Array.from(node.children || []).some(c =>
+          BLOCK_TAGS.includes((c.tagName || '').toLowerCase())
+        );
+        const text = textOf(node);
+        if (!hasBlockChild && text) {
+          blocks.push({ type: 'p', text });
+          return;
+        }
         Array.from(node.children || []).forEach(walk);
+      }
     }
   };
 
@@ -11694,12 +11851,14 @@ autoFitColumns(rows, merges = [], opts = {}) {
       `<fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill>` +
       `<fill><patternFill patternType="solid"><fgColor rgb="FFF2F2F2"/><bgColor indexed="64"/></patternFill></fill>` +
       `</fills>` +
-      `<borders count="2">` +
+      `<borders count="3">` +
       `<border><left/><right/><top/><bottom/><diagonal/></border>` +
       `<border><left style="thin"><color rgb="FF888888"/></left><right style="thin"><color rgb="FF888888"/></right><top style="thin"><color rgb="FF888888"/></top><bottom style="thin"><color rgb="FF888888"/></bottom><diagonal/></border>` +
+      // 2 — bottom-only thin (used by style 8, for signature name lines)
+      `<border><left/><right/><top/><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/></border>` +
       `</borders>` +
       `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-      `<cellXfs count="8">` +                                     /* 6 → 8 */
+      `<cellXfs count="9">` +                                     /* 6 → 8 */
       // 0 — default
       `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
       // 1 — bold
@@ -11716,6 +11875,9 @@ autoFitColumns(rows, merges = [], opts = {}) {
       `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>` +
       // 7 — centered, italic, size 10 (for scope notes)
       `<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center"/></xf>` +
+        // 8 — centered, regular weight, with bottom border (signature name line)
+      `<xf numFmtId="0" fontId="1" fillId="0" borderId="2" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +
+
       `</cellXfs>` +
       `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
       `</styleSheet>`;
@@ -18737,14 +18899,20 @@ _renderAssessmentHTML(a, opts = {}) {
 
     let choiceBlock = '';
     if (type === 'multiple choice' && cleanChoices.length) {
-      choiceBlock = `<div style="margin:3pt 0 0 22pt;font-size:10.5pt;line-height:1.5;">
+      // Emit choices as a real <ul> so the DOCX exporter can map them to
+      // a numbered Word list (upperLetter). A bare stack of <div>s carries
+      // no semantic signal and gets flattened to plain paragraphs on
+      // export, which is why the previous attempt produced no indent.
+      // The visual appearance in the browser is unchanged: the CSS class
+      // `mcq-choices` supplies the indent the inline styles used to.
+      choiceBlock = `<ul class="mcq-choices" style="list-style:none;margin:3pt 0 0 22pt;padding:0;font-size:10.5pt;line-height:1.5;">
         ${cleanChoices.map((c, i) =>
-          `<div style="margin:2pt 0;">
+          `<li style="margin:2pt 0;">
              <strong style="display:inline-block;width:16pt;">${String.fromCharCode(65 + i)}.</strong>
              ${esc(c)}
-           </div>`
+           </li>`
         ).join('')}
-      </div>`;
+      </ul>`;
     } else if (type === 'true/false') {
       choiceBlock = `<div style="margin:3pt 0 0 22pt;font-size:10.5pt;font-style:italic;color:#555;">
         Write <strong>TRUE</strong> or <strong>FALSE</strong> on the blank.
@@ -18799,8 +18967,12 @@ _renderAssessmentHTML(a, opts = {}) {
         if (idx >= 0) display = String.fromCharCode(65 + idx) + '. ' + cleanChoices[idx];
       }
 
+      // The number column is sized to the widest item number this key
+      // contains, so "1" through "9" get 24pt and "10" through "99" get a
+      // little more. The answer column takes whatever remains.
+      const numColWidth = String(questions.length).length > 1 ? '32pt' : '24pt';
       return `<tr>
-        <td style="border:0.5pt solid #000;padding:3pt 5pt;text-align:center;width:24pt;font-weight:700;">${i + 1}</td>
+        <td style="border:0.5pt solid #000;padding:3pt 5pt;text-align:center;width:${numColWidth};font-weight:700;">${i + 1}</td>
         <td style="border:0.5pt solid #000;padding:3pt 5pt;">${esc(display || '—')}</td>
       </tr>`;
     }).join('');
@@ -18814,7 +18986,8 @@ _renderAssessmentHTML(a, opts = {}) {
         <p style="font-size:9pt;color:#555;text-align:center;margin:0 0 10pt 0;">
           ${esc(a.title || '')} · ${totalPoints} total points
         </p>
-        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+        <table data-col-widths="1,9"
+               style="width:100%;border-collapse:collapse;font-size:10pt;">
           <tbody>${keyRows}</tbody>
         </table>
       </div>`;
@@ -18907,26 +19080,109 @@ async exportAssessmentWord(id) {
 
   // Strip the DepEd letterhead out of the HTML — we rebuild it as native
   // DOCX blocks below so the seal can be embedded as a real image part.
-  const withoutHeader = bodyHTML.replace(
-    /<div class="print-deped-header"[\s\S]*?<\/div>\s*<div class="pdh-line"><\/div>\s*<\/div>/i,
-    ''
+  //
+  // The old regex required `<div class="pdh-line"></div></div>` to appear
+  // back-to-back, which only happens when no title is present. With a title
+  // (the common case) the match failed and the header HTML leaked through
+  // to htmlToDocxBlocks, where the seal <img> was picked up a second time.
+  //
+  // Extracting the assessment-body wrapper is structure-agnostic and always
+  // correct, since _renderAssessmentHTML emits it unconditionally.
+  const bodyMatch = bodyHTML.match(
+    /<div class="assessment-body">([\s\S]*)<\/div>\s*<\/div>\s*$/i
   );
+  const withoutHeader = bodyMatch
+    ? `<div class="assessment-body">${bodyMatch[1]}</div>`
+    : bodyHTML;
 
   const blocks = [];
 
   // ── Letterhead as native DOCX blocks ──
+  // Mirrors the print CSS in _buildDepEdHeader: centred seal, blackletter
+  // heading lines, Roman-caps school block, horizontal rule, then the
+  // document title and subtitle in Times New Roman bold.
   const school = State.schools[0] || {};
+  const cls = State.activeClass || {};
   const sealSrc = Pages._sealDataURLCache || school.depedSeal || '';
+
+  // Letterhead fonts. Word substitutes when the font is not installed;
+  // "Old English Text MT" ships with Office and Windows, so it is the
+  // safest blackletter fallback. Trajan is rarer; when absent Word falls
+  // back to a serif, which is visually close enough.
+  const FONT_BLACKLETTER = 'Old English Text MT';
+  const FONT_TRAJAN      = 'Trajan Pro';
+
+  // Compact line spacing for the letterhead block (matches print's 1.25).
+  const HEADER_LINE = { line: 300, lineRule: 'auto' };
+
   if (sealSrc && sealSrc.startsWith('data:image/')) {
-    blocks.push({ type: 'image', dataURL: sealSrc, widthMM: 27, heightMM: 27 });
+    blocks.push({ type: 'image', dataURL: sealSrc, widthMM: 27, heightMM: 27, align: 'center' });
   }
-  blocks.push({ type: 'p', text: 'Republic of the Philippines', align: 'center' });
-  blocks.push({ type: 'h2', text: 'Department of Education' });
-  if (school.region)   blocks.push({ type: 'p', text: school.region,   align: 'center' });
-  if (school.division) blocks.push({ type: 'p', text: school.division, align: 'center' });
-  if (school.name)     blocks.push({ type: 'p', text: school.name,     align: 'center', bold: true });
-  if (school.address)  blocks.push({ type: 'p', text: school.address,  align: 'center' });
-  blocks.push({ type: 'h1', text: a.title || 'Assessment' });
+  blocks.push({
+    type: 'p', text: 'Republic of the Philippines', align: 'center',
+    fontFace: FONT_BLACKLETTER, size: 12, spacing: HEADER_LINE
+  });
+  blocks.push({
+    type: 'p', text: 'Department of Education', align: 'center',
+    fontFace: FONT_BLACKLETTER, size: 18, spacing: HEADER_LINE
+  });
+  if (school.region) blocks.push({
+    type: 'p', text: school.region, align: 'center',
+    fontFace: FONT_TRAJAN, size: 10, bold: true, allCaps: true, spacing: HEADER_LINE
+  });
+  if (school.division) blocks.push({
+    type: 'p', text: school.division, align: 'center',
+    fontFace: FONT_TRAJAN, size: 10, bold: true, allCaps: true, spacing: HEADER_LINE
+  });
+  if (school.name) blocks.push({
+    type: 'p', text: school.name, align: 'center',
+    fontFace: FONT_TRAJAN, size: 10, bold: true, allCaps: true, spacing: HEADER_LINE
+  });
+  if (school.address) blocks.push({
+    type: 'p', text: school.address, align: 'center',
+    fontFace: FONT_TRAJAN, size: 10, bold: true, allCaps: true, spacing: HEADER_LINE
+  });
+
+  // Horizontal rule — a paragraph that carries a bottom border and no
+  // text. The border line sits directly beneath the last school-block
+  // line, exactly as the print CSS's .pdh-line does.
+  blocks.push({
+    type: 'p', text: '', align: 'center',
+    borderBottom: { sz: 12, space: 1, color: '000000' },
+    spacing: { before: 0, after: 200 }
+  });
+
+  // Document title (matches .pdh-doc-title) — Times New Roman, 14pt,
+  // bold, uppercase.
+  blocks.push({
+    type: 'p',
+    text: (a.title || 'Assessment'),
+    align: 'center',
+    bold: true,
+    allCaps: true,
+    size: 14,
+    fontFace: 'Times New Roman',
+    spacing: { before: 0, after: 80 }
+  });
+
+  // Document subtitle (matches .pdh-doc-subtitle) — Times New Roman,
+  // 11.5pt, bold, showing grade/section/subject/school year.
+  const subtitleParts = [
+    cls.gradeLevel && cls.section ? `${cls.gradeLevel} – ${cls.section}` : cls.gradeLevel,
+    cls.subject || '',
+    cls.schoolYear ? `SY ${cls.schoolYear}` : ''
+  ].filter(Boolean);
+  if (subtitleParts.length) {
+    blocks.push({
+      type: 'p',
+      text: subtitleParts.join(' · '),
+      align: 'center',
+      bold: true,
+      size: 11.5,
+      fontFace: 'Times New Roman',
+      spacing: { before: 0, after: 240 }
+    });
+  }
 
   // ── Exam body ──
   const bodyBlocks = htmlToDocxBlocks(withoutHeader);
@@ -34803,9 +35059,6 @@ _openClassListPrintModal() {
   const learners = State.learners;
   if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
 
-  // A schematic thumbnail per layout. Small enough to sit alongside the
-  // text without competing for attention, large enough to communicate
-  // shape at a glance.
   const layoutThumb = (kind) => {
     const grey = 'var(--border)';
     const ink  = 'var(--text-muted)';
@@ -34845,6 +35098,36 @@ _openClassListPrintModal() {
             <rect x="50" y="${y}" width="18" height="3" rx="1" fill="${ink}" opacity="0.25"/>
           `).join('')}
         </svg>`;
+      case 'attendance-signature':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          <rect x="22" y="3" width="28" height="3" rx="1" fill="${accent}" opacity="0.8"/>
+          <rect x="16" y="9" width="40" height="2" rx="1" fill="${grey}"/>
+          <rect x="16" y="12" width="40" height="2" rx="1" fill="${grey}"/>
+          <rect x="4" y="17" width="64" height="4" rx="1" fill="${ink}" opacity="0.75"/>
+          <rect x="4" y="22" width="35" height="3" rx="1" fill="${accent}" opacity="0.45"/>
+          <rect x="39" y="22" width="29" height="3" rx="1" fill="${accent}" opacity="0.45"/>
+          ${[27, 32, 37, 42, 47].map(y => `
+            <rect x="4" y="${y}" width="5" height="2" rx="1" fill="${grey}"/>
+            <rect x="11" y="${y}" width="26" height="2" rx="1" fill="${grey}"/>
+            <rect x="39" y="${y}" width="29" height="2" rx="1" fill="${grey}" opacity="0.4"/>
+          `).join('')}
+        </svg>`;
+      case 'attendance-guardian':
+        return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
+          <rect x="22" y="3" width="28" height="3" rx="1" fill="${accent}" opacity="0.8"/>
+          <rect x="16" y="9" width="40" height="2" rx="1" fill="${grey}"/>
+          <rect x="16" y="12" width="40" height="2" rx="1" fill="${grey}"/>
+          <rect x="4" y="17" width="64" height="4" rx="1" fill="${ink}" opacity="0.75"/>
+          <rect x="4" y="22" width="24" height="3" rx="1" fill="${accent}" opacity="0.45"/>
+          <rect x="30" y="22" width="18" height="3" rx="1" fill="${accent}" opacity="0.45"/>
+          <rect x="50" y="22" width="18" height="3" rx="1" fill="${accent}" opacity="0.45"/>
+          ${[27, 32, 37, 42, 47].map(y => `
+            <rect x="4" y="${y}" width="5" height="2" rx="1" fill="${grey}"/>
+            <rect x="11" y="${y}" width="17" height="2" rx="1" fill="${grey}"/>
+            <rect x="30" y="${y}" width="18" height="2" rx="1" fill="${grey}" opacity="0.55"/>
+            <rect x="50" y="${y}" width="18" height="2" rx="1" fill="${grey}" opacity="0.55"/>
+          `).join('')}
+        </svg>`;
       default:
         return `<svg viewBox="0 0 72 52" style="width:100%;height:100%;">
           ${row(20, 0.6)}
@@ -34859,6 +35142,8 @@ _openClassListPrintModal() {
     { id: 'with-photos', label: 'With Photos',            desc: 'Includes each learner\'s photo — good for substitutes.', thumb: 'with-photos' },
     { id: 'guardian',    label: 'Guardian Contact Sheet', desc: 'Name + guardian + contact only. For calling parents.', thumb: 'guardian' },
     { id: 'signin',      label: 'Sign-in Sheet',          desc: 'Blank columns for parent signature — meetings or pickups.', thumb: 'signin' },
+    { id: 'attendance-signature', label: 'Attendance — Signature Only', desc: 'Learner names + signature column. For PTA meetings and activities.', thumb: 'attendance-signature' },
+    { id: 'attendance-guardian',  label: 'Attendance — Guardian + Contact', desc: 'Adds guardian name and contact number. For parent meetings and pickups.', thumb: 'attendance-guardian' },
     { id: 'seating',     label: 'Seating Reference',      desc: 'Photo grid — useful for seating charts and wall display.', thumb: 'seating' }
   ];
 
@@ -34867,7 +35152,9 @@ _openClassListPrintModal() {
     size: 'modal-lg',
     body: `
       <p class="text-sm text-muted mb-16">
-        Choose a layout. The preview reflects the current filter in the table view — clear the filter first if you want to print the full class.
+        Choose a layout. The <strong>full class</strong> will be printed — the current filter on the
+        Class List table does not affect the printed output. Clear or adjust the filter first if you
+        want to check your roster.
       </p>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
@@ -34887,7 +35174,44 @@ _openClassListPrintModal() {
         `).join('')}
       </div>
 
+      <div id="cl-print-attendance-fields" style="display:none;margin-bottom:16px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+        <div style="font-size:12px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+          <span style="width:16px;height:16px;flex-shrink:0;display:inline-flex;color:var(--deped-blue);">
+            ${icon('edit')}
+          </span>
+          Activity Details
+        </div>
+        <div class="form-row" style="gap:10px;">
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:11px;">Name of Activity</label>
+            <input type="text" id="cl-print-activity-name" class="form-control"
+                  value="NAME OF ACTIVITY HERE" placeholder="e.g. PTA Meeting">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label style="font-size:11px;">Date</label>
+            <input type="date" id="cl-print-activity-date" class="form-control"
+                  value="${Utils.todayISO()}">
+            <small class="text-muted" id="cl-print-activity-date-preview"
+                   style="display:block;margin-top:4px;font-size:11px;"></small>
+          </div>
+        </div>
+          <label class="auth-check" id="cl-print-include-contact-wrap" style="display:none;margin-top:12px;">
+            <input type="checkbox" id="cl-print-include-contact" checked>
+            <span>Include Contact Number column</span>
+          </label>
+      </div>
+
       <div class="divider"></div>
+
+      <div class="form-row mb-12">
+        <div class="form-group mb-0" style="max-width: 200px;">
+          <label style="font-size:11px;">Orientation</label>
+          <select class="form-control" id="cl-print-orientation">
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
+          </select>
+        </div>
+      </div>
 
       <div class="grid grid-2 mb-12">
         <label class="auth-check"><input type="checkbox" id="cl-print-header" checked> <span>Include school header</span></label>
@@ -34907,23 +35231,61 @@ _openClassListPrintModal() {
     `
   });
 
-  // Visual selection for the layout cards
-  m.overlay.querySelectorAll('.cl-print-option').forEach(card => {
-    card.addEventListener('click', () => {
-      m.overlay.querySelectorAll('.cl-print-option').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-      card.querySelector('input').checked = true;
+    m.overlay.querySelectorAll('.cl-print-option').forEach(card => {
+      card.addEventListener('click', () => {
+        m.overlay.querySelectorAll('.cl-print-option').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+        card.querySelector('input').checked = true;
+
+        const layoutId = card.dataset.printLayout;
+        const isAttendance = (layoutId === 'attendance-signature' || layoutId === 'attendance-guardian');
+        
+        const fields = m.overlay.querySelector('#cl-print-attendance-fields');
+        if (fields) fields.style.display = isAttendance ? '' : 'none';
+        
+        // NEW: Show the contact toggle only for the Guardian layout
+        const contactWrap = m.overlay.querySelector('#cl-print-include-contact-wrap');
+        if (contactWrap) contactWrap.style.display = (layoutId === 'attendance-guardian') ? '' : 'none';
+      });
     });
-  });
-  m.overlay.querySelector('.cl-print-option[data-print-layout="standard"]').classList.add('active');
+
+  // Paint the initial active state so the selection is visible from the start
+  const defaultCard = m.overlay.querySelector('.cl-print-option[data-print-layout="standard"]');
+  if (defaultCard) defaultCard.classList.add('active');
+
+  /* ── Attendance date live preview ──────────────────────────────────────
+     The <input type="date"> stores an ISO value ("2026-10-17"), which is
+     not what gets printed. Show the teacher the exact string that will
+     land on the sheet — and call out the "DATE HERE" fallback when blank. */
+  const dateInput   = m.overlay.querySelector('#cl-print-activity-date');
+  const datePreview = m.overlay.querySelector('#cl-print-activity-date-preview');
+  const paintDatePreview = () => {
+    if (!dateInput || !datePreview) return;
+    datePreview.textContent = dateInput.value
+      ? 'Will print as: ' + Utils.formatDate(dateInput.value, { year:'numeric', month:'long', day:'numeric' })
+      : 'Blank — will print as "DATE HERE"';
+  };
+  if (dateInput) {
+    dateInput.addEventListener('input',  paintDatePreview);
+    dateInput.addEventListener('change', paintDatePreview);
+    paintDatePreview();
+  }
+  /* ──────────────────────────────────────────────────────────────────── */
 
   m.overlay.querySelector('#cl-do-print').onclick = () => {
-    const layout = m.overlay.querySelector('input[name="cl-print-layout"]:checked').value;
+    const checkedInput = m.overlay.querySelector('input[name="cl-print-layout"]:checked');
+    const layout = checkedInput ? checkedInput.value : 'standard';
+    const isAttendance = (layout === 'attendance-signature' || layout === 'attendance-guardian');
     const opts = {
       includeHeader:    m.overlay.querySelector('#cl-print-header').checked,
       includeSignature: m.overlay.querySelector('#cl-print-signature').checked,
       includeDate:      m.overlay.querySelector('#cl-print-date').checked,
-      groupBySex:       m.overlay.querySelector('#cl-print-groupsex').checked
+      groupBySex:       m.overlay.querySelector('#cl-print-groupsex').checked,
+      activityName:     isAttendance ? (m.overlay.querySelector('#cl-print-activity-name')?.value || '') : '',
+      activityDate:     isAttendance ? (m.overlay.querySelector('#cl-print-activity-date')?.value || '') : '',
+      orientation:      m.overlay.querySelector('#cl-print-orientation')?.value || 'portrait',
+      // NEW: Pass the contact toggle state
+      includeContact:   m.overlay.querySelector('#cl-print-include-contact') ? m.overlay.querySelector('#cl-print-include-contact').checked : true
     };
     m.close();
     Pages.printClassList(layout, opts);
@@ -34973,23 +35335,45 @@ exportClassListCSV() {
   App.logActivity('Class list exported as CSV (' + learners.length + ' learners)', 'Reports');
   UI.toast(`Exported ${learners.length} learners`, 'success');
 },
+
 async printClassList(layout = 'standard', opts = {}) {
   const cls = State.activeClass;
   if (!cls) { UI.toast('No class selected.', 'warning'); return; }
   const learners = State.learners;
   if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
-  if (!(await Pages._ensureSchoolProfileReady())) return;
 
   const o = Object.assign({
-    includeHeader: true, includeSignature: true,
-    includeDate: true, groupBySex: false
+    includeHeader: true,
+    includeSignature: true,
+    includeDate: true,
+    groupBySex: false,
+    orientation: 'portrait',
+    activityName: '',
+    activityDate: ''
   }, opts || {});
+
+  // Attendance layouts have their own renderer and their own profile check.
+  // Route BEFORE the shared guard so the teacher is only prompted once.
+  if (layout === 'attendance-signature' || layout === 'attendance-guardian') {
+    return Pages._printAttendanceSheet(layout, o);
+  }
+
+  if (!(await Pages._ensureSchoolProfileReady())) return;
+
+  const styleId = 'class-list-print-page';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = `@page { size: A4 ${o.orientation}; margin: 1cm; }`;
+  document.head.appendChild(st);
 
   const school  = State.schools[0] || {};
   const adviser = Licensing.getReportSignatory(cls) || (State.currentUser && State.currentUser.fullName) || '';
   const sy = cls.schoolYear || State.schoolYear;
 
-  // Sort: default last name, optional sex grouping
   const sorted = learners.slice().sort((a, b) =>
     ((a.lastName || '') + (a.firstName || '')).toLowerCase()
       .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase())
@@ -35022,7 +35406,14 @@ async printClassList(layout = 'standard', opts = {}) {
     ? `<div style="font-size:8pt;text-align:right;margin-bottom:6px;">Printed: ${Utils.formatDate(Utils.todayISO(), { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>`
     : '';
 
-  // ---- Build the table body per layout ----
+  /* ----------------------------------------------------------------------
+     buildRows(list)
+     Numbers are always relative to the list passed in. When grouping by
+     sex, each group is numbered starting from 1 (which is how DepEd
+     expects class lists to appear). The previous code called
+     buildRows([l]) per learner — always passing a 1-element array —
+     which locked the number column at "1" for every row.
+     ---------------------------------------------------------------------- */
   const buildRows = (list) => {
     if (layout === 'with-photos' || layout === 'seating') {
       return list.map((l, i) => {
@@ -35088,17 +35479,16 @@ async printClassList(layout = 'standard', opts = {}) {
   };
 
   const headers = {
-    standard:  ['#', 'Name', 'LRN', 'Sex', 'Age'],
-    detailed:  ['#', 'Name', 'LRN', 'Sex', 'Age', 'Guardian', 'Contact', 'Status'],
+    standard:      ['#', 'Name', 'LRN', 'Sex', 'Age'],
+    detailed:      ['#', 'Name', 'LRN', 'Sex', 'Age', 'Guardian', 'Contact', 'Status'],
     'with-photos': ['#', 'Photo', 'Name', 'LRN', 'Sex', 'Age'],
-    seating:   ['#', 'Photo', 'Name', 'LRN', 'Sex', 'Age'],
-    guardian:  ['#', 'Name', 'Guardian', 'Parent Contact', 'Learner Contact', 'Signature'],
-    signin:    ['#', 'Name', 'Time In', 'Time Out', 'Signature', 'Remarks']
+    seating:       ['#', 'Photo', 'Name', 'LRN', 'Sex', 'Age'],
+    guardian:      ['#', 'Name', 'Guardian', 'Parent Contact', 'Learner Contact', 'Signature'],
+    signin:        ['#', 'Name', 'Time In', 'Time Out', 'Signature', 'Remarks']
   };
   const colHTML = (headers[layout] || headers.standard)
-      .map(h => `<th>${Utils.esc(h)}</th>`).join('');
-    
-    // Force a fixed width on the photo column so it never collapses in print
+    .map(h => `<th>${Utils.esc(h)}</th>`).join('');
+
   const needsPhotoCol = layout === 'with-photos' || layout === 'seating';
   const colGroup = needsPhotoCol
     ? `<colgroup>
@@ -35113,27 +35503,17 @@ async printClassList(layout = 'standard', opts = {}) {
 
   let bodyHTML;
   if (o.groupBySex && layout !== 'signin' && layout !== 'guardian') {
-    let runningIdx = 0;
-    const blockFor = (label, list, bg) => {
-      if (!list.length) return '';
-      const rows = list.map((l, i) => {
-        runningIdx++;
-        // Rebuild a single row (a small hack to reuse the same layout) — simpler
-        // is to regenerate per-list; but we already have running counts built in.
-        return null;
-      });
-      // The buildRows helper resets its index per call, so we render as one list
-      // with a section header row, using the sub-list's own index offset.
-      const sectionHeader = `<tr><td colspan="${(headers[layout] || headers.standard).length}" style="background:${bg};font-weight:800;text-align:center;letter-spacing:1px;">${Utils.esc(label)} · ${list.length}</td></tr>`;
-      // Simple incremental index
-      return sectionHeader + list.map((l, i) => {
-        const inner = buildRows([l]).replace(/<tr>/, '').replace(/<\/tr>/, '');
-        return `<tr>${inner}</tr>`;
-      }).join('');
-    };
-    bodyHTML = blockFor('MALE', maleList, '#dbe7fb')
-             + blockFor('FEMALE', femaleList, '#fce7f3')
-             + blockFor('UNRECORDED', otherList, '#fef3c7');
+    const sectionHeader = (label, list, bg) => list.length === 0
+      ? ''
+      : `<tr><td colspan="${(headers[layout] || headers.standard).length}"
+               style="background:${bg};font-weight:800;text-align:center;letter-spacing:1px;padding:6px;">
+           ${Utils.esc(label)} · ${list.length}
+         </td></tr>`;
+
+    bodyHTML =
+      sectionHeader('MALE',   maleList,   '#dbe7fb') + (maleList.length   ? buildRows(maleList)   : '') +
+      sectionHeader('FEMALE', femaleList, '#fce7f3') + (femaleList.length ? buildRows(femaleList) : '') +
+      sectionHeader('UNRECORDED SEX', otherList, '#fef3c7') + (otherList.length  ? buildRows(otherList)  : '');
   } else {
     bodyHTML = buildRows(sorted);
   }
@@ -35152,24 +35532,184 @@ async printClassList(layout = 'standard', opts = {}) {
 
   App.logActivity(`Class list printed (${layout}, ${learners.length} learners)`, 'Reports');
 
-  // Give the browser time to decode every base64 image before the
-  // print dialog opens — otherwise photos appear blank in the preview.
-  const images = document.querySelectorAll('#print-area img');
-  const waitForImages = Array.from(images).map(img =>
-    img.complete
-      ? Promise.resolve()
-      : new Promise(res => { img.onload = img.onerror = () => res(); })
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    // Clear both the print target AND the page-geometry style so the next
+    // print job (SF5, SF9, attendance sheet, …) does not inherit this run's
+    // @page rule.
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
+  });
+},
+/* ============================================================================
+   ATTENDANCE SHEET — activity sign-in sheet (Signature Only / Guardian + Contact)
+   ----------------------------------------------------------------------------
+   Two printable variants:
+     • attendance-signature → Learner name + signature
+     • attendance-guardian  → Learner name + guardian + contact + signature
+   The "Name of Activity" and "Date" fields are teacher-editable.
+   ============================================================================ */
+async _printAttendanceSheet(layout, opts) {
+  opts = opts || {};
+
+  const cls = State.activeClass;
+  if (!cls) return;
+  const learners = State.learners;
+  if (!learners.length) { UI.toast('No learners to print.', 'warning'); return; }
+  if (!(await Pages._ensureSchoolProfileReady())) return;
+
+  const isGuardian   = layout === 'attendance-guardian';
+  const activityName = String(opts.activityName || '').trim() || 'NAME OF ACTIVITY HERE';
+  const activityDate = String(opts.activityDate || '').trim() || 'DATE HERE';
+  const sy = cls.schoolYear || State.schoolYear;
+  const groupBySex = !!opts.groupBySex;
+  
+  // NEW: Handle contact column visibility
+  const includeContact = isGuardian && (opts.includeContact !== false);
+
+  // "GRADE 8-ORTINERO"
+  const gradeNum = String(cls.gradeLevel || '').replace(/^grade\s+/i, '').trim();
+  const gradeSection = `GRADE ${gradeNum}-${String(cls.section || '').trim()}`.toUpperCase();
+
+  const sorted = learners.slice().sort((a, b) =>
+    ((a.lastName || '') + ' ' + (a.firstName || '')).toLowerCase()
+      .localeCompare(((b.lastName || '') + ' ' + (b.firstName || '')).toLowerCase())
   );
 
-  Promise.all(waitForImages).then(() => {
-    // Extra paint frame so Firefox/Safari actually lay out the decoded images
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print();
-        // Clear only after the print dialog closes AND the DOM has settled
-        setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 1500);
-      });
+  // Row builder (blank guardian column, optional contact column)
+  const buildRow = (l, i) => {
+    const name = Utils.lastNameFirst(l).toUpperCase();
+    return `<tr>
+      <td class="att-num">${i + 1}.</td>
+      <td class="att-name">${Utils.esc(name)}</td>
+      ${isGuardian ? `
+        <td class="att-guardian"></td> 
+        ${includeContact ? `<td class="att-contact">${Utils.esc(l.parentContact || '')}</td>` : ''}
+      ` : ''}
+      <td class="att-signature"></td>
+    </tr>`;
+  };
+
+  let rowsHTML;
+  if (groupBySex) {
+    const males   = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+    const females = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+    const others  = sorted.filter(l => {
+      const n = Utils.normalizeSex(l.sex);
+      return n !== 'Male' && n !== 'Female';
     });
+    
+    // NEW: Dynamically adjust colSpan based on whether contact is included
+    const colCount = isGuardian ? (includeContact ? 5 : 4) : 3;
+    
+    const section = (label, bg) =>
+      `<tr><td colspan="${colCount}" style="background:${bg};font-weight:800;text-align:center;padding:6px;letter-spacing:1px;">
+         ${label}
+       </td></tr>`;
+    rowsHTML =
+      (males.length   ? section('MALE',           '#dbe7fb') + males.map(buildRow).join('')   : '') +
+      (females.length ? section('FEMALE',         '#fce7f3') + females.map(buildRow).join('') : '') +
+      (others.length  ? section('UNRECORDED SEX', '#fef3c7') + others.map(buildRow).join('')  : '');
+  } else {
+    rowsHTML = sorted.map(buildRow).join('');
+  }
+
+  // Clean single-tier header row
+  // Clean single-tier header row
+  const theadHTML = `
+    <thead>
+      <tr>
+        <th class="att-num-head">#</th>
+        <th class="att-name-head">Name of Learner</th>
+        ${isGuardian ? `
+          <th class="att-guardian-head">Parent/Guardian</th>
+          ${includeContact ? `<th class="att-contact-head">Contact Number</th>` : ''}
+        ` : ''}
+        <th class="att-signature-head">Signature</th>
+      </tr>
+    </thead>`;
+
+  // Inject print CSS scoped to this layout
+  const styleId = 'attendance-sheet-print-css';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = `
+    @page { size: A4 portrait; margin: 1.2cm 1.5cm; }
+
+    .print-attendance-sheet {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #000;
+      font-size: 10.5pt;
+    }
+
+    /* ---- Table ---- */
+    .print-attendance-sheet table.attendance-sheet-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10pt;
+      margin-top: 4px;
+    }
+    .print-attendance-sheet table.attendance-sheet-table th,
+    .print-attendance-sheet table.attendance-sheet-table td {
+      border: 1px solid #000;
+      padding: 4px 8px;
+      vertical-align: middle;
+    }
+    .print-attendance-sheet table.attendance-sheet-table thead th {
+      text-align: center;
+      font-weight: 700;
+      background: #fff;
+    }
+
+    .print-attendance-sheet .att-num-head  { width: 6%; }
+    .print-attendance-sheet .att-name-head { width: ${isGuardian ? '34%' : '60%'}; }
+
+    .print-attendance-sheet .att-num  { width: 6%; text-align: center; font-weight: 700; }
+    .print-attendance-sheet .att-name { text-align: left; font-weight: 700; }
+
+    .print-attendance-sheet .att-guardian { width: 22%; text-align: left; font-size: 9.5pt; }
+    .print-attendance-sheet .att-contact  { width: 16%; text-align: left; font-size: 9.5pt; }
+    .print-attendance-sheet .att-signature,
+    .print-attendance-sheet .att-signature-head { width: ${isGuardian ? '16%' : '28%'}; }
+
+    .print-attendance-sheet .att-guardian-head { width: 22%; }
+    .print-attendance-sheet .att-contact-head  { width: 16%; }
+
+    .print-attendance-sheet table.attendance-sheet-table tbody tr { height: 26px; }
+  `;
+  document.head.appendChild(st);
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="print-attendance-sheet">
+      ${Pages._buildDepEdHeader({
+        title: 'ATTENDANCE',
+        subtitle: `${activityName} | ${activityDate} | ${gradeSection} | SY ${sy}`
+      })}
+      <table class="attendance-sheet-table" style="margin-top: 14px;">
+        ${theadHTML}
+        <tbody>${rowsHTML}</tbody>
+      </table>
+      
+      <!-- ADDED FOOTER HERE -->
+      ${Pages._buildDepEdFooter()}
+      
+    </div>`;
+
+  App.logActivity(`Attendance sheet printed (${layout})`, 'Reports');
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1500);
   });
 },
 async masterlist(root) {
@@ -39952,6 +40492,827 @@ merges.push(`A${rows.length}:L${rows.length}`);
   } catch (e) {
     console.error('[SF8 export]', e);
     UI.toast('SF8 export failed: ' + (e.message || ''), 'error', 6000);
+  }
+},
+
+/* ============================================================================
+   SF5 — SCHOOL FORM 5
+   Report on Promotion and Learning Progress & Achievement
+   ----------------------------------------------------------------------------
+   Landscape A4, matching the official DepEd Central Office template.
+   Left:  per-learner register (LRN · Name · Gen Ave · Action · Failed Areas)
+   Right: Summary table (STATUS × MALE / FEMALE / TOTAL)
+   ============================================================================ */
+async sf5(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No class selected',
+      message: 'Create or select a class first.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+  if (!State.learners.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No learners in this class',
+      message: 'Add learners before preparing the SF5.',
+      actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    return;
+  }
+
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+  const policy  = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
+
+  // Curriculum + Division Representative — both editable via the Signatories modal.
+  const curriculum  = await Pages._sf5ResolveCurriculum(cls, policy);
+  const divisionRep = await Pages._sf5ResolveDivisionRep();
+
+  // ── Per-learner data + summary aggregates ──
+  const learnerData = await Pages._sf5ComputeLearnerData(cls, policy);
+  const summary     = Pages._sf5Summary(learnerData);
+
+  // ── Validation ──
+  const errors = [], warnings = [];
+  if (!school.name)     errors.push('School Name is missing (Settings → School Profile).');
+  if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
+  if (!cls.gradeLevel || !cls.section) errors.push('Class grade level / section is incomplete.');
+
+  if (!school.region)     warnings.push('Region is missing.');
+  if (!school.division)   warnings.push('Division is missing.');
+  if (!school.schoolHead) warnings.push('School Head name is missing.');
+  if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing.');
+
+  const graded = learnerData.filter(d => d.average !== null);
+  if (!graded.length) {
+    warnings.push('No finalized grades found. All learners will appear as RETAINED until at least one learning area is finalized in the Gradebook.');
+  } else if (graded.length < learnerData.length) {
+    warnings.push(`${learnerData.length - graded.length} learner(s) have no finalized grades and are shown as RETAINED.`);
+  }
+
+  // ── Render ──
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>SF5 — Report on Promotion and Learning Progress &amp; Achievement</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-outline" id="sf5-switch">${icon('users')} Switch Class</button>
+        <button class="btn btn-outline" id="sf5-signatories">${icon('edit')} Signatories</button>
+        <button class="btn btn-outline" id="sf5-export" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
+        <button class="btn btn-primary" id="sf5-print" ${errors.length ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
+      </div>
+    </div>
+
+    <div class="alert alert-warning mb-16" style="align-items:flex-start;">
+      ${icon('alert')}
+      <div>
+        <strong>Verify before submission.</strong> KlazAssist reproduces the official DepEd SF5 layout.
+        The <em>Action Taken</em> column is derived from finalized term grades across every learning area
+        in this section. Learners who completed Summer Remedial Class and passed the Recomputed Final Grade
+        appear as <strong>CONDITIONAL</strong>; learners who failed more than two areas appear as
+        <strong>RETAINED</strong>.
+      </div>
+    </div>
+
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+
+    <div class="sf5-document" id="sf5-document">
+      ${Pages._sf5BuildDocumentHTML(cls, school, teacher, curriculum, learnerData, summary, policy, divisionRep)}
+    </div>
+  `;
+
+  root.querySelector('#sf5-switch').onclick       = () => App.openClassSelector();
+  root.querySelector('#sf5-signatories').onclick  = () => Pages._sf5EditSignatoriesModal(cls, policy);
+  root.querySelector('#sf5-export').onclick       = () => Pages._sf5ExportXLSX(cls, school, teacher, curriculum, learnerData, summary, policy);
+  root.querySelector('#sf5-print').onclick        = () => Pages._sf5Print(cls, school, teacher, curriculum, learnerData, summary, policy);
+},
+
+/* ---- SF5 · resolve curriculum label ---- */
+async _sf5ResolveCurriculum(cls, policy) {
+  try {
+    const saved = await DB.getSetting('sf5Curriculum', null);
+    if (saved && String(saved).trim()) return String(saved).trim();
+  } catch (e) { /* fall through */ }
+
+  // Auto-detect from the school year.
+  const syStart = parseInt(String(cls.schoolYear || State.schoolYear).slice(0, 4), 10);
+  if (Number.isFinite(syStart) && syStart >= 2024) return 'MATATAG CURRICULUM';
+  return 'K TO 12 BASIC EDUCATION CURRICULUM';
+},
+
+async _sf5EditCurriculumModal(cls, policy) {
+  const current = await Pages._sf5ResolveCurriculum(cls, policy);
+  UI.prompt({
+    title: 'Curriculum Label',
+    message: 'Printed at the top-right of the SF5. Auto-detected from the school year — override here if your Division uses a different label.',
+    placeholder: 'e.g. MATATAG CURRICULUM',
+    value: current,
+    confirmText: 'Save',
+    onConfirm: async (v) => {
+      const clean = String(v || '').trim();
+      if (!clean) { UI.toast('Curriculum label cannot be empty.', 'warning'); return; }
+      await DB.setSetting('sf5Curriculum', clean);
+      App.logAction && App.logActivity('SF5 curriculum label updated: ' + clean, 'Reports');
+      App.navigate('sf5');
+      UI.toast('Curriculum label updated', 'success');
+    }
+  });
+},
+/* ---- SF5 · resolve Division Representative name ---- */
+async _sf5ResolveDivisionRep() {
+  try {
+    const v = await DB.getSetting('sf5DivisionRepresentative', null);
+    return v ? String(v).trim() : '';
+  } catch (e) { return ''; }
+},
+
+async _sf5EditSignatoriesModal(cls, policy) {
+  const currentRep   = await Pages._sf5ResolveDivisionRep();
+  const currentCurr  = await Pages._sf5ResolveCurriculum(cls, policy);
+
+  const m = UI.modal({
+    title: 'SF5 Signatories & Curriculum',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-info mb-16">
+        ${icon('info')}
+        <div>
+          These appear at the top and bottom of the SF5.
+          They are stored on this device only.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="sf5-sig-curriculum">Curriculum Label</label>
+        <input class="form-control" id="sf5-sig-curriculum"
+               value="${Utils.attr(currentCurr)}"
+               placeholder="e.g. MATATAG CURRICULUM">
+        <small class="text-muted">Printed at the top-right, below the School Year.</small>
+      </div>
+
+      <div class="form-group">
+        <label for="sf5-sig-divrep">Division Representative</label>
+        <input class="form-control" id="sf5-sig-divrep"
+               value="${Utils.attr(currentRep)}"
+               placeholder="e.g. DR. ROBERT S. ABLAO">
+        <small class="text-muted">Signs the "REVIEWED BY" block at the bottom of the SF5.</small>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-outline" data-cancel>Cancel</button>
+      <button class="btn btn-primary" id="sf5-sig-save">${icon('save')} Save</button>
+    `
+  });
+
+  m.overlay.querySelector('[data-cancel]').onclick = m.close;
+  m.overlay.querySelector('#sf5-sig-save').onclick = async () => {
+    const curr = m.overlay.querySelector('#sf5-sig-curriculum').value.trim();
+    const rep  = m.overlay.querySelector('#sf5-sig-divrep').value.trim();
+
+    if (!curr) { UI.toast('Curriculum label cannot be empty.', 'warning'); return; }
+
+    await DB.setSetting('sf5Curriculum', curr);
+    await DB.setSetting('sf5DivisionRepresentative', rep);
+    App.logActivity('SF5 signatories updated', 'Reports');
+    m.close();
+    App.navigate('school-forms');
+    UI.toast('Saved', 'success');
+  };
+},
+
+_sf5BuildDocumentHTML(cls, school, teacher, curriculum, learnerData, summary, policy, divisionRep) {
+  const esc = Utils.esc;
+  const req = (v) => v && String(v).trim() ? esc(v) : '';
+  const sy  = cls.schoolYear || State.schoolYear;
+
+  const progress = Pages._sf5ProficiencySummary(learnerData);
+
+  /* Enrolment counts by sex — the same basis used by the SUMMARY TABLE's
+     "Number of Learners" column. Learners with unrecorded sex count toward
+     COMBINED only, so TOTAL MALE + TOTAL FEMALE can be < COMBINED. */
+  const totalMale   = learnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Male').length;
+  const totalFemale = learnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Female').length;
+  const combined    = learnerData.length;
+
+  const actionFor = (st) => {
+    if (st === 'conditional') return { label: 'CONDITIONAL', cls: 'sf5-action-conditional' };
+    if (st === 'retained')    return { label: 'RETAINED',    cls: 'sf5-action-retained' };
+    return                            { label: 'PROMOTED',    cls: 'sf5-action-promoted' };
+  };
+
+  /* Sort learners by LAST NAME, then FIRST NAME as a tiebreak. */
+  const sortedLearnerData = learnerData.slice().sort((a, b) => {
+    const la = (a.learner.lastName  || '').toLowerCase();
+    const lb = (b.learner.lastName  || '').toLowerCase();
+    if (la !== lb) return la.localeCompare(lb);
+    const fa = (a.learner.firstName || '').toLowerCase();
+    const fb = (b.learner.firstName || '').toLowerCase();
+    return fa.localeCompare(fb);
+  });
+
+  const males   = sortedLearnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Male');
+  const females = sortedLearnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Female');
+  const others  = sortedLearnerData.filter(d => {
+    const s = Utils.normalizeSex(d.learner.sex);
+    return s !== 'Male' && s !== 'Female';
+  });
+
+  const renderLearnerRow = (d) => {
+    const action = actionFor(d.promotion.status);
+    const failed = (d.failedAreas || []).join(', ');
+    return `<tr>
+      <td class="c-lrn">${esc(d.learner.lrn || '')}</td>
+      <td class="c-name">${esc(Utils.lastNameFirst(d.learner).toUpperCase())}</td>
+      <td class="c-avg">${d.average !== null ? d.average : ''}</td>
+      <td class="c-action ${action.cls}">${action.label}</td>
+      <td class="c-didnot">${esc(failed)}</td>
+    </tr>`;
+  };
+
+  const totalRow = (label, count) => `<tr class="sf5-total-row">
+    <td class="c-lrn"></td>
+    <td class="c-name"><strong>${esc(label)}</strong></td>
+    <td class="c-avg"><strong>${count}</strong></td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  /* Body composition:
+       male rows  →  TOTAL MALE
+       female rows → TOTAL FEMALE
+       other rows →  COMBINED
+     Total rows always render, even when their block is empty. */
+  const learnerRowsHTML = learnerData.length === 0
+    ? `<tr><td colspan="5" class="sf5-empty">No learners in this class.</td></tr>`
+    : (
+        males.map(renderLearnerRow).join('')   +
+        totalRow('TOTAL MALE',   totalMale)    +
+        females.map(renderLearnerRow).join('') +
+        totalRow('TOTAL FEMALE', totalFemale)  +
+        others.map(renderLearnerRow).join('')  +
+        totalRow('COMBINED',     combined)
+      );
+
+  const summaryRow = (label, key) => {
+    const s = summary[key];
+    return `<tr>
+      <td class="c-status">${esc(label)}</td>
+      <td class="c-num">${s.male}</td>
+      <td class="c-num">${s.female}</td>
+      <td class="c-num sf5-summary-total">${s.total}</td>
+    </tr>`;
+  };
+
+  const progressRow = (label, key) => {
+    const s = progress[key];
+    return `<tr>
+      <td class="c-status">${esc(label)}</td>
+      <td class="c-num">${s.male}</td>
+      <td class="c-num">${s.female}</td>
+      <td class="c-num sf5-summary-total">${s.total}</td>
+    </tr>`;
+  };
+
+  return `
+    <div class="sf5-title-block">
+      <div class="sf5-main-title">School Form 5 (SF 5) Report on Promotion and Learning Progress &amp; Achievement</div>
+      <div class="sf5-sub-title">Revised to conform with the instructions of DepEd Order 8, s. 2015</div>
+    </div>
+
+    <table class="sf5-meta-table">
+      <tr>
+        <td class="sf5-lbl">Region</td>
+        <td class="sf5-val">${req(school.region) || ''}</td>
+        <td class="sf5-lbl">Division</td>
+        <td class="sf5-val">${req(school.division) || ''}</td>
+        <td class="sf5-lbl">District</td>
+        <td class="sf5-val">${req(school.district) || ''}</td>
+      </tr>
+      <tr>
+        <td class="sf5-lbl">School ID</td>
+        <td class="sf5-val">${req(school.schoolId) || ''}</td>
+        <td class="sf5-lbl">School Year</td>
+        <td class="sf5-val">${esc(sy)}</td>
+        <td class="sf5-lbl">Curriculum</td>
+        <td class="sf5-val">${esc(curriculum)}</td>
+      </tr>
+      <tr>
+        <td class="sf5-lbl">School Name</td>
+        <td class="sf5-val" colspan="3">${req(school.name) || ''}</td>
+        <td class="sf5-lbl">Grade &amp; Section</td>
+        <td class="sf5-val">${esc(cls.gradeLevel)} – ${esc(cls.section)}</td>
+      </tr>
+    </table>
+
+    <div class="sf5-body">
+      <div class="sf5-learners-wrap">
+        <table class="sf5-learners-table">
+          <thead>
+            <tr>
+              <th class="c-lrn">LRN</th>
+              <th class="c-name">LEARNER'S NAME<br>(Last Name, First Name, Middle Name)</th>
+              <th class="c-avg">GENERAL AVERAGE<br>(Whole numbers for non-honor)</th>
+              <th class="c-action">ACTION TAKEN: PROMOTED, CONDITIONAL, or RETAINED</th>
+              <th class="c-didnot">Did Not Meet Expectations of the ff. Learning Area/s as of end of current School Year</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${learnerRowsHTML}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="sf5-summary-wrap">
+        <table class="sf5-summary-table">
+          <thead>
+            <tr><th colspan="4" class="sf5-summary-title">SUMMARY TABLE</th></tr>
+            <tr>
+              <th class="c-status">STATUS</th>
+              <th class="c-num">MALE</th>
+              <th class="c-num">FEMALE</th>
+              <th class="c-num">TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${summaryRow('PROMOTED',     'promoted')}
+            ${summaryRow('*Conditional', 'conditional')}
+            ${summaryRow('RETAINED',     'retained')}
+          </tbody>
+        </table>
+
+        <table class="sf5-summary-table sf5-progress-table">
+          <thead>
+            <tr><th colspan="4" class="sf5-summary-title">
+              LEARNING PROGRESS AND ACHIEVEMENT<br>
+              <span class="sf5-progress-note">(Based on Learners' General Average)</span>
+            </th></tr>
+            <tr>
+              <th class="c-status">Descriptors &amp; Grading Scale</th>
+              <th class="c-num">MALE</th>
+              <th class="c-num">FEMALE</th>
+              <th class="c-num">TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${progressRow('Outstanding\n( 90 -100)',                    'outstanding')}
+            ${progressRow('Very Satisfactory\n( 85 -89)',               'verySatisfactory')}
+            ${progressRow('Satisfactory\n( 80 -84)',                    'satisfactory')}
+            ${progressRow('Fairly Satisfactory\n( 75 -79)',             'fairlySatisfactory')}
+            ${progressRow('Did Not Meet Expectations\n( 74 and below)', 'didNotMeet')}
+          </tbody>
+        </table>
+
+        <div class="sf5-signatories">
+          <div class="sf5-sign-block">
+            <div class="sf5-sign-heading">PREPARED BY:</div>
+            <div class="sf5-sign-name">${req(Licensing.getReportSignatory(cls)) || ''}</div>
+            <div class="sf5-sign-line"></div>
+            <div class="sf5-sign-role">Class Adviser</div>
+            <div class="sf5-sign-subrole">(Name and Signature)</div>
+          </div>
+
+          <div class="sf5-sign-block">
+            <div class="sf5-sign-heading">CERTIFIED CORRECT &amp; SUBMITTED:</div>
+            <div class="sf5-sign-name">${req(school.schoolHead) || ''}</div>
+            <div class="sf5-sign-line"></div>
+            <div class="sf5-sign-role">School Head</div>
+            <div class="sf5-sign-subrole">(Name and Signature)</div>
+          </div>
+
+          <div class="sf5-sign-block">
+            <div class="sf5-sign-heading">REVIEWED BY:</div>
+            <div class="sf5-sign-name">${req(divisionRep) || ''}</div>
+            <div class="sf5-sign-line"></div>
+            <div class="sf5-sign-role">Division Representative</div>
+            <div class="sf5-sign-subrole">(Name and Signature)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+},
+
+/* ---- SF5 · per-learner computation ---- */
+async _sf5ComputeLearnerData(cls, policy) {
+  const cohortSubjects = await Pages._findCohortSubjects(cls);
+  const passing = policy.passingGrade || 75;
+
+  // Load each subject's term grades once
+  const tgBySubject = {};
+  for (const s of cohortSubjects) {
+    try { tgBySubject[s.id] = await DB.getAllByIndex('termGrades', 'classId', s.id); }
+    catch (e) { tgBySubject[s.id] = []; }
+  }
+
+  // SF9 records for remedial marks
+  const sf9ByLearner = {};
+  try {
+    const all = await DB.getAllByIndex('sf9Records', 'classId', cls.id);
+    all.forEach(r => { sf9ByLearner[r.learnerId] = r; });
+  } catch (e) { /* optional */ }
+
+  return State.learners.map(l => {
+    // Final grade per learning area = mean of its finalized term grades.
+    const finalGrades = {};
+    for (const s of cohortSubjects) {
+      const tgs = (tgBySubject[s.id] || []).filter(t =>
+        t.learnerId === l.id && t.status === 'finalized'
+      );
+      const vals = tgs.map(t => Number(t.reportedGrade)).filter(n => !isNaN(n) && n > 0);
+      if (vals.length) {
+        finalGrades[s.subject || 'Untitled'] = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+      }
+    }
+
+    // Failed areas for the "Did Not Meet Expectations" column: any area whose
+    // FINAL grade is below the passing threshold, regardless of SRC. This
+    // matches how the DepEd template reads ("as of end of current School Year").
+    const failedAreas = Object.entries(finalGrades)
+      .filter(([, g]) => g < passing)
+      .map(([area]) => area);
+
+    // Remedial marks (from SF9) inform the promotion status.
+    const sf9 = sf9ByLearner[l.id] || null;
+    const remedialMarks = (sf9 && sf9.remedialMarks) ? sf9.remedialMarks : null;
+
+    const promotion = Object.keys(finalGrades).length
+      ? GradingEngine.getPromotionStatus(finalGrades, policy, remedialMarks)
+      : { status: 'retained', label: 'Retained', detail: 'No finalized grades', failedAreas: [] };
+
+    // General average — exclude MAPEH children so they don't double-count.
+    const avgAreas = Object.entries(finalGrades)
+      .filter(([area]) => !MAPEH_CHILDREN.includes(area))
+      .map(([, g]) => g);
+    const average = avgAreas.length
+      ? Math.round(avgAreas.reduce((a, b) => a + b, 0) / avgAreas.length)
+      : null;
+
+    return { learner: l, finalGrades, failedAreas, promotion, average };
+  });
+},
+
+/* ---- SF5 · summary buckets by sex and promotion status ---- */
+_sf5Summary(learnerData) {
+  const blank = () => ({ male: 0, female: 0, total: 0 });
+  const out = { promoted: blank(), conditional: blank(), retained: blank() };
+
+  learnerData.forEach(d => {
+    const key = d.promotion.status === 'promoted'    ? 'promoted'
+              : d.promotion.status === 'conditional' ? 'conditional'
+              : 'retained';
+    const sex = Utils.normalizeSex(d.learner.sex);
+
+    out[key].total++;
+    if (sex === 'Male')        out[key].male++;
+    else if (sex === 'Female') out[key].female++;
+    // Unrecorded sex counts toward TOTAL only.
+  });
+
+  return out;
+},
+/* ---- SF5 · learning-progress buckets by descriptor band ---- */
+_sf5ProficiencySummary(learnerData) {
+  const blank = () => ({ male: 0, female: 0, total: 0 });
+  const out = {
+    outstanding:        blank(),
+    verySatisfactory:   blank(),
+    satisfactory:       blank(),
+    fairlySatisfactory: blank(),
+    didNotMeet:         blank()
+  };
+
+  const classify = (avg) => {
+    if (avg === null) return 'didNotMeet';
+    if (avg >= 90) return 'outstanding';
+    if (avg >= 85) return 'verySatisfactory';
+    if (avg >= 80) return 'satisfactory';
+    if (avg >= 75) return 'fairlySatisfactory';
+    return 'didNotMeet';              // 74 and below (matches the sheet)
+  };
+
+  learnerData.forEach(d => {
+    const key = classify(d.average);
+    const sex = Utils.normalizeSex(d.learner.sex);
+    out[key].total++;
+    if (sex === 'Male')        out[key].male++;
+    else if (sex === 'Female') out[key].female++;
+  });
+
+  return out;
+},
+
+/* ---- SF5 · print ---- */
+async _sf5Print(cls, school, teacher, curriculum, learnerData, summary, policy) {
+  const divisionRep = await Pages._sf5ResolveDivisionRep();
+
+  document.getElementById('print-area').innerHTML = `
+    <div class="sf5-document print-mode">
+      ${Pages._sf5BuildDocumentHTML(cls, school, teacher, curriculum, learnerData, summary, policy, divisionRep)}
+    </div>`;
+
+  App.logActivity(`SF5 printed — ${cls.gradeLevel} - ${cls.section}`, 'Reports');
+
+  const styleId = 'sf5-print-page';
+  const prior = document.getElementById(styleId);
+  if (prior) prior.remove();
+  const st = document.createElement('style');
+  st.id = styleId;
+  st.media = 'print';
+  st.textContent = '@page { size: A4 landscape; margin: 0.7cm; }';
+  document.head.appendChild(st);
+
+  Pages._waitForPrintImagesThen(() => {
+    window.print();
+    setTimeout(() => {
+      document.getElementById('print-area').innerHTML = '';
+      const s = document.getElementById(styleId);
+      if (s) s.remove();
+    }, 1200);
+  });
+},
+
+/* ---- SF5 · .xlsx export ---- */
+/* ---- SF5 · .xlsx export ----
+   The layout deliberately mirrors _sf5BuildDocumentHTML:
+     • Full-width title / subtitle / meta table
+     • Body split into two columns:
+         A–E  → Learner register (LRN, Name, Gen Ave, Action, Failed Areas)
+         G–J  → SUMMARY TABLE, LEARNING PROGRESS AND ACHIEVEMENT, signatories
+       Both columns start at the SAME row, just as they do on screen.
+*/
+async _sf5ExportXLSX(cls, school, teacher, curriculum, learnerData, summary, policy) {
+  if (!window.XlsxWriter && typeof XlsxWriter === 'undefined') {
+    UI.toast('XLSX writer not available.', 'error');
+    return;
+  }
+
+  const divisionRep = await Pages._sf5ResolveDivisionRep();
+  const progress    = Pages._sf5ProficiencySummary(learnerData);
+  const sy          = cls.schoolYear || State.schoolYear;
+
+  /* Enrolment counts by sex (matches the HTML totals). */
+  const totalMale   = learnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Male').length;
+  const totalFemale = learnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Female').length;
+  const combined    = learnerData.length;
+
+  /* Sort by LAST NAME, then FIRST NAME. */
+  const sortedLearnerData = learnerData.slice().sort((a, b) => {
+    const la = (a.learner.lastName  || '').toLowerCase();
+    const lb = (b.learner.lastName  || '').toLowerCase();
+    if (la !== lb) return la.localeCompare(lb);
+    const fa = (a.learner.firstName || '').toLowerCase();
+    const fb = (b.learner.firstName || '').toLowerCase();
+    return fa.localeCompare(fb);
+  });
+
+  const males   = sortedLearnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Male');
+  const females = sortedLearnerData.filter(d => Utils.normalizeSex(d.learner.sex) === 'Female');
+  const others  = sortedLearnerData.filter(d => {
+    const s = Utils.normalizeSex(d.learner.sex);
+    return s !== 'Male' && s !== 'Female';
+  });
+
+  const COLS  = 10;
+  const cell  = (v, style) => ({ v: v === null || v === undefined ? '' : v, style });
+  const row   = (map) => {
+    const r = new Array(COLS).fill('');
+    Object.keys(map).forEach(i => { r[Number(i)] = map[i]; });
+    return r;
+  };
+
+  const rows   = [];
+  const merges = [];
+
+  /* ══════════════════════════════════════════════════════════
+     HEADER BLOCK — full width (A:J)
+     ══════════════════════════════════════════════════════════ */
+
+  rows.push(row({ 0: cell('School Form 5 (SF 5) Report on Promotion and Learning Progress & Achievement', 4) }));
+  merges.push(`A${rows.length}:J${rows.length}`);
+
+  rows.push(row({ 0: cell('Revised to conform with the instructions of DepEd Order 8, s. 2015', 7) }));
+  merges.push(`A${rows.length}:J${rows.length}`);
+
+  rows.push(row({}));                                  // spacer
+
+  // Meta row 1 — Region · Division · District
+  rows.push(row({
+    0: cell('Region', 1),     1: cell(school.region || '', 3),   2: cell('', 3),
+    3: cell('Division', 1),   4: cell(school.division || '', 3), 5: cell('', 3),
+    6: cell('District', 1),   7: cell(school.district || '', 3), 8: cell('', 3), 9: cell('', 3)
+  }));
+  merges.push(`B${rows.length}:C${rows.length}`);
+  merges.push(`E${rows.length}:F${rows.length}`);
+  merges.push(`H${rows.length}:J${rows.length}`);
+
+  // Meta row 2 — School ID · School Year · Curriculum
+  rows.push(row({
+    0: cell('School ID', 1),   1: cell(school.schoolId || '', 3), 2: cell('', 3),
+    3: cell('School Year', 1), 4: cell(sy, 3),                    5: cell('', 3),
+    6: cell('Curriculum', 1),  7: cell(curriculum || '', 3),      8: cell('', 3), 9: cell('', 3)
+  }));
+  merges.push(`B${rows.length}:C${rows.length}`);
+  merges.push(`E${rows.length}:F${rows.length}`);
+  merges.push(`H${rows.length}:J${rows.length}`);
+
+  // Meta row 3 — School Name (spans B:F) · Grade & Section
+  rows.push(row({
+    0: cell('School Name', 1),
+    1: cell(school.name || '', 3), 2: cell('', 3), 3: cell('', 3), 4: cell('', 3), 5: cell('', 3),
+    6: cell('Grade & Section', 1),
+    7: cell(`${cls.gradeLevel} - ${cls.section}`, 3), 8: cell('', 3), 9: cell('', 3)
+  }));
+  merges.push(`B${rows.length}:F${rows.length}`);
+  merges.push(`H${rows.length}:J${rows.length}`);
+
+  rows.push(row({}));                                  // spacer
+
+  /* ══════════════════════════════════════════════════════════
+     BODY — two independent columns
+       LEFT  (A–E) : learner register
+       RIGHT (G–J) : summary · learning progress · signatories
+     Both sides begin on the SAME row.
+     ══════════════════════════════════════════════════════════ */
+
+  const leftRows  = [];
+  const rightRows = [];
+
+  /* ───────────── LEFT — learner register ───────────── */
+  leftRows.push(row({
+    0: cell('LRN', 2),
+    1: cell("LEARNER'S NAME\n(Last Name, First Name, Middle Name)", 2),
+    2: cell('GENERAL AVERAGE\n(Whole numbers for non-honor)', 2),
+    3: cell('ACTION TAKEN:\nPROMOTED, CONDITIONAL, or RETAINED', 2),
+    4: cell('Did Not Meet Expectations of the ff. Learning Area/s as of end of current School Year', 2)
+  }));
+
+  const pushLearner = (d) => {
+    const label = d.promotion.status === 'conditional' ? 'CONDITIONAL'
+                : d.promotion.status === 'retained'    ? 'RETAINED'
+                :                                        'PROMOTED';
+    leftRows.push(row({
+      0: cell(d.learner.lrn || '', 3),
+      1: cell(Utils.lastNameFirst(d.learner).toUpperCase(), 3),
+      2: cell(d.average !== null ? d.average : '', 3),
+      3: cell(label, 3),
+      4: cell((d.failedAreas || []).join(', '), 3)
+    }));
+  };
+
+  const pushTotal = (label, count) => {
+    leftRows.push(row({
+      0: cell('', 5),
+      1: cell(label, 5),
+      2: cell(count, 5),
+      3: cell('', 5),
+      4: cell('', 5)
+    }));
+  };
+
+  males.forEach(pushLearner);
+  pushTotal('TOTAL MALE',   totalMale);
+  females.forEach(pushLearner);
+  pushTotal('TOTAL FEMALE', totalFemale);
+  others.forEach(pushLearner);
+  pushTotal('COMBINED',     combined);
+
+  /* ───────────── RIGHT — summary table ───────────── */
+  rightRows.push(row({
+    6: cell('SUMMARY TABLE', 2), 7: cell('', 2), 8: cell('', 2), 9: cell('', 2)
+  }));
+
+  rightRows.push(row({
+    6: cell('STATUS', 2), 7: cell('MALE', 2), 8: cell('FEMALE', 2), 9: cell('TOTAL', 2)
+  }));
+
+  const pushSummary = (label, key) => {
+    const s = summary[key];
+    rightRows.push(row({
+      6: cell(label, 3),
+      7: cell(s.male, 3), 8: cell(s.female, 3), 9: cell(s.total, 3)
+    }));
+  };
+  pushSummary('PROMOTED',     'promoted');
+  pushSummary('*Conditional', 'conditional');
+  pushSummary('RETAINED',     'retained');
+
+  rightRows.push(row({}));                             // spacer
+
+  /* ───────────── RIGHT — learning progress & achievement ───────────── */
+  rightRows.push(row({
+    6: cell('LEARNING PROGRESS AND ACHIEVEMENT', 2), 7: cell('', 2), 8: cell('', 2), 9: cell('', 2)
+  }));
+  rightRows.push(row({
+    6: cell("(Based on Learners' General Average)", 7), 7: cell('', 7), 8: cell('', 7), 9: cell('', 7)
+  }));
+  rightRows.push(row({
+    6: cell('Descriptors & Grading Scale', 2), 7: cell('MALE', 2), 8: cell('FEMALE', 2), 9: cell('TOTAL', 2)
+  }));
+
+  const pushProgress = (label, key) => {
+    const s = progress[key];
+    rightRows.push(row({
+      6: cell(label, 3),
+      7: cell(s.male, 3), 8: cell(s.female, 3), 9: cell(s.total, 3)
+    }));
+  };
+  pushProgress('Outstanding\n( 90 -100)',                    'outstanding');
+  pushProgress('Very Satisfactory\n( 85 -89)',               'verySatisfactory');
+  pushProgress('Satisfactory\n( 80 -84)',                    'satisfactory');
+  pushProgress('Fairly Satisfactory\n( 75 -79)',             'fairlySatisfactory');
+  pushProgress('Did Not Meet Expectations\n( 74 and below)', 'didNotMeet');
+
+  rightRows.push(row({}));                             // spacer
+  rightRows.push(row({}));                             // spacer
+
+/* ───────────── RIGHT — three signatories ───────────── */
+/* Each block is now 5 rows (was 6).
+   The name cell carries style 8, which draws a bottom border under the
+   merged G:J range — replacing the old "______________" row. */
+const pushSignatory = (heading, name, role) => {
+  rightRows.push(row({ 6: cell(heading, 1), 7: cell('', 1), 8: cell('', 1), 9: cell('', 1) }));
+  rightRows.push(row({})); 
+  rightRows.push(row({ 6: cell(name, 8),    7: cell('', 8), 8: cell('', 8), 9: cell('', 8) })); // name w/ bottom border
+  rightRows.push(row({ 6: cell(role, 6),    7: cell('', 6), 8: cell('', 6), 9: cell('', 6) }));
+  rightRows.push(row({ 6: cell('(Name and Signature)', 7), 7: cell('', 7), 8: cell('', 7), 9: cell('', 7) }));
+  rightRows.push(row({}));                                    // spacer between signatories
+};
+
+pushSignatory('PREPARED BY:',                   Licensing.getReportSignatory(cls) || '', 'Class Adviser');
+pushSignatory('CERTIFIED CORRECT & SUBMITTED:', school.schoolHead || '',                 'School Head');
+pushSignatory('REVIEWED BY:',                   divisionRep,                             'Division Representative');
+
+  /* ───────────── Merge the two columns side by side ───────────── */
+  const bodyStartRowNum = rows.length + 1;             // 1-based row of the first body row
+  const maxLen = Math.max(leftRows.length, rightRows.length);
+  for (let i = 0; i < maxLen; i++) {
+    const l = leftRows[i]  || row({});
+    const r = rightRows[i] || row({});
+    const merged = new Array(COLS).fill('');
+    for (let c = 0; c < 6;  c++) merged[c] = l[c] || '';
+    for (let c = 6; c < 10; c++) merged[c] = r[c] || '';
+    rows.push(merged);
+  }
+
+  /* ───────────── Merges for the RIGHT side ─────────────
+     `rrow(idx)` converts a 0-based rightRows index into the
+     1-based worksheet row number. */
+  const rrow = (idx) => bodyStartRowNum + idx;
+
+  // SUMMARY TABLE banner (rightRows[0])
+  merges.push(`G${rrow(0)}:J${rrow(0)}`);
+
+  // LEARNING PROGRESS banner + subtitle (rightRows[6] and rightRows[7])
+  merges.push(`G${rrow(6)}:J${rrow(6)}`);
+  merges.push(`G${rrow(7)}:J${rrow(7)}`);
+
+  // Signatories: 3 blocks of 6 rows each, starting at rightRows index 16.
+  for (let s = 0; s < 3; s++) {
+    const base = 16 + s * 6;
+    merges.push(`G${rrow(base + 1)}:J${rrow(base + 1)}`);   // name
+    merges.push(`G${rrow(base + 2)}:J${rrow(base + 2)}`);   // line
+    merges.push(`G${rrow(base + 3)}:J${rrow(base + 3)}`);   // role
+    merges.push(`G${rrow(base + 4)}:J${rrow(base + 4)}`);   // subrole
+  }
+
+  /* ───────────── Column widths ───────────── */
+  const cols = [
+    { width: 16 },   // A — LRN
+    { width: 34 },   // B — Learner name
+    { width: 12 },   // C — General Average
+    { width: 22 },   // D — Action Taken
+    { width: 42 },   // E — Failed Areas / Did Not Meet Expectations
+    { width: 3  },   // F — spacer
+    { width: 32 },   // G — STATUS / Descriptors / signatory headings
+    { width: 9  },   // H — MALE
+    { width: 9  },   // I — FEMALE
+    { width: 9  }    // J — TOTAL
+  ];
+
+  const safeSy      = String(sy).replace(/[^0-9A-Za-z]/g, '_');
+  const safeGrade   = String(cls.gradeLevel || '').replace(/[^0-9A-Za-z]+/g, '_');
+  const safeSection = String(cls.section || '').replace(/[^0-9A-Za-z]+/g, '_');
+  const filename    = `SF5_${safeSy}_${safeGrade}_${safeSection}_${Utils.timestamp()}.xlsx`;
+
+  try {
+    XlsxWriter.download(filename, [{
+      name: 'SF5_Promotion_Progress',
+      rows, cols, merges
+    }]);
+    App.logActivity(
+      `SF5 exported — ${learnerData.length} learners ` +
+      `(${summary.promoted.total} promoted, ${summary.conditional.total} conditional, ${summary.retained.total} retained)`,
+      'Reports'
+    );
+    UI.toast('SF5 (.xlsx) exported', 'success');
+  } catch (e) {
+    console.error('[SF5 export]', e);
+    UI.toast('SF5 export failed: ' + (e.message || ''), 'error', 6000);
   }
 },
 
@@ -59962,7 +61323,7 @@ function openScanner(assessmentId) {
     st.id = styleId;
     st.media = 'print';
     st.textContent = `
-      @page { size: A5 portrait; margin: 0; }
+      @page { size: A4 ${opts.orientation || 'portrait'}; margin: 1.2cm 1.5cm; }
       #print-area { padding: 0 !important; margin: 0 !important; }
       .omr-test-wrap { width: 148.5mm; height: 210mm; margin: 0 auto; background: #fff; }
     `;
@@ -60635,10 +61996,11 @@ Pages._schoolFormsHub = function (root) {
     stateKey: '_schoolFormsHubTab',
     defaultTab: 'sf1',
     tabs: [
-      { id: 'sf1', label: 'SF1 — School Register',            icon: 'file',     render: (c) => Pages.sf1(c) },
-      { id: 'sf2', label: 'SF2 — Daily Attendance',           icon: 'calendar', render: (c) => Pages.sf2(c) },
-      { id: 'sf8', label: 'SF8 — Health & Nutrition Report',  icon: 'chart',    render: (c) => Pages.sf8(c) },
-      { id: 'sf9', label: 'SF9 — Learner’s Report',           icon: 'file',     render: (c) => Pages.sf9(c) }
+      { id: 'sf1', label: 'SF1 — School Register',                 icon: 'file',     render: (c) => Pages.sf1(c) },
+      { id: 'sf2', label: 'SF2 — Daily Attendance',                icon: 'calendar', render: (c) => Pages.sf2(c) },
+      { id: 'sf5', label: 'SF5 — Promotion & Learning Progress',   icon: 'trending', render: (c) => Pages.sf5(c) },
+      { id: 'sf8', label: 'SF8 — Health & Nutrition Report',       icon: 'chart',    render: (c) => Pages.sf8(c) },
+      { id: 'sf9', label: 'SF9 — Learner’s Report',                icon: 'file',     render: (c) => Pages.sf9(c) }
     ]
   });
 };
@@ -60713,7 +62075,8 @@ const aliases = {
   'parent-digest': 'parentDigest',
   'phil-iri': 'philIri',
   'sf8': 'sf8',
-  'sync': 'sync',             
+  'sync': 'sync', 
+  'sf5': 'sf5',            
 };
 /* ------------------------------------------------------------------------
    Normalise a stored entry: infer severity from category when missing,
