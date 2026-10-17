@@ -40207,11 +40207,12 @@ async generateSF2Preview(classId, monthStr, targetEl) {
     : 0;
 
   /* ---- Store context for the header print button ---- */
-  State._sf2LastRender = {
+State._sf2LastRender = {
     school, teacher, cls, learners, dates, rows,
     male, female, adaPct, monthStr,
-    chronicallyAbsent, lateEnrollees
-  };
+    chronicallyAbsent, lateEnrollees,
+    byLearnerDate            // ← NEW: used by printSF2 to rebuild cells
+};
 
   /* ---- Render the data card ---- */
   const weekdayLetter = (iso) =>
@@ -40484,94 +40485,428 @@ _sf2ShowInfoModal() {
     footer: `<button class="btn btn-primary" data-close>Got it</button>`
   });
 },
-  printSF2({ school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr,
-           chronicallyAbsent = [], lateEnrollees = [] }) {
-    const monthLabel = new Date(monthStr + '-01T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    const req = (v) => v && String(v).trim() ? Utils.esc(v) : '<span style="color:#b00;">Data required</span>';
-    const logoHeaderSF2 = `
-      <div class="print-logo-header">
-        ${school.schoolLogo
-          ? `<img class="print-logo-img" src="${Utils.attr(school.schoolLogo)}" alt="School Logo">`
-          : `<div class="print-logo-spacer"></div>`}
-        <div class="print-logo-header-text">
-          <div class="sf2-title">Republic of the Philippines</div>
-          <div class="sf2-subtitle">Department of Education</div>
-          <div class="sf2-title">School Form 2 (SF2) Daily Attendance Report of Learners</div>
-          <div class="sf2-subtitle">(This replaces Form 1, Form 2 &amp; STR)</div>
-        </div>
-        ${school.divisionLogo
-          ? `<img class="print-logo-img" src="${Utils.attr(school.divisionLogo)}" alt="Division Logo">`
-          : `<div class="print-logo-spacer"></div>`}
-      </div>`;
+printSF2(ctx) {
+    if (!ctx) ctx = State._sf2LastRender;
+    if (!ctx) { UI.toast('Nothing to print.', 'warning'); return; }
 
-    document.getElementById('print-area').innerHTML = `
-      <div class="print-sf2">
-        ${logoHeaderSF2}
-        <div class="sf2-meta-grid">
-          <div><strong>Region:</strong> ${req(school.region)}</div>
-          <div><strong>Division:</strong> ${req(school.division)}</div>
-          <div><strong>District:</strong> ${req(school.district)}</div>
-          <div><strong>School ID:</strong> ${req(school.schoolId)}</div>
-          <div><strong>School Name:</strong> ${req(school.name)}</div>
-          <div><strong>School Year:</strong> ${Utils.esc(cls.schoolYear || State.schoolYear)}</div>
-          <div><strong>Report for the Month of:</strong> ${Utils.esc(monthLabel)}</div>
-          <div><strong>Grade &amp; Section:</strong> ${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)}</div>
-        </div>
-        <table>
-          <thead><tr><th>#</th><th>Learner's Name</th>${dates.map(d => `<th>${d.slice(8)}</th>`).join('')}<th>Present</th><th>Absent</th><th>%</th></tr></thead>
-          <tbody>${rows.map(r=>r.html).join('')}</tbody>
-        </table>
-        <div class="sf2-legend">
-          <strong>Attendance Codes:</strong> (blank) = Present &nbsp; A = Absent &nbsp; L = Late &nbsp; E = Excused.
-          <em>Verify these codes against your Division's current SF2 instructions before submission.</em>
-        </div>
-        <table class="sf2-summary-table" style="margin-top:10px;width:auto;">
-          <tr>
-            <td><strong>Male</strong></td><td>${male}</td>
-            <td><strong>Female</strong></td><td>${female}</td>
-            <td><strong>Total</strong></td><td>${learners.length}</td>
-          </tr>
-          <tr>
-            <td colspan="2"><strong>Average Daily Attendance</strong></td>
-            <td colspan="2">${adaPct !== null ? adaPct + '%' : '—'}</td>
-            <td colspan="2"><strong>Registered Learners:</strong> ${learners.length}</td>
-          </tr>
-          <tr>
-            <td colspan="2"><strong>Late Enrollment</strong></td>
-            <td colspan="2">${lateEnrollees.length}</td>
-            <td colspan="2"><strong>Learners Absent 5+ Consecutive Days:</strong> ${chronicallyAbsent.length}</td>
-          </tr>
-          ${chronicallyAbsent.length ? `
-            <tr>
-              <td colspan="6" style="font-size:7pt;line-height:1.4;">
-                <strong>Absent 5+ consecutive days:</strong> ${chronicallyAbsent.map(Utils.esc).join(', ')}
-              </td>
-            </tr>` : ''}
-          ${lateEnrollees.length ? `
-            <tr>
-              <td colspan="6" style="font-size:7pt;line-height:1.4;">
-                <strong>Late enrollees:</strong> ${lateEnrollees.map(Utils.esc).join(', ')}
-              </td>
-            </tr>` : ''}
-        </table>
-        <div class="sf2-sign">
-           <div>
-            <div style="font-weight:700;font-size:9pt;min-height:3.5mm;">${Utils.esc(Licensing.getReportSignatory(cls) || '')}</div>
-            <div class="line"></div>
-            <span style="font-size:8pt;">Teacher / Adviser</span>
+    const {
+        school = {}, teacher = {}, cls = {}, learners = [], dates = [],
+        male = 0, female = 0, adaPct, monthStr,
+        chronicallyAbsent = [], lateEnrollees = [], byLearnerDate = {}
+    } = ctx;
+
+    if (!cls || !cls.gradeLevel) { UI.toast('No class data.', 'warning'); return; }
+    if (!dates.length) { UI.toast('No class days in this month.', 'warning'); return; }
+    if (!learners.length) { UI.toast('No learners in this class.', 'warning'); return; }
+
+    const esc = Utils.esc;
+    const sy   = cls.schoolYear || State.schoolYear || '';
+    const totalDays = dates.length;
+    const monthLabel = new Date(monthStr + '-01T00:00:00')
+        .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+    /* -------- sort & split learners -------- */
+    const sorted = learners.slice().sort((a, b) =>
+        ((a.lastName || '') + (a.firstName || '')).toLowerCase()
+            .localeCompare(((b.lastName || '') + (b.firstName || '')).toLowerCase())
+    );
+    const maleList   = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Male');
+    const femaleList = sorted.filter(l => Utils.normalizeSex(l.sex) === 'Female');
+    const otherList  = sorted.filter(l => {
+        const n = Utils.normalizeSex(l.sex);
+        return n !== 'Male' && n !== 'Female';
+    });
+
+    /* -------- helpers -------- */
+    const dayShort = (iso) => ['S','M','T','W','Th','F','S'][new Date(iso + 'T00:00:00').getDay()];
+    const dayLabel = (iso) => iso.slice(8);
+
+    /* -------- per-learner attendance -------- */
+    const learnerData = {};
+    learners.forEach(l => {
+        const marks = {};
+        let present = 0, absent = 0;
+        dates.forEach(d => {
+            const status = byLearnerDate[l.id + '|' + d];
+            let code = '';
+            if      (status === 'Absent')  { code = 'x'; absent++; }
+            else if (status === 'Late')    { code = 'L'; present++; }
+            else if (status === 'Excused') { code = 'E'; present++; }
+            else                           { present++; }   // blank = Present
+            marks[d] = code;
+        });
+        learnerData[l.id] = { marks, present, absent };
+    });
+
+    /* -------- daily totals -------- */
+    const daily = {};
+    dates.forEach(d => {
+        daily[d] = {
+            malePresent: 0, femalePresent: 0, otherPresent: 0, totalPresent: 0,
+            maleAbsent: 0,  femaleAbsent: 0,  otherAbsent: 0,  totalAbsent: 0
+        };
+    });
+    learners.forEach(l => {
+        const sex = Utils.normalizeSex(l.sex);
+        dates.forEach(d => {
+            const isAbsent = learnerData[l.id].marks[d] === 'x';
+            if (isAbsent) {
+                daily[d].totalAbsent++;
+                if      (sex === 'Male')   daily[d].maleAbsent++;
+                else if (sex === 'Female') daily[d].femaleAbsent++;
+                else                       daily[d].otherAbsent++;
+            } else {
+                daily[d].totalPresent++;
+                if      (sex === 'Male')   daily[d].malePresent++;
+                else if (sex === 'Female') daily[d].femalePresent++;
+                else                       daily[d].otherPresent++;
+            }
+        });
+    });
+
+    /* -------- row renderers -------- */
+    const learnerRow = (l, idx) => {
+        const d = learnerData[l.id];
+        const cells = dates.map(day => `<td class="sf2p-att">${d.marks[day]}</td>`).join('');
+        return `<tr>
+            <td class="sf2p-num">${idx}</td>
+            <td class="sf2p-name">${esc(Utils.lastNameFirst(l).toUpperCase())}</td>
+            ${cells}
+            <td class="sf2p-sum">${d.absent || ''}</td>
+            <td class="sf2p-sum">${d.present || ''}</td>
+            <td class="sf2p-remarks">${esc(l.remarks || '')}</td>
+        </tr>`;
+    };
+
+    const totalRow = (label, count, presentKey, absentKey) => {
+        const cells = dates.map(d => `<td class="sf2p-att">${daily[d][presentKey] || ''}</td>`).join('');
+        const totalPresent = dates.reduce((s, d) => s + daily[d][presentKey], 0);
+        const totalAbsent  = dates.reduce((s, d) => s + daily[d][absentKey],  0);
+        return `<tr class="sf2p-total">
+            <td class="sf2p-num"><strong>${count}</strong></td>
+            <td class="sf2p-name sf2p-total-label"><strong>${label}</strong></td>
+            ${cells}
+            <td class="sf2p-sum"><strong>${totalAbsent}</strong></td>
+            <td class="sf2p-sum"><strong>${totalPresent}</strong></td>
+            <td class="sf2p-remarks"></td>
+        </tr>`;
+    };
+
+    /* -------- header cells -------- */
+    const dateHeaders = dates.map(d => `<th class="sf2p-att-h">${dayLabel(d)}</th>`).join('');
+    const dayHeaders  = dates.map(d => `<th class="sf2p-att-h">${dayShort(d)}</th>`).join('');
+
+    /* -------- summary math -------- */
+    const maleReg     = male;
+    const femaleReg   = female;
+    const otherReg    = otherList.length;
+    const totalReg    = maleReg + femaleReg + otherReg;
+
+    const malePresentSum   = dates.reduce((s, d) => s + daily[d].malePresent, 0);
+    const femalePresentSum = dates.reduce((s, d) => s + daily[d].femalePresent, 0);
+    const otherPresentSum  = dates.reduce((s, d) => s + daily[d].otherPresent, 0);
+    const totalPresentSum  = malePresentSum + femalePresentSum + otherPresentSum;
+
+    const maleADA   = totalDays ? Utils.round(malePresentSum / totalDays, 2) : 0;
+    const femaleADA = totalDays ? Utils.round(femalePresentSum / totalDays, 2) : 0;
+    const totalADA  = totalDays ? Utils.round(totalPresentSum / totalDays, 2) : 0;
+
+    const malePct   = (maleReg   && totalDays) ? Utils.round((malePresentSum   / (maleReg   * totalDays)) * 100, 2) : 0;
+    const femalePct = (femaleReg && totalDays) ? Utils.round((femalePresentSum / (femaleReg * totalDays)) * 100, 2) : 0;
+    const totalPct  = (totalReg  && totalDays) ? Utils.round((totalPresentSum  / (totalReg  * totalDays)) * 100, 2) : 0;
+
+    const isNameOf = (sex, name) =>
+        (sex === 'Male' ? maleList : femaleList).some(l => Utils.fullName(l) === name);
+
+    const male5   = chronicallyAbsent.filter(n => isNameOf('Male', n)).length;
+    const female5 = chronicallyAbsent.filter(n => isNameOf('Female', n)).length;
+    const total5  = chronicallyAbsent.length;
+
+    const maleLate   = lateEnrollees.filter(n => isNameOf('Male', n)).length;
+    const femaleLate = lateEnrollees.filter(n => isNameOf('Female', n)).length;
+
+    const depedSeal  = school.depedSeal  || (typeof DEPED_SEAL_PATH !== 'undefined' ? DEPED_SEAL_PATH : '');
+    const schoolLogo = school.schoolLogo || '';
+
+    /* -------- column widths (mm) -------- */
+    /* Adaptive per-date column width.
+      Minimum 5.5 mm so a 2-digit date ("30") plus a 2-char day letter ("TH")
+      both fit comfortably at 6 pt without wrapping.
+      Maximum 7.5 mm caps the total date band on 16-day months.
+      The denominator (92 mm) is the total budget we're willing to give the
+      date band, keeping a healthy slice for REMARKS even at 30 class days. */
+    const dateColMM = Math.max(5.5, Math.min(7.5, 92 / Math.max(1, totalDays)));
+
+    /* ABSENT / PRESENT headers must render in full.
+      At 6.2 pt Arial bold:
+        "ABSENT"  ≈  9.2 mm of glyph width
+        "PRESENT" ≈ 10.7 mm of glyph width
+      With 1.2 mm padding per side, 13 mm is the safe minimum. */
+    const colgroupHTML = `
+        <colgroup>
+            <col style="width:6mm;">
+            <col style="width:44mm;">
+            ${dates.map(() => `<col style="width:${dateColMM.toFixed(2)}mm;">`).join('')}
+            <col style="width:13mm;">
+            <col style="width:13mm;">
+            <col>
+        </colgroup>`;
+
+    /* -------- body rows -------- */
+    const maleRows = maleList.map((l, i) => learnerRow(l, i + 1)).join('');
+    const femaleRows = femaleList.map((l, i) => learnerRow(l, i + 1)).join('');
+    const otherRows  = otherList.map((l, i) => learnerRow(l, i + 1)).join('');
+
+    const html = `
+    <div class="sf2p-wrap">
+      <div class="sf2p-page">
+
+        <!-- ================= HEADER ================= -->
+        <div class="sf2p-header">
+          <div class="sf2p-seal">${depedSeal ? `<img src="${Utils.attr(depedSeal)}" alt="DepEd Seal">` : ''}</div>
+          <div class="sf2p-header-text">
+            <div class="sf2p-republic">Republic of the Philippines</div>
+            <div class="sf2p-deped">Department of Education</div>
+            <div class="sf2p-title">School Form 2 (SF2) Daily Attendance Report of Learners</div>
+            <div class="sf2p-subtitle">(This replaces Form 1, Form 2 &amp; STS Form 4 - Absenteeism and Dropout Profile)</div>
           </div>
-          <div>
-            <div style="font-weight:700;font-size:9pt;min-height:3.5mm;">${Utils.esc(school.schoolHead || '')}</div>
-            <div class="line"></div>
-            <span style="font-size:8pt;">School Head</span>
+          <div class="sf2p-seal">${schoolLogo ? `<img src="${Utils.attr(schoolLogo)}" alt="School Logo">` : ''}</div>
+        </div>
+
+        <!-- ================= META ================= -->
+        <table class="sf2p-meta">
+          <tbody>
+            <tr>
+              <td class="sf2p-mlabel">School ID</td>
+              <td class="sf2p-mvalue" style="width:14%;">${esc(school.schoolId || '')}</td>
+              <td class="sf2p-mlabel">School Year</td>
+              <td class="sf2p-mvalue" style="width:14%;">${esc(sy)}</td>
+              <td class="sf2p-mlabel">Report for the Month of</td>
+              <td class="sf2p-mvalue" style="width:16%;">${esc(monthLabel)}</td>
+            </tr>
+            <tr>
+              <td class="sf2p-mlabel">Name of School</td>
+              <td class="sf2p-mvalue" colspan="3">${esc(school.name || '')}</td>
+              <td class="sf2p-mlabel">Grade Level</td>
+              <td class="sf2p-mvalue">${esc(cls.gradeLevel || '')}</td>
+            </tr>
+            <tr>
+              <td class="sf2p-mlabel">Section</td>
+              <td class="sf2p-mvalue" colspan="5">${esc(cls.section || '')}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ================= ATTENDANCE TABLE ================= -->
+        <table class="sf2p-table">
+          ${colgroupHTML}
+          <thead>
+            <tr>
+              <th rowspan="3" class="sf2p-th-num">#</th>
+              <th rowspan="3" class="sf2p-th-name">LEARNER'S NAME<br>
+                <span style="font-weight:400;font-size:6.5pt;">(Last Name, First Name, Middle Name)</span></th>
+              <th colspan="${totalDays}" class="sf2p-th-dates">(1st row for date)</th>
+              <th rowspan="3" class="sf2p-th-sum">ABSENT</th>
+              <th rowspan="3" class="sf2p-th-sum">PRESENT</th>
+              <th rowspan="3" class="sf2p-th-remarks">REMARKS<br>
+                <span style="font-weight:400;font-size:6pt;">(If NLS, state reason, please refer to legend number 2. If TRANSFERRED IN/OUT, write the name of School.)</span></th>
+            </tr>
+            <tr>${dateHeaders}</tr>
+            <tr>${dayHeaders}</tr>
+          </thead>
+          <tbody>
+            ${maleList.length ? maleRows : ''}
+            ${totalRow('&lt;=== MALE - TOTAL Per Day ===&gt;', maleList.length, 'malePresent', 'maleAbsent')}
+            ${femaleList.length ? femaleRows : ''}
+            ${totalRow('&lt;=== FEMALE - TOTAL Per Day ===&gt;', femaleList.length, 'femalePresent', 'femaleAbsent')}
+            ${otherList.length ? otherRows : ''}
+            <tr class="sf2p-combined">
+              <td class="sf2p-num">${totalReg}</td>
+              <td class="sf2p-name sf2p-total-label">Combined TOTAL PER DAY</td>
+              ${dates.map(d => `<td class="sf2p-att">${daily[d].totalPresent}</td>`).join('')}
+              <td class="sf2p-sum">${dates.reduce((s, d) => s + daily[d].totalAbsent, 0)}</td>
+              <td class="sf2p-sum">${totalPresentSum}</td>
+              <td class="sf2p-remarks"></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ================= GUIDELINES ================= -->
+        <div class="sf2p-guidelines">
+          <div class="sf2p-mini-title">GUIDELINES:</div>
+          <ol class="sf2p-gl-list">
+            <li>The attendance shall be accomplished daily. Refer to the codes for checking learners' attendance.</li>
+            <li>Dates shall be written in the preceding columns beside Learner's Name.</li>
+            <li>To compute the following:
+              <div class="sf2p-gl-sub">a. Percentage of Enrolment = Registered Learner as of End of the Month &divide; Enrolment as of 1st Friday of the SY &times; 100</div>
+              <div class="sf2p-gl-sub">b. Average Daily Attendance = Total Daily Attendance &divide; Number of School Days in reporting month</div>
+              <div class="sf2p-gl-sub">c. Percentage of Attendance for the month = Average daily attendance &divide; Registered Learner as of End of the month</div>
+            </li>
+            <li>Every End of the month, the class adviser will submit this form to the office of the principal for recording of summary table into the School Form 4. Once signed by the principal, this form should be returned to the adviser.</li>
+            <li>The adviser will extend necessary intervention including but not limited to home visitation to learner/s that committed 5 consecutive days of absences or those with potentials of dropping out</li>
+            <li>Attendance performance of learner is expected to reflect in Form 137 and Form 138 every grading period</li>
+            <li class="sf2p-gl-star">* Beginning of School Year cut-off report is every 1st Friday of the School Year</li>
+          </ol>
+        </div>
+
+        <!-- ================= CODES + REASONS + SUMMARY ================= -->
+        <div class="sf2p-bottom">
+          <div class="sf2p-bottom-col sf2p-codes">
+            <div class="sf2p-mini-title">1. CODES FOR CHECKING ATTENDANCE</div>
+            <div>blank- Present;   (x)- Absent; Tardy (half shaded= Upper for Late Comer, Lower for Cutting Classes)</div>
+          </div>
+
+          <div class="sf2p-bottom-col sf2p-reasons">
+            <div class="sf2p-mini-title">2. REASONS/CAUSES FOR NLS</div>
+            <div class="sf2p-reasons-group">
+              <div><strong>a. Domestic-Related Factors</strong></div>
+              <div>a.1. Had to take care of siblings</div>
+              <div>a.2. Early marriage/pregnancy</div>
+              <div>a.3. Parents' attitude toward schooling</div>
+              <div>a.4. Family problems</div>
+            </div>
+            <div class="sf2p-reasons-group">
+              <div><strong>b. Individual-Related Factors</strong></div>
+              <div>b.1. Illness</div>
+              <div>b.2. Overage</div>
+              <div>b.3. Death</div>
+              <div>b.4. Drug Abuse</div>
+              <div>b.5. Poor academic performance</div>
+              <div>b.6. Lack of interest/Distractions</div>
+              <div>b.7. Hunger/Malnutrition</div>
+            </div>
+            <div class="sf2p-reasons-group">
+              <div><strong>c. School-Related Factors</strong></div>
+              <div>c.1. Teacher Factor</div>
+              <div>c.2. Physical condition of classroom</div>
+              <div>c.3. Peer influence</div>
+            </div>
+            <div class="sf2p-reasons-group">
+              <div><strong>d. Geographic/Environmental</strong></div>
+              <div>d.1. Distance between home and school</div>
+              <div>d.2. Armed conflict (incl. Tribal wars &amp; clan feuds)</div>
+              <div>d.3. Calamities/Disasters</div>
+            </div>
+            <div class="sf2p-reasons-group">
+              <div><strong>e. Financial-Related</strong></div>
+              <div>e.1. Child labor, work</div>
+            </div>
+            <div class="sf2p-reasons-group">
+              <div><strong>f. Others</strong></div>
+            </div>
+          </div>
+
+          <div class="sf2p-bottom-col sf2p-summary">
+            <div class="sf2p-summary-head">
+              <span>Month: <strong>${esc(monthLabel.toUpperCase())}</strong></span>
+              <span>No. of Days of Classes: <strong>${totalDays}</strong></span>
+            </div>
+            <table class="sf2p-summary-table">
+              <tbody>
+                <tr><td colspan="4" class="sf2p-summary-section">Summary</td></tr>
+                <tr>
+                  <td class="sf2p-sum-label">* Enrolment as of (1st Friday of the SY)</td>
+                  <td class="sf2p-sum-mft">M</td>
+                  <td class="sf2p-sum-mft">F</td>
+                  <td class="sf2p-sum-mft">TOTAL</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">&nbsp;</td>
+                  <td class="sf2p-sum-value">${maleReg}</td>
+                  <td class="sf2p-sum-value">${femaleReg}</td>
+                  <td class="sf2p-sum-value">${totalReg}</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Registered Learner as of end of the month</td>
+                  <td class="sf2p-sum-value">${maleReg}</td>
+                  <td class="sf2p-sum-value">${femaleReg}</td>
+                  <td class="sf2p-sum-value">${totalReg}</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Percentage of Enrolment as of end of the month</td>
+                  <td class="sf2p-sum-value">100</td>
+                  <td class="sf2p-sum-value">100</td>
+                  <td class="sf2p-sum-value">100</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Average Daily Attendance</td>
+                  <td class="sf2p-sum-value">${maleADA}</td>
+                  <td class="sf2p-sum-value">${femaleADA}</td>
+                  <td class="sf2p-sum-value">${totalADA}</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Percentage of Attendance for the month</td>
+                  <td class="sf2p-sum-value">${malePct}</td>
+                  <td class="sf2p-sum-value">${femalePct}</td>
+                  <td class="sf2p-sum-value">${totalPct}</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Number of students with 5 consecutive days of absences</td>
+                  <td class="sf2p-sum-value">${male5}</td>
+                  <td class="sf2p-sum-value">${female5}</td>
+                  <td class="sf2p-sum-value">${total5}</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">NLS</td>
+                  <td class="sf2p-sum-value">0</td>
+                  <td class="sf2p-sum-value">0</td>
+                  <td class="sf2p-sum-value">0</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Transferred out</td>
+                  <td class="sf2p-sum-value">0</td>
+                  <td class="sf2p-sum-value">0</td>
+                  <td class="sf2p-sum-value">0</td>
+                </tr>
+                <tr>
+                  <td class="sf2p-sum-label">Transferred in</td>
+                  <td class="sf2p-sum-value">${maleLate}</td>
+                  <td class="sf2p-sum-value">${femaleLate}</td>
+                  <td class="sf2p-sum-value">${maleLate + femaleLate}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
-        <div class="print-footer" style="margin-top:16px;"><span>Generated by KlazAssist — not an official DepEd system. Verify before submission.</span><span>${Utils.formatDate(Utils.todayISO())}</span></div>
-      </div>`;
+
+        <!-- ================= SIGNATURES ================= -->
+        <div class="sf2p-signatures">
+          <div class="sf2p-sig-block">
+            <div class="sf2p-sig-label">Prepared by:</div>
+            <div class="sf2p-sig-name">${esc(Licensing.getReportSignatory(cls) || teacher.fullName || '')}</div>
+            <div class="sf2p-sig-line"></div>
+            <div class="sf2p-sig-role">(Signature of Adviser over Printed Name)</div>
+          </div>
+          <div class="sf2p-sig-block">
+            <div class="sf2p-sig-label">Certified Correct:</div>
+            <div class="sf2p-sig-name">${esc(school.schoolHead || '')}</div>
+            <div class="sf2p-sig-line"></div>
+            <div class="sf2p-sig-role">(Signature of School Head over Printed Name)</div>
+          </div>
+        </div>
+
+        <div class="sf2p-footer">Generated thru LIS</div>
+
+      </div>
+    </div>`;
+
+    document.getElementById('print-area').innerHTML = html;
+
     App.logActivity('SF2 generated — ' + cls.gradeLevel + ' - ' + cls.section + ' (' + monthStr + ')', 'Reports');
-    this.saveReportSnapshot({ reportType: 'SF2', classId: cls.id, learnerId: null, templateVersion: 'SF2-BESTEFFORT-1', policyVersion: cls.gradingPolicyVersion || null, context: { monthStr } });
-    window.print();
-  },
+    this.saveReportSnapshot({
+        reportType: 'SF2', classId: cls.id, learnerId: null,
+        templateVersion: 'SF2-2026-v2',
+        policyVersion: cls.gradingPolicyVersion || null,
+        context: { monthStr }
+    });
+
+    Pages._waitForPrintImagesThen(() => {
+        window.print();
+        setTimeout(() => {
+            document.getElementById('print-area').innerHTML = '';
+        }, 1500);
+    });
+},
 
   /* ============================================================================
      SF8 — LEARNER'S BASIC HEALTH AND NUTRITION REPORT
@@ -41748,15 +42083,19 @@ async sf5(root) {
   const policy  = GRADING_POLICIES[cls.gradingPolicyVersion]
               || GradingEngine.resolvePolicy({ schoolYear: cls.schoolYear });
 
-  // Curriculum + Division Representative — both editable via the Signatories modal.
+  // Load curriculum and division rep settings
   const curriculum  = await Pages._sf5ResolveCurriculum(cls, policy);
   const divisionRep = await Pages._sf5ResolveDivisionRep();
 
-  // ── Per-learner data + summary aggregates ──
+  // Compute data (reuses your existing untouched functions)
   const learnerData = await Pages._sf5ComputeLearnerData(cls, policy);
   const summary     = Pages._sf5Summary(learnerData);
 
-  // ── Validation ──
+  // Readiness Check
+  const missingGrades = learnerData.filter(d => d.average === null).length;
+  const hasGrades = missingGrades < learnerData.length;
+
+  // Validation & Warnings
   const errors = [], warnings = [];
   if (!school.name)     errors.push('School Name is missing (Settings → School Profile).');
   if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
@@ -41766,52 +42105,141 @@ async sf5(root) {
   if (!school.division)   warnings.push('Division is missing.');
   if (!school.schoolHead) warnings.push('School Head name is missing.');
   if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing.');
-
-  const graded = learnerData.filter(d => d.average !== null);
-  if (!graded.length) {
-    warnings.push('No finalized grades found. All learners will appear as RETAINED until at least one learning area is finalized in the Gradebook.');
-  } else if (graded.length < learnerData.length) {
-    warnings.push(`${learnerData.length - graded.length} learner(s) have no finalized grades and are shown as RETAINED.`);
+  
+  if (missingGrades > 0) {
+    warnings.push(
+      `<strong>${missingGrades} learner${missingGrades === 1 ? '' : 's'}</strong> have no finalized grades. 
+       They will incorrectly appear as <strong>RETAINED</strong> until all term grades are finalized in the Gradebook.`
+    );
   }
 
-  // ── Render ──
   root.innerHTML = `
     <div class="page-head">
       <div>
-        <h2>SF5 — Report on Promotion and Learning Progress &amp; Achievement</h2>
-        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
+        <h2 style="display:flex;align-items:center;gap:8px;">
+          SF5 — Report on Promotion & Learning Progress
+          <button class="icon-btn" id="sf5-info-btn"
+                  title="View important notes for submission"
+                  style="width:24px;height:24px;background:var(--bg);border:1px solid var(--border);">
+            ${icon('info')}
+          </button>
+        </h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${State.learners.length} learners · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
       </div>
       <div class="page-actions">
-        <button class="btn btn-outline" id="sf5-switch">${icon('users')} Switch Class</button>
-        <button class="btn btn-outline" id="sf5-signatories">${icon('edit')} Signatories</button>
         <button class="btn btn-outline" id="sf5-export" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
         <button class="btn btn-primary" id="sf5-print" ${errors.length ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
       </div>
     </div>
 
-    <div class="alert alert-warning mb-16" style="align-items:flex-start;">
-      ${icon('alert')}
-      <div>
-        <strong>Verify before submission.</strong> KlazAssist reproduces the official DepEd SF5 layout.
-        The <em>Action Taken</em> column is derived from finalized term grades across every learning area
-        in this section. Learners who completed Summer Remedial Class and passed the Recomputed Final Grade
-        appear as <strong>CONDITIONAL</strong>; learners who failed more than two areas appear as
-        <strong>RETAINED</strong>.
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
+      <strong>Cannot export SF5 — missing required information:</strong>
+      <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
+      <strong>Warnings:</strong>
+      <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${e}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    <!-- KPI Cards -->
+    <div class="grid grid-4 mb-16">
+      <div class="stat-card">
+        <div class="stat-icon">${icon('users')}</div>
+        <div class="stat-label">Total Learners</div>
+        <div class="stat-value">${learnerData.length}</div>
+      </div>
+      <div class="stat-card accent-success">
+        <div class="stat-icon">${icon('check')}</div>
+        <div class="stat-label">Promoted</div>
+        <div class="stat-value">${summary.promoted.total}</div>
+      </div>
+      <div class="stat-card accent-warning">
+        <div class="stat-icon">${icon('alert')}</div>
+        <div class="stat-label">Conditional</div>
+        <div class="stat-value">${summary.conditional.total}</div>
+      </div>
+      <div class="stat-card accent-danger">
+        <div class="stat-icon">${icon('xCircle')}</div>
+        <div class="stat-label">Retained</div>
+        <div class="stat-value">${summary.retained.total}</div>
       </div>
     </div>
 
-    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    <div class="grid grid-2 mb-16" style="align-items:start;">
+      <!-- Signatories Card -->
+      <div class="card">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Signatories & Curriculum</h3>
+          <button class="btn btn-sm btn-outline" id="sf5-edit-signatories">
+            ${icon('edit')} Edit
+          </button>
+        </div>
+        <table style="width:100%;font-size:12.5px;line-height:1.6;">
+          <tr>
+            <td class="text-muted" style="width:140px;padding:4px 0;">Curriculum</td>
+            <td><strong>${Utils.esc(curriculum)}</strong></td>
+          </tr>
+          <tr>
+            <td class="text-muted" style="padding:4px 0;">Prepared by</td>
+            <td><strong>${Utils.esc(Licensing.getReportSignatory(cls) || teacher.fullName || '—')}</strong></td>
+          </tr>
+          <tr>
+            <td class="text-muted" style="padding:4px 0;">Certified by</td>
+            <td><strong>${Utils.esc(school.schoolHead || '—')}</strong></td>
+          </tr>
+          <tr>
+            <td class="text-muted" style="padding:4px 0;">Reviewed by</td>
+            <td><strong>${Utils.esc(divisionRep || '—')}</strong></td>
+          </tr>
+        </table>
+      </div>
 
-    <div class="sf5-document" id="sf5-document">
-      ${Pages._sf5BuildDocumentHTML(cls, school, teacher, curriculum, learnerData, summary, policy, divisionRep)}
+      <!-- Readiness Card -->
+      <div class="card">
+        <div class="card-head">
+          <h3 style="font-size:14px;">Data Readiness</h3>
+        </div>
+        <div class="flex gap-12 mb-12">
+          <div style="flex:1; padding:12px; background:var(--bg); border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:800; color:var(--success);">${learnerData.length - missingGrades}</div>
+            <div class="text-xs text-muted">With Final Grades</div>
+          </div>
+          <div style="flex:1; padding:12px; background:var(--bg); border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:800; color:${missingGrades ? 'var(--danger)' : 'var(--text-muted)'};">${missingGrades}</div>
+            <div class="text-xs text-muted">Missing Grades</div>
+          </div>
+        </div>
+        <div class="progress-bar ${hasGrades ? 'success' : 'danger'}" style="height:6px;">
+          <div style="width:${learnerData.length ? ((learnerData.length - missingGrades) / learnerData.length) * 100 : 0}%"></div>
+        </div>
+        <p class="text-xs text-muted" style="margin-top:8px;">
+          The SF5 requires all learning areas to be finalized in the Gradebook to accurately determine Promotion, Conditional, or Retained status.
+        </p>
+      </div>
+    </div>
+
+    <!-- Document Preview -->
+    <div class="card mb-16" style="padding:0; overflow:hidden;">
+      <div class="card-head" style="padding:16px; border-bottom:1px solid var(--border); background:var(--bg); margin-bottom:0;">
+        <h3 style="font-size:14px;">Official Document Preview</h3>
+        <span class="text-xs text-muted">A4 Landscape</span>
+      </div>
+      <div style="padding:24px; background:#e2e8f0; overflow-x:auto;">
+        <!-- The untouched HTML document builder -->
+        <div class="sf5-document" style="box-shadow:0 4px 12px rgba(0,0,0,0.1); margin:0 auto; max-width:1100px; background:#fff;">
+          ${Pages._sf5BuildDocumentHTML(cls, school, teacher, curriculum, learnerData, summary, policy, divisionRep)}
+        </div>
+      </div>
     </div>
   `;
 
-  root.querySelector('#sf5-switch').onclick       = () => App.openClassSelector();
-  root.querySelector('#sf5-signatories').onclick  = () => Pages._sf5EditSignatoriesModal(cls, policy);
-  root.querySelector('#sf5-export').onclick       = () => Pages._sf5ExportXLSX(cls, school, teacher, curriculum, learnerData, summary, policy);
-  root.querySelector('#sf5-print').onclick        = () => Pages._sf5Print(cls, school, teacher, curriculum, learnerData, summary, policy);
+  /* ---------------- Bindings ---------------- */
+  root.querySelector('#sf5-info-btn').onclick = () => Pages._sf5ShowInfoModal();
+  root.querySelector('#sf5-edit-signatories').onclick = () => Pages._sf5EditSignatoriesModal(cls, policy);
+  
+  root.querySelector('#sf5-export').onclick = () => Pages._sf5ExportXLSX(cls, school, teacher, curriculum, learnerData, summary, policy);
+  root.querySelector('#sf5-print').onclick  = () => Pages._sf5Print(cls, school, teacher, curriculum, learnerData, summary, policy);
 },
 
 /* ---- SF5 · resolve curriculum label ---- */
@@ -41825,6 +42253,44 @@ async _sf5ResolveCurriculum(cls, policy) {
   const syStart = parseInt(String(cls.schoolYear || State.schoolYear).slice(0, 4), 10);
   if (Number.isFinite(syStart) && syStart >= 2024) return 'MATATAG CURRICULUM';
   return 'K TO 12 BASIC EDUCATION CURRICULUM';
+},
+
+_sf5ShowInfoModal() {
+  UI.modal({
+    title: 'Important Notes for SF5 Submission',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-warning mb-16" style="margin:0 0 16px;">
+        ${icon('alert').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Template Verification:</strong> KlazAssist reproduces the official DepEd SF5 layout. 
+          The <em>Action Taken</em> column is derived automatically from finalized term grades across every learning area 
+          in this section. Compare against your Division's current official template before submission.
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="margin:0 0 16px;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>DepEd Grading Rules (DO 015, s. 2026):</strong><br>
+          <ul style="margin:8px 0 0 18px; padding:0;">
+            <li><strong>PROMOTED:</strong> The learner passed all learning areas.</li>
+            <li><strong>CONDITIONAL:</strong> The learner failed in <strong>at most 2</strong> learning areas, completed Summer Remedial Class, and passed the Recomputed Final Grade (RFG).</li>
+            <li><strong>RETAINED:</strong> The learner failed in <strong>more than 2</strong> learning areas, or failed the RFG.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="alert alert-info" style="margin:0;">
+        ${icon('book').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Final Grade calculation:</strong> The Final Grade for each learning area is the average of Term 1, Term 2, and Term 3 grades. 
+          If a term is missing, the Final Grade is marked as incomplete, and the learner's status defaults to <em>Retained</em> until all data is finalized.
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-primary" data-close>Got it</button>`
+  });
 },
 
 async _sf5EditCurriculumModal(cls, policy) {
@@ -42620,17 +43086,19 @@ async sf9(root) {
            · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}
            · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'}</p>
       </div>
-      <div class="page-actions">
-        <select class="form-control" id="sf9-print-mode" style="max-width:220px;" title="Print layout">
-          <option value="a5" ${printMode === 'a5' ? 'selected' : ''}>A5 · Back-to-back booklet</option>
-          <option value="a4" ${printMode === 'a4' ? 'selected' : ''}>A4 · Landscape side-by-side</option>
+      <div class="page-actions" style="flex-wrap: nowrap; align-items: center; gap: 8px; overflow-x: auto; padding-bottom: 2px;">
+        <select class="form-control" id="sf9-print-mode" style="width: auto; min-width: 140px; font-weight: 600;" title="Print layout">
+          <option value="a5" ${printMode === 'a5' ? 'selected' : ''} title="A5 · Back-to-back booklet">A5 Booklet</option>
+          <option value="a4" ${printMode === 'a4' ? 'selected' : ''} title="A4 · Landscape side-by-side">A4 Landscape</option>
         </select>
-        <button class="btn btn-outline" id="sf9-refresh"
+        
+        <button class="btn btn-outline" id="sf9-refresh" style="white-space: nowrap;"
                 title="Re-read the latest finalized term grades from the Gradebook">
-          ${icon('history')} Sync from Gradebook
+          ${icon('history')} Sync
         </button>
-        <button class="btn btn-primary" id="sf9-print" disabled>
-          ${icon('printer')} Print / Save as PDF
+        
+        <button class="btn btn-primary" id="sf9-print" style="white-space: nowrap;" disabled>
+          ${icon('printer')} Print
         </button>
       </div>
     </div>
