@@ -5770,6 +5770,7 @@ function setupLoginBindings() {
   });
 }
 
+
 /* ============================================================================
    APP
    ============================================================================ */
@@ -6396,6 +6397,7 @@ toggleTheme() {
   },
 
   bindEvents() {
+    FAB.init();
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -6884,17 +6886,15 @@ async openAssignAssessmentModal(assessmentId) {
     if (!el) return;
     el.textContent = State.activeClass ? (State.activeClass.gradeLevel + ' - ' + State.activeClass.section) : 'No Class';
   },
-  toggleQuickFab() { document.getElementById('quick-fab').classList.toggle('open'); },
-  quickAction(type) {
-    document.getElementById('quick-fab').classList.remove('open');
-    if (type === 'learner') this.openLearnerForm();
-    else if (type === 'attendance') this.navigate('attendance');
-    else if (type === 'assessment') this.openAssessmentForm();
-    else if (type === 'assignment') this.openAssignmentForm();
-    else if (type === 'note') this.openNoteForm();
-    else if (type === 'lesson') this.openLessonForm();
-    else if (type === 'lessonAI') this.navigate('lesson-planner');
-    else if (type === 'examAI')   this.navigate('tos-generator');
+  toggleQuickFab() {
+    const fab = document.getElementById('quick-fab');
+    if (!fab) return;
+    const willOpen = !fab.classList.contains('open');
+    fab.classList.toggle('open');
+    if (willOpen) {
+      // Measure after paint so `scrollHeight` is accurate
+      requestAnimationFrame(() => FAB._flipMenu(fab));
+    }
   },
   async toggleNotifications() {
     const panel = document.getElementById('notif-panel');
@@ -7940,7 +7940,255 @@ async openAssignAssessmentModal(assessmentId) {
     UI.modal({ title: 'More Modules', body, footer: false, size: 'modal-lg' });
   }
 };
+/* ============================================================================
+   QUICK ACTION FAB — draggable, persistent, menu-aware
+   ============================================================================ */
+/* ============================================================================
+   QUICK ACTION FAB — draggable, persistent, menu-aware
+   ============================================================================ */
+const FAB = {
+  KEY: 'klazassist.fabPosition',
+  HINT_KEY: 'klazassist.fabHintShown',
+  _bound: false,
+  _dragging: false,
+  _moved: false,
+  _startX: 0,
+  _startY: 0,
+  _origX: 0,
+  _origY: 0,
+  _longPressTimer: null,
 
+  init() {
+    if (this._bound) return;
+    const fab = document.getElementById('quick-fab');
+    if (!fab) {
+      requestAnimationFrame(() => this.init());
+      return;
+    }
+    this._bound = true;
+
+    this._restore(fab);
+    this._bindDrag(fab);
+    this._watchModals(fab);
+    this._maybeShowHint();
+
+    // Keep the FAB inside the viewport when the window resizes/rotates
+    const reclamp = Utils.debounce(() => {
+      const el = document.getElementById('quick-fab');
+      if (!el) return;
+      // FIX: Only clamp and save if the FAB has been explicitly dragged.
+      // If reset, left/top will be empty, and we let CSS handle the positioning.
+      if (el.style.left || el.style.top) {
+        this._clampIntoViewport(el);
+        this._save(el);
+      }
+    }, 200);
+    window.addEventListener('resize', reclamp);
+    window.addEventListener('orientationchange', () => setTimeout(reclamp, 300));
+  },
+
+  /* ---- Persistence ---- */
+  _restore(fab) {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      if (!raw) return;
+      const pos = JSON.parse(raw);
+      if (typeof pos.x !== 'number' || typeof pos.y !== 'number') return;
+      this._applyPosition(fab, pos.x, pos.y);
+      this._clampIntoViewport(fab);
+    } catch (e) { /* fall through to default bottom-right */ }
+  },
+
+  _save(fab) {
+    try {
+      const rect = fab.getBoundingClientRect();
+      localStorage.setItem(this.KEY, JSON.stringify({
+        x: Math.round(rect.left),
+        y: Math.round(rect.top)
+      }));
+    } catch (e) {}
+  },
+
+  _applyPosition(fab, x, y) {
+    fab.style.left = x + 'px';
+    fab.style.top = y + 'px';
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+  },
+
+  _clampIntoViewport(fab) {
+    const rect = fab.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;   // not laid out yet
+    const m = 8;
+    const x = Math.max(m, Math.min(rect.left, window.innerWidth - rect.width - m));
+    const y = Math.max(m, Math.min(rect.top, window.innerHeight - rect.height - m));
+    this._applyPosition(fab, x, y);
+  },
+
+  /* ---- Drag ---- */
+  _bindDrag(fab) {
+    const main = fab.querySelector('.quick-fab-main');
+    if (!main) return;
+
+    const onDown = (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+
+      this._dragging = true;
+      this._moved = false;
+      this._startX = e.clientX;
+      this._startY = e.clientY;
+      const rect = fab.getBoundingClientRect();
+      this._origX = rect.left;
+      this._origY = rect.top;
+
+      try { main.setPointerCapture(e.pointerId); } catch (_) {}
+
+      // Long-press → offer reset
+      this._longPressTimer = setTimeout(() => {
+        if (this._moved) return;
+        this._dragging = false;
+        try { main.releasePointerCapture(e.pointerId); } catch (_) {}
+        fab.classList.remove('dragging');
+        this.confirmReset();
+      }, 800);
+
+      e.preventDefault();
+    };
+
+    const onMove = (e) => {
+      if (!this._dragging) return;
+
+      const dx = e.clientX - this._startX;
+      const dy = e.clientY - this._startY;
+
+      // FIX: Increased threshold to 15px so touch jitter doesn't
+      // cancel a long-press and start dragging by accident.
+      if (!this._moved && Math.hypot(dx, dy) < 15) return;
+
+      if (!this._moved) {
+        this._moved = true;
+        fab.classList.remove('open');              // close menu mid-drag
+        if (this._longPressTimer) {
+          clearTimeout(this._longPressTimer);
+          this._longPressTimer = null;
+        }
+      }
+
+      fab.classList.add('dragging');
+
+      const w = fab.offsetWidth, h = fab.offsetHeight, m = 8;
+      let x = this._origX + dx;
+      let y = this._origY + dy;
+      x = Math.max(m, Math.min(x, window.innerWidth - w - m));
+      y = Math.max(m, Math.min(y, window.innerHeight - h - m));
+      this._applyPosition(fab, x, y);
+    };
+
+    const onUp = (e) => {
+      if (!this._dragging) return;
+      this._dragging = false;
+
+      if (this._longPressTimer) {
+        clearTimeout(this._longPressTimer);
+        this._longPressTimer = null;
+      }
+      try { main.releasePointerCapture(e.pointerId); } catch (_) {}
+      fab.classList.remove('dragging');
+
+      if (this._moved) {
+        this._save(fab);
+        // Swallow the click that would otherwise open the menu
+        main.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+        }, { once: true, capture: true });
+      }
+    };
+
+    main.addEventListener('pointerdown', onDown);
+    main.addEventListener('pointermove', onMove);
+    main.addEventListener('pointerup', onUp);
+    main.addEventListener('pointercancel', onUp);
+  },
+
+  /* ---- Hide while modals are open ---- */
+  _watchModals(fab) {
+    const root = document.getElementById('modal-root');
+    if (!root || typeof MutationObserver !== 'function') return;
+    const sync = () => {
+      fab.classList.toggle('modal-open', root.children.length > 0);
+    };
+    new MutationObserver(sync).observe(root, { childList: true });
+    sync();
+  },
+
+  /* ---- Menu flip (called from App.toggleQuickFab) ---- */
+  _flipMenu(fab) {
+    const menu = fab.querySelector('.quick-fab-menu');
+    if (!menu) return;
+
+    const rect = fab.getBoundingClientRect();
+
+    // Horizontal: open toward the viewport centre
+    if (rect.left + rect.width / 2 > window.innerWidth / 2) {
+      menu.style.left = 'auto';
+      menu.style.right = '0';
+    } else {
+      menu.style.right = 'auto';
+      menu.style.left = '0';
+    }
+
+    // Vertical: measure natural height, then pick up vs down
+    menu.style.maxHeight = 'none';
+    const natH = menu.scrollHeight || 400;
+    const spaceAbove = rect.top - 8;
+    const spaceBelow = window.innerHeight - rect.bottom - 8;
+
+    if (spaceAbove >= natH + 62 || spaceAbove >= spaceBelow) {
+      menu.style.top = 'auto';
+      menu.style.bottom = '62px';
+      menu.style.maxHeight = Math.min(500, Math.max(200, spaceAbove - 62)) + 'px';
+    } else {
+      menu.style.bottom = 'auto';
+      menu.style.top = '62px';
+      menu.style.maxHeight = Math.min(500, Math.max(200, spaceBelow - 62)) + 'px';
+    }
+  },
+
+  /* ---- Reset ---- */
+  confirmReset() {
+    UI.confirm({
+      title: 'Reset action button position?',
+      message: 'The floating action button will return to the bottom-right corner.',
+      confirmText: 'Reset',
+      confirmClass: 'btn-primary',
+      onConfirm: () => this.reset()
+    });
+  },
+
+  reset() {
+    const fab = document.getElementById('quick-fab');
+    if (!fab) return;
+    fab.style.left = '';
+    fab.style.top = '';
+    fab.style.right = '';
+    fab.style.bottom = '';
+    try { localStorage.removeItem(this.KEY); } catch (_) {}
+    UI.toast('Action button reset to default position', 'success', 2200);
+  },
+
+  /* ---- First-time hint ---- */
+  _maybeShowHint() {
+    try {
+      if (localStorage.getItem(this.HINT_KEY)) return;
+      setTimeout(() => {
+        if (!document.getElementById('quick-fab')) return;
+        UI.toast('Tip: drag the action button to reposition it. Long-press to reset.', 'info', 6000);
+        try { localStorage.setItem(this.HINT_KEY, '1'); } catch (_) {}
+      }, 2500);
+    } catch (_) {}
+  }
+};
 /* ============================================================================
    SAMPLE DATA
    ============================================================================ */
@@ -16903,87 +17151,344 @@ _showClassMismatchDialog(comparison, classInfo) {
     Pages.autoNudgeLowAttendance(State.activeClass).catch(e => console.warn('Auto-nudge failed:', e));
     App.navigate('attendance');
   },
-  async attendanceHistory(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'calendar', title:'No class selected', message:'Create or select a class first.'})}</div>`; return; }
-    const all = await DB.getAllByIndex('attendance', 'classId', State.activeClass.id);
+async attendanceHistory(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'calendar', title: 'No class selected',
+      message: 'Create or select a class first.'
+    })}</div>`;
+    return;
+  }
+
+  // Default to current month
+  if (!State._attHistMonth) {
+    const now = new Date();
+    State._attHistMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+
+  const allAtt = await DB.getAllByIndex('attendance', 'classId', cls.id);
+  
+  // Helper to render based on current state
+  const renderData = (monthStr) => {
+    const filtered = allAtt.filter(a => !monthStr || a.date.startsWith(monthStr));
+    
     const byDate = {};
-    all.forEach(a => {
-      if (!byDate[a.date]) byDate[a.date] = { present:0, absent:0, late:0, excused:0, total:0 };
+    filtered.forEach(a => {
+      if (!byDate[a.date]) byDate[a.date] = { present: 0, absent: 0, late: 0, excused: 0, total: 0 };
       byDate[a.date].total++;
-      byDate[a.date][a.status.toLowerCase()]++;
+      const st = a.status.toLowerCase();
+      if (byDate[a.date][st] !== undefined) byDate[a.date][st]++;
     });
+
     const dates = Object.keys(byDate).sort().reverse();
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Attendance History</h2><p>${Utils.esc(State.activeClass.gradeLevel)} - ${Utils.esc(State.activeClass.section)}</p></div></div>
-      <div class="card">
-        ${dates.length === 0 ? UI.emptyState({icon:'calendar', title:'No records yet', message:'Attendance records will appear here.', actionLabel:'Record Attendance', actionFn:"App.navigate('attendance')"}) :
-          `<div class="table-wrap"><table class="data-table">
-            <thead><tr><th>Date</th><th>Present</th><th>Absent</th><th>Late</th><th>Excused</th><th>Total</th><th>Rate</th></tr></thead>
-            <tbody>${dates.map(d => {
-              const r = byDate[d];
-              const rate = r.total ? Utils.round(((r.present + r.late + r.excused) / r.total) * 100, 1) : 0;
-              return `<tr>
-                <td><a href="#" data-goto-date="${Utils.attr(d)}"><strong>${Utils.formatDate(d, {weekday:'short', year:'numeric', month:'short', day:'numeric'})}</strong></a></td>
-                <td style="color:var(--success);font-weight:600;">${r.present}</td>
-                <td style="color:var(--danger);font-weight:600;">${r.absent}</td>
-                <td style="color:var(--warning);font-weight:600;">${r.late}</td>
-                <td style="color:var(--deped-blue);font-weight:600;">${r.excused}</td>
-                <td>${r.total}</td><td>${rate}%</td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table></div>`}
-      </div>`;
-    root.querySelectorAll('[data-goto-date]').forEach(a => {
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
+
+    // Calculate monthly summary
+    let totalPresent = 0, totalDays = dates.length;
+    dates.forEach(d => {
+      totalPresent += (byDate[d].present + byDate[d].late + byDate[d].excused);
+    });
+    const totalPossible = dates.reduce((sum, d) => sum + byDate[d].total, 0);
+    const avgRate = totalPossible > 0 ? Utils.round((totalPresent / totalPossible) * 100, 1) : 0;
+
+    return `
+      <div class="grid grid-3 mb-16">
+        <div class="stat-card">
+          <div class="stat-icon">${icon('calendar')}</div>
+          <div class="stat-label">Days Recorded</div>
+          <div class="stat-value">${totalDays}</div>
+        </div>
+        <div class="stat-card accent-success">
+          <div class="stat-icon">${icon('check')}</div>
+          <div class="stat-label">Total Present</div>
+          <div class="stat-value">${totalPresent}</div>
+        </div>
+        <div class="stat-card accent-${avgRate >= 90 ? 'success' : avgRate >= 75 ? 'warning' : 'danger'}">
+          <div class="stat-icon">${icon('trending')}</div>
+          <div class="stat-label">Monthly Average</div>
+          <div class="stat-value">${avgRate}%</div>
+        </div>
+      </div>
+
+      <div class="card" style="padding-bottom:0;">
+        ${dates.length === 0 
+          ? `<div style="padding:40px;">${UI.emptyState({
+              icon: 'calendar', title: 'No records found',
+              message: `No attendance has been recorded for ${monthStr ? 'this month' : 'any date'}.`
+            })}</div>` 
+          : `<div class="table-wrap" style="border:none;border-radius:0 0 var(--radius) var(--radius);">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Date</th>
+                  <th style="text-align:center;">Present</th>
+                  <th style="text-align:center;">Absent</th>
+                  <th style="text-align:center;">Late</th>
+                  <th style="text-align:center;">Excused</th>
+                  <th style="text-align:center;">Total</th>
+                  <th style="text-align:right;">Rate</th>
+                </tr></thead>
+                <tbody>
+                  ${dates.map(d => {
+                    const r = byDate[d];
+                    const rate = r.total ? Utils.round(((r.present + r.late + r.excused) / r.total) * 100, 1) : 0;
+                    const rateColor = rate >= 90 ? 'var(--success)' : rate >= 75 ? 'var(--deped-blue)' : 'var(--danger)';
+                    return `<tr style="cursor:pointer;" data-goto-date="${Utils.attr(d)}" title="Click to edit this date">
+                      <td><strong>${Utils.formatDate(d, { weekday:'short', year:'numeric', month:'short', day:'numeric' })}</strong></td>
+                      <td style="text-align:center;color:var(--success);font-weight:600;">${r.present}</td>
+                      <td style="text-align:center;color:var(--danger);font-weight:600;">${r.absent}</td>
+                      <td style="text-align:center;color:var(--warning);font-weight:600;">${r.late}</td>
+                      <td style="text-align:center;color:var(--deped-blue);font-weight:600;">${r.excused}</td>
+                      <td style="text-align:center;color:var(--text-muted);">${r.total}</td>
+                      <td style="text-align:right;">
+                        <span class="badge" style="background:${rateColor}15;color:${rateColor};font-size:11px;">${rate}%</span>
+                      </td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>`}
+      </div>
+    `;
+  };
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Attendance History</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)}</p>
+      </div>
+      <div class="page-actions">
+        <div class="flex gap-8" style="align-items:center;">
+          <label class="text-xs text-muted" style="margin-right:4px;">Filter:</label>
+          <input type="month" class="form-control" id="att-hist-month" 
+                 value="${Utils.attr(State._attHistMonth)}" style="width:auto;">
+          <button class="btn btn-outline" id="att-hist-clear" title="Show all time">Show All</button>
+        </div>
+      </div>
+    </div>
+    <div id="att-hist-data">${renderData(State._attHistMonth)}</div>
+  `;
+
+  const dataWrap = root.querySelector('#att-hist-data');
+  const monthInput = root.querySelector('#att-hist-month');
+
+  monthInput.addEventListener('change', () => {
+    State._attHistMonth = monthInput.value;
+    dataWrap.innerHTML = renderData(State._attHistMonth);
+    bindRows(dataWrap);
+  });
+
+  root.querySelector('#att-hist-clear').onclick = () => {
+    State._attHistMonth = '';
+    monthInput.value = '';
+    dataWrap.innerHTML = renderData('');
+    bindRows(dataWrap);
+  };
+
+  const bindRows = (wrap) => {
+    wrap.querySelectorAll('[data-goto-date]').forEach(a => {
+      a.addEventListener('click', () => {
         State.attendanceDate = a.dataset.gotoDate;
         App.navigate('attendance');
       });
     });
-  },
-  async attendanceAnalytics(root) {
-    if (!State.activeClass) { root.innerHTML = `<div class="card">${UI.emptyState({icon:'chart', title:'No class selected', message:'Create or select a class first.'})}</div>`; return; }
-    const all = await DB.getAllByIndex('attendance', 'classId', State.activeClass.id);
-    const total = all.length;
-    const present = all.filter(a => a.status === 'Present').length;
-    const absent = all.filter(a => a.status === 'Absent').length;
-    const late = all.filter(a => a.status === 'Late').length;
-    const excused = all.filter(a => a.status === 'Excused').length;
+  };
+  bindRows(dataWrap);
+},
+async attendanceAnalytics(root) {
+  const cls = State.activeClass;
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'chart', title: 'No class selected',
+      message: 'Create or select a class first.'
+    })}</div>`;
+    return;
+  }
+
+  // State for time range filtering
+  if (!State._attAnalyticsRange) State._attAnalyticsRange = 'all';
+  const range = State._attAnalyticsRange;
+
+  const allAtt = await DB.getAllByIndex('attendance', 'classId', cls.id);
+  
+  const renderDashboard = (currentRange) => {
+    let filtered = allAtt;
+    if (currentRange === 'month') {
+      const now = new Date();
+      const prefix = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+      filtered = allAtt.filter(a => a.date.startsWith(prefix));
+    }
+
+    const total = filtered.length;
+    const present = filtered.filter(a => a.status === 'Present').length;
+    const absent = filtered.filter(a => a.status === 'Absent').length;
+    const late = filtered.filter(a => a.status === 'Late').length;
+    const excused = filtered.filter(a => a.status === 'Excused').length;
     const rate = total ? Utils.round(((present + late + excused) / total) * 100, 1) : 0;
+
+    // Per learner aggregation
     const byLearner = {};
-    all.forEach(a => {
-      if (!byLearner[a.learnerId]) byLearner[a.learnerId] = { present:0, absent:0, late:0, excused:0, total:0 };
+    State.learners.forEach(l => { byLearner[l.id] = { present: 0, absent: 0, late: 0, excused: 0, total: 0 }; });
+    filtered.forEach(a => {
+      if (!byLearner[a.learnerId]) return;
       byLearner[a.learnerId].total++;
-      byLearner[a.learnerId][a.status.toLowerCase()]++;
+      const st = a.status.toLowerCase();
+      if (byLearner[a.learnerId][st] !== undefined) byLearner[a.learnerId][st]++;
     });
-    root.innerHTML = `
-      <div class="page-head"><div><h2>Attendance Analytics</h2><p>${Utils.esc(State.activeClass.gradeLevel)} - ${Utils.esc(State.activeClass.section)}</p></div></div>
-      <div class="grid grid-4 mb-20">
-        <div class="stat-card"><div class="stat-label">Total Records</div><div class="stat-value">${total}</div></div>
-        <div class="stat-card accent-success"><div class="stat-label">Present</div><div class="stat-value">${present}</div></div>
-        <div class="stat-card accent-danger"><div class="stat-label">Absent</div><div class="stat-value">${absent}</div></div>
-        <div class="stat-card accent-gold"><div class="stat-label">Attendance Rate</div><div class="stat-value">${rate}%</div></div>
+
+    const learnerRows = State.learners.map(l => {
+      const b = byLearner[l.id];
+      const r = b.total ? Utils.round(((b.present + b.late + b.excused) / b.total) * 100, 1) : 0;
+      return { learner: l, stats: b, rate: r };
+    }).sort((a, b) => a.rate - b.rate); // Lowest first to highlight issues
+
+    const atRisk = learnerRows.filter(x => x.stats.total > 0 && x.rate < 85);
+
+    return `
+      <div class="grid grid-4 mb-16">
+        <div class="stat-card">
+          <div class="stat-icon">${icon('check')}</div>
+          <div class="stat-label">Overall Rate</div>
+          <div class="stat-value" style="color:${rate >= 90 ? 'var(--success)' : rate >= 75 ? 'var(--warning)' : 'var(--danger)'};">${rate}%</div>
+          <div class="text-xs text-muted">${total} total records</div>
+        </div>
+        <div class="stat-card accent-success">
+          <div class="stat-icon">${icon('user')}</div>
+          <div class="stat-label">Present</div>
+          <div class="stat-value">${present}</div>
+          <div class="text-xs text-muted">${total ? Math.round((present/total)*100) : 0}% of total</div>
+        </div>
+        <div class="stat-card accent-danger">
+          <div class="stat-icon">${icon('user')}</div>
+          <div class="stat-label">Absent</div>
+          <div class="stat-value">${absent}</div>
+          <div class="text-xs text-muted">${total ? Math.round((absent/total)*100) : 0}% of total</div>
+        </div>
+        <div class="stat-card accent-warning">
+          <div class="stat-icon">${icon('timer')}</div>
+          <div class="stat-label">Late / Excused</div>
+          <div class="stat-value">${late + excused}</div>
+          <div class="text-xs text-muted">${late} late · ${excused} excused</div>
+        </div>
       </div>
-      <div class="grid grid-2 mb-20">
-        <div class="card"><div class="card-head"><h3>Status Distribution</h3></div>
-          <div style="display:flex;justify-content:center;">${UI.donutChart([
-            {label:'Present', value:present, color:'#198754'},
-            {label:'Absent', value:absent, color:'#DC3545'},
-            {label:'Late', value:late, color:'#F59E0B'},
-            {label:'Excused', value:excused, color:'#0038A8'}
-          ])}</div></div>
-        <div class="card"><div class="card-head"><h3>Per-Learner Summary</h3></div>
-          <div class="table-wrap" style="max-height:300px;overflow-y:auto;">
-            <table class="data-table"><thead><tr><th>Learner</th><th>Present</th><th>Absent</th><th>Late</th><th>Rate</th></tr></thead>
-              <tbody>${State.learners.map(l => {
-                const b = byLearner[l.id] || {present:0,absent:0,late:0,excused:0,total:0};
-                const r = b.total ? Utils.round(((b.present + b.late + b.excused) / b.total) * 100, 1) : 0;
-                return `<tr><td><strong>${Utils.esc(Utils.displayName(l))}</strong></td><td>${b.present}</td><td>${b.absent}</td><td>${b.late}</td><td>${r}%</td></tr>`;
-              }).join('')}</tbody>
-            </table>
-          </div></div>
-      </div>`;
-  },
+
+      <div class="grid grid-2 mb-16" style="align-items:start;">
+        <!-- Status Donut -->
+        <div class="card">
+          <div class="card-head"><h3>Status Distribution</h3></div>
+          <div style="display:flex; justify-content:center; padding:16px 0;">
+            ${UI.donutChart([
+              {label:'Present', value:present, color:'#198754'},
+              {label:'Absent', value:absent, color:'#DC3545'},
+              {label:'Late', value:late, color:'#F59E0B'},
+              {label:'Excused', value:excused, color:'#0038A8'}
+            ], { size: 200, thickness: 30 })}
+          </div>
+        </div>
+
+        <!-- At-Risk Watchlist -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Needs Attention</h3>
+            <span class="text-xs text-muted">Below 85% attendance</span>
+          </div>
+          ${atRisk.length === 0 ? `
+            <div style="text-align:center; padding:32px 16px; color:var(--text-muted);">
+              ${icon('check')}
+              <p class="text-sm" style="margin-top:8px;">All active learners are above 85%.</p>
+            </div>
+          ` : `
+            <div style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto;">
+              ${atRisk.slice(0, 10).map(x => `
+                <div style="display:flex; align-items:center; gap:10px; padding:8px; background:var(--bg); border-radius:8px;">
+                  ${Utils.avatarHTML(x.learner, 28, 10)}
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:12.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${Utils.esc(Utils.displayName(x.learner))}</div>
+                    <div class="text-xs text-muted">${x.stats.absent} absent · ${x.stats.late} late</div>
+                  </div>
+                  <span class="badge" style="background:var(--danger)15; color:var(--danger);">${x.rate}%</span>
+                </div>
+              `).join('')}
+              ${atRisk.length > 10 ? `<div class="text-xs text-muted text-center" style="margin-top:8px;">+ ${atRisk.length - 10} more</div>` : ''}
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- Full Roster Table -->
+      <div class="card" style="padding-bottom:0;">
+        <div class="card-head" style="padding:16px 16px 8px;">
+          <h3>Per-Learner Breakdown</h3>
+        </div>
+        <div class="table-wrap" style="border:none;border-radius:0 0 var(--radius) var(--radius);">
+          <table class="data-table">
+            <thead><tr>
+              <th>Learner</th>
+              <th style="text-align:center;">Present</th>
+              <th style="text-align:center;">Absent</th>
+              <th style="text-align:center;">Late</th>
+              <th style="text-align:center;">Excused</th>
+              <th style="text-align:right;">Rate</th>
+            </tr></thead>
+            <tbody>
+              ${learnerRows.map(x => {
+                const rateColor = x.rate >= 90 ? 'var(--success)' : x.rate >= 85 ? 'var(--deped-blue)' : 'var(--danger)';
+                return `<tr>
+                  <td>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      ${Utils.avatarHTML(x.learner, 24, 10)}
+                      <strong>${Utils.esc(Utils.displayName(x.learner))}</strong>
+                    </div>
+                  </td>
+                  <td style="text-align:center;">${x.stats.present}</td>
+                  <td style="text-align:center;color:${x.stats.absent > 0 ? 'var(--danger)' : 'inherit'};">${x.stats.absent}</td>
+                  <td style="text-align:center;">${x.stats.late}</td>
+                  <td style="text-align:center;">${x.stats.excused}</td>
+                  <td style="text-align:right;">
+                    <span class="badge" style="background:${rateColor}15; color:${rateColor}; font-weight:700;">${x.rate}%</span>
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  };
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2>Attendance Analytics</h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)}</p>
+      </div>
+      <div class="page-actions">
+        <div class="rz-segment">
+          <button type="button" data-range="all" class="${range === 'all' ? 'active' : ''}">All Time</button>
+          <button type="button" data-range="month" class="${range === 'month' ? 'active' : ''}">This Month</button>
+        </div>
+      </div>
+    </div>
+    <div id="att-analytics-data">${renderDashboard(range)}</div>
+  `;
+
+  const dataWrap = root.querySelector('#att-analytics-data');
+
+  root.querySelectorAll('[data-range]').forEach(btn => {
+    btn.onclick = () => {
+      const val = btn.dataset.range;
+      if (val === State._attAnalyticsRange) return;
+      
+      State._attAnalyticsRange = val;
+      
+      // Update segment buttons
+      root.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b === btn));
+      
+      // Re-render data
+      dataWrap.innerHTML = renderDashboard(val);
+    };
+  });
+},
   async attendanceReports(root) {
     root.innerHTML = `
       <div class="page-head"><div><h2>Attendance Reports</h2><p>Generate and print attendance reports</p></div></div>
@@ -35183,9 +35688,9 @@ _openClassListPrintModal() {
         </div>
         <div class="form-row" style="gap:10px;">
           <div class="form-group" style="margin-bottom:0;">
-            <label style="font-size:11px;">Name of Activity</label>
+            <label style="font-size:11px;">Name of Activity <span class="req" style="color:var(--danger);">*</span></label>
             <input type="text" id="cl-print-activity-name" class="form-control"
-                  value="NAME OF ACTIVITY HERE" placeholder="e.g. PTA Meeting">
+                  value="" placeholder="e.g. PTA Meeting">
           </div>
           <div class="form-group" style="margin-bottom:0;">
             <label style="font-size:11px;">Date</label>
@@ -35276,15 +35781,29 @@ _openClassListPrintModal() {
     const checkedInput = m.overlay.querySelector('input[name="cl-print-layout"]:checked');
     const layout = checkedInput ? checkedInput.value : 'standard';
     const isAttendance = (layout === 'attendance-signature' || layout === 'attendance-guardian');
+    
+    const activityNameInput = m.overlay.querySelector('#cl-print-activity-name');
+    const activityName = activityNameInput ? activityNameInput.value.trim() : '';
+    
+    // NEW: Validate required field for attendance layouts
+    if (isAttendance && !activityName) {
+      UI.toast('Name of Activity is required for attendance sheets.', 'warning', 4000);
+      activityNameInput.classList.add('invalid');
+      activityNameInput.focus();
+      return; // Stop the print process
+    }
+
+    // Remove invalid state when they fix it
+    if (activityNameInput) activityNameInput.classList.remove('invalid');
+
     const opts = {
       includeHeader:    m.overlay.querySelector('#cl-print-header').checked,
       includeSignature: m.overlay.querySelector('#cl-print-signature').checked,
       includeDate:      m.overlay.querySelector('#cl-print-date').checked,
       groupBySex:       m.overlay.querySelector('#cl-print-groupsex').checked,
-      activityName:     isAttendance ? (m.overlay.querySelector('#cl-print-activity-name')?.value || '') : '',
+      activityName:     isAttendance ? activityName : '',
       activityDate:     isAttendance ? (m.overlay.querySelector('#cl-print-activity-date')?.value || '') : '',
       orientation:      m.overlay.querySelector('#cl-print-orientation')?.value || 'portrait',
-      // NEW: Pass the contact toggle state
       includeContact:   m.overlay.querySelector('#cl-print-include-contact') ? m.overlay.querySelector('#cl-print-include-contact').checked : true
     };
     m.close();
@@ -35562,7 +36081,7 @@ async _printAttendanceSheet(layout, opts) {
   if (!(await Pages._ensureSchoolProfileReady())) return;
 
   const isGuardian   = layout === 'attendance-guardian';
-  const activityName = String(opts.activityName || '').trim() || 'NAME OF ACTIVITY HERE';
+  const activityName = String(opts.activityName || '').trim();
   const activityDate = String(opts.activityDate || '').trim() || 'DATE HERE';
   const sy = cls.schoolYear || State.schoolYear;
   const groupBySex = !!opts.groupBySex;
@@ -35658,7 +36177,7 @@ async _printAttendanceSheet(layout, opts) {
     .print-attendance-sheet table.attendance-sheet-table th,
     .print-attendance-sheet table.attendance-sheet-table td {
       border: 1px solid #000;
-      padding: 4px 8px;
+      padding: 6px 8px;
       vertical-align: middle;
     }
     .print-attendance-sheet table.attendance-sheet-table thead th {
@@ -35667,21 +36186,22 @@ async _printAttendanceSheet(layout, opts) {
       background: #fff;
     }
 
+    /* Dynamic Column Widths */
     .print-attendance-sheet .att-num-head  { width: 6%; }
-    .print-attendance-sheet .att-name-head { width: ${isGuardian ? '34%' : '60%'}; }
+    .print-attendance-sheet .att-name-head { width: ${isGuardian ? (includeContact ? '32%' : '42%') : '65%'}; }
+    .print-attendance-sheet .att-guardian-head { width: ${includeContact ? '22%' : '28%'}; }
+    .print-attendance-sheet .att-contact-head  { width: 20%; }
+    .print-attendance-sheet .att-signature-head { width: ${isGuardian ? (includeContact ? '20%' : '24%') : '29%'}; }
 
-    .print-attendance-sheet .att-num  { width: 6%; text-align: center; font-weight: 700; }
+    .print-attendance-sheet .att-num  { text-align: center; font-weight: 700; }
     .print-attendance-sheet .att-name { text-align: left; font-weight: 700; }
-
-    .print-attendance-sheet .att-guardian { width: 22%; text-align: left; font-size: 9.5pt; }
-    .print-attendance-sheet .att-contact  { width: 16%; text-align: left; font-size: 9.5pt; }
+    .print-attendance-sheet .att-guardian { text-align: left; font-size: 9.5pt; }
+    .print-attendance-sheet .att-contact  { text-align: left; font-size: 9.5pt; }
     .print-attendance-sheet .att-signature,
-    .print-attendance-sheet .att-signature-head { width: ${isGuardian ? '16%' : '28%'}; }
 
-    .print-attendance-sheet .att-guardian-head { width: 22%; }
-    .print-attendance-sheet .att-contact-head  { width: 16%; }
-
-    .print-attendance-sheet table.attendance-sheet-table tbody tr { height: 26px; }
+    /* INCREASED ROW HEIGHT: Gives parents enough room to write */
+    .print-attendance-sheet table.attendance-sheet-table tbody tr { height: 38px; }
+    
   `;
   document.head.appendChild(st);
 
@@ -38897,21 +39417,15 @@ printGradeSummary(subjects, terms, matrixBySubject, gwaByLearner, policy, view, 
   window.print();
   setTimeout(() => { document.getElementById('print-area').innerHTML = ''; }, 800);
 },
-  /* ============================================================================
-     SCHOOL FORMS — SF2 (Daily Attendance) and SF9 (Learner's Performance Report)
 
-     IMPORTANT / VERIFICATION NOTE (also shown on-screen): these are functional,
-     DepEd-labeled renderings built from your recorded data. KlazAssist could
-     not independently verify the exact cell-by-cell geometry (page size,
-     merged cells, column widths, legend wording) of the current official SF2
-     and SF9 Excel/PDF templates against a live authoritative source. Fields
-     that this app has no data for are shown as "Data required" rather than
-     invented. Please compare against your Division's current official
-     template before submission, and treat this as a working aid, not a
-     certified reproduction.
-     ============================================================================ */
+/* ============================================================================
+   SF1 — SCHOOL REGISTER
+   Restructured to match the SF8 dashboard: editable inline table, progress
+   stats, info modal, action bar. Data flows to/from the learner record.
+   ============================================================================ */
 async sf1(root) {
-  if (!State.activeClass) {
+  const cls = State.activeClass;
+  if (!cls) {
     root.innerHTML = `<div class="card">${UI.emptyState({
       icon: 'users', title: 'No class selected',
       message: 'Create or select a class first.',
@@ -38919,11 +39433,24 @@ async sf1(root) {
     })}</div>`;
     return;
   }
+  if (!State.learners.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No learners in this class',
+      message: 'Add learners before preparing the SF1.',
+      actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    return;
+  }
 
-  const cls     = State.activeClass;
   const school  = State.schools[0] || {};
   const teacher = State.currentUser || {};
   const sy      = cls.schoolYear || State.schoolYear || '';
+
+  // Normalize sex values in-place so the section grouping is correct
+  State.learners.forEach(l => {
+    const n = Utils.normalizeSex(l.sex);
+    if (n && n !== l.sex) l.sex = n;
+  });
 
   const males   = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Male');
   const females = State.learners.filter(l => Utils.normalizeSex(l.sex) === 'Female');
@@ -38933,240 +39460,648 @@ async sf1(root) {
   });
   const total = State.learners.length;
 
+  // Progress stats (mirrors SF8's three colored indicators)
+  const withLrn = State.learners.filter(l => l.lrn && String(l.lrn).trim()).length;
+  const withGuardian = State.learners.filter(l =>
+    (l.guardian && String(l.guardian).trim()) ||
+    (l.parent   && String(l.parent).trim())   ||
+    (l.father   && String(l.father).trim())   ||
+    (l.mother   && String(l.mother).trim())
+  ).length;
+  const withContact = State.learners.filter(l =>
+    (l.parentContact  && String(l.parentContact).trim())  ||
+    (l.learnerContact && String(l.learnerContact).trim())
+  ).length;
+
+  // Validation (blocks export, warns about soft gaps)
   const errors = [], warnings = [];
-  if (!school.name)                      errors.push('School Name is missing (Settings → School Profile).');
-  if (!school.schoolId)                  errors.push('School ID is missing (Settings → School Profile).');
-  if (!cls.gradeLevel || !cls.section)   errors.push('Class grade level / section is incomplete.');
-  if (!total)                            warnings.push('This class has no learners.');
-  if (!school.region)                    warnings.push('Region is missing.');
-  if (!school.division)                  warnings.push('Division is missing.');
-  if (!school.schoolHead)                warnings.push('School Head name is missing.');
-  if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing on this class.');
+  if (!school.name)     errors.push('School Name is missing (Settings → School Profile).');
+  if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
+  if (!cls.gradeLevel || !cls.section) errors.push('Class grade level / section is incomplete.');
+  if (!school.region)     warnings.push('Region is missing.');
+  if (!school.division)   warnings.push('Division is missing.');
+  if (!school.schoolHead) warnings.push('School Head name is missing.');
+  if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing.');
 
-  /* ---- Formatters ---- */
-  const birthForSF1 = (l) => {
-    if (!l.birthDate) return '';
-    const m = String(l.birthDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[2]}-${m[3]}-${m[1]}` : l.birthDate;
-  };
-  const nameForSF1 = (l) => {
-    const last = (l.lastName || '').toUpperCase();
-    const given = [l.firstName, l.middleName].filter(Boolean).map(s => s.toUpperCase());
-    return given.length ? `${last}, ${given.join(', ')}` : last;
-  };
-  const sexLetter = (l) => {
-    const n = Utils.normalizeSex(l.sex);
-    return n === 'Male' ? 'M' : n === 'Female' ? 'F' : '';
-  };
-  const modalityForSF1 = (m) => {
-    if (!m) return '';
-    const map = {
-      'Face-to-Face': 'Face to Face',
-      'Blended Learning': 'Blended',
-      'Modular (Print)': 'Modular (Print)',
-      'Modular (Digital)': 'Modular (Digital)',
-      'Online Learning': 'Online',
-      'TV/Radio-Based Instruction': 'TV/Radio-Based',
-      'Homeschooling': 'Homeschooling',
-      'Alternative Learning System (ALS)': 'ALS'
-    };
-    return map[m] || m;
-  };
+  // Inject the SF1 editor stylesheet once
+  Pages._sf1EnsureStyle();
 
-  /* ---- Row builders ---- */
+  // ---- Section / total row helpers ----
+  const sectionRow = (label, count, bg) =>
+    `<tr><td colspan="20" class="sf1-section-cell" style="background:${bg};">${Utils.esc(label)} · ${count}</td></tr>`;
+
+  const totalRow = (label, count) =>
+    `<tr class="sf1-total-row">
+       <td style="text-align:center;">${count}</td>
+       <td colspan="19" style="letter-spacing:0.3px;">&lt;=== ${Utils.esc(label)} (${count})</td>
+     </tr>`;
+
+  // Build rows with a single running index (males → females → unrecorded)
   let runningIdx = 0;
-
-  // Each <td> carries a class matching its column so the CSS can
-  // apply per-column rules (no-wrap vs wrap) without inline styles.
-  const learnerRowHTML = (l) => {
-    runningIdx++;
-    return `<tr>
-      <td class="sf1-c-idx" style="text-align:center;">${runningIdx}</td>
-      <td class="sf1-c-lrn">${Utils.esc(l.lrn || '')}</td>
-      <td class="sf1-c-name">${Utils.esc(nameForSF1(l))}</td>
-      <td class="sf1-c-sex" style="text-align:center;">${sexLetter(l)}</td>
-      <td class="sf1-c-birth" style="text-align:center;">${Utils.esc(birthForSF1(l))}</td>
-      <td class="sf1-c-age" style="text-align:center;">${Utils.esc(l.age || Utils.calcAge(l.birthDate) || '')}</td>
-      <td class="sf1-c-tongue">${Utils.esc(l.motherTongue || '')}</td>
-      <td class="sf1-c-ethnic">${Utils.esc(l.ethnicGroup || '')}</td>
-      <td class="sf1-c-religion">${Utils.esc(l.religion || '')}</td>
-      <td class="sf1-c-house">${Utils.esc(l.houseNo || '')}</td>
-      <td class="sf1-c-barangay">${Utils.esc(l.barangay || '')}</td>
-      <td class="sf1-c-municipality">${Utils.esc(l.municipality || '')}</td>
-      <td class="sf1-c-province">${Utils.esc(l.province || '')}</td>
-      <td class="sf1-c-father">${Utils.esc(l.father || '')}</td>
-      <td class="sf1-c-mother">${Utils.esc(l.mother || '')}</td>
-      <td class="sf1-c-guardian">${Utils.esc(l.guardian || '')}</td>
-      <td class="sf1-c-relationship">${Utils.esc(l.relationship || '')}</td>
-      <td class="sf1-c-contact">${Utils.esc(l.parentContact || '')}</td>
-      <td class="sf1-c-modality">${Utils.esc(modalityForSF1(l.learningModality))}</td>
-      <td class="sf1-c-remarks">${Utils.esc(l.remarks || '')}</td>
-    </tr>`;
-  };
-  const totalRowHTML = (label, count) => `
-    <tr class="sf1-total-row">
-      <td style="text-align:center;font-weight:800;">${count}</td>
-      <td colspan="19" style="font-weight:700;letter-spacing:0.3px;">&lt;=== ${Utils.esc(label)} (${count})</td>
-    </tr>`;
-  const sectionRowHTML = (label, bg) => `
-    <tr class="sf1-section-row">
-      <td colspan="20" style="background:${bg};font-weight:700;text-align:center;letter-spacing:1px;">${Utils.esc(label)}</td>
-    </tr>`;
-
-  runningIdx = 0;
-  const maleRows   = males.map(learnerRowHTML).join('');
-  const femaleRows = females.map(learnerRowHTML).join('');
-  const otherRows  = others.map(learnerRowHTML).join('');
+  const maleRows   = males.map(l   => Pages._sf1RowHTML(l, ++runningIdx, sy)).join('');
+  const femaleRows = females.map(l => Pages._sf1RowHTML(l, ++runningIdx, sy)).join('');
+  const otherRows  = others.map(l  => Pages._sf1RowHTML(l, ++runningIdx, sy)).join('');
 
   root.innerHTML = `
     <div class="page-head">
-      <div><h2>SF1 — School Register</h2><p>DepEd School Form 1 layout, generated from your learner records</p></div>
+      <div>
+        <h2 style="display:flex;align-items:center;gap:8px;">
+          SF1 — School Register
+          <button class="icon-btn" id="sf1-info-btn"
+                  title="View important notes for submission"
+                  style="width:24px;height:24px;background:var(--bg);border:1px solid var(--border);">
+            ${icon('info')}
+          </button>
+        </h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)}
+           · ${total} learner${total === 1 ? '' : 's'}
+           · SY ${Utils.esc(sy)}</p>
+      </div>
       <div class="page-actions">
-        <button class="btn btn-outline" id="sf1-switch-class">${icon('users')} Switch Class</button>
-        <button class="btn btn-outline" id="sf1-export-xlsx" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
-        <button class="btn btn-primary" id="sf1-export-pdf" ${errors.length ? 'disabled' : ''}>${icon('printer')} Save as PDF</button>
+        <button class="btn btn-outline" id="sf1-switch">${icon('users')} Switch Class</button>
+        <button class="btn btn-outline" id="sf1-export" ${errors.length ? 'disabled' : ''}>${icon('file')} Export .xlsx</button>
+        <button class="btn btn-primary" id="sf1-print" ${errors.length ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
       </div>
     </div>
 
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
+      <strong>Cannot export SF1 — missing required information:</strong>
+      <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
 
-    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot export SF1 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
+      <strong>Warnings:</strong>
+      <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
 
-    <div class="grid grid-4 mb-16">
-      <div class="stat-card"><div class="stat-label">Total Learners</div><div class="stat-value">${total}</div></div>
-      <div class="stat-card accent-success"><div class="stat-label">Male</div><div class="stat-value">${males.length}</div></div>
-      <div class="stat-card accent-danger"><div class="stat-label">Female</div><div class="stat-value">${females.length}</div></div>
-      <div class="stat-card ${others.length ? 'accent-warning' : ''}"><div class="stat-label">Unrecorded Sex</div><div class="stat-value">${others.length}</div></div>
-    </div>
-
-    <div class="card mb-16">
-      <div class="card-head">
-        <h3>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(sy)}</h3>
-        <span class="text-sm text-muted">${school.name ? Utils.esc(school.name) : 'Set school info in Settings → School Profile'}</span>
+    <div class="card" style="padding-bottom:0;overflow:visible;">
+      <div class="card-head" style="align-items:flex-start;">
+        <div>
+          <h3>Learner Register Data</h3>
+          <div class="flex gap-12 text-xs mt-8" style="flex-wrap:wrap;">
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--deped-blue);"></span>
+              <strong id="sf1-stat-lrn">${withLrn}</strong> LRN Recorded
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>
+              <strong id="sf1-stat-guardian">${withGuardian}</strong> Guardian Recorded
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--warning);"></span>
+              <strong id="sf1-stat-contact">${withContact}</strong> Contact Recorded
+            </span>
+          </div>
+        </div>
+        <span class="badge badge-blue">${total} Total</span>
       </div>
-      <p class="text-sm text-muted" style="margin:0;">
-        All 20 SF1 columns are shown below. Column widths are fitted to the content automatically.
-        Scroll horizontally to see every column.
+      <p class="text-sm text-muted mb-12">
+        Edit any field below to update the learner's record. Changes save to this device when you click out of a field.
       </p>
-    </div>
 
-    <div class="card">
-      <div class="card-head">
-        <h3>Preview</h3>
-        <span class="text-sm text-muted">${total} learner${total === 1 ? '' : 's'} · 20 columns</span>
+      <div class="sf1-editor-wrap">
+        <table class="sf1-editor-table">
+          <thead>
+            <tr>
+              <th style="width:34px;">#</th>
+              <th style="min-width:110px;">LRN</th>
+              <th style="min-width:200px;text-align:left;">Learner</th>
+              <th style="width:50px;">Sex</th>
+              <th style="width:92px;">Birth Date</th>
+              <th style="width:44px;">Age</th>
+              <th style="min-width:110px;">Mother Tongue</th>
+              <th style="min-width:110px;">Ethnic Group</th>
+              <th style="min-width:110px;">Religion</th>
+              <th style="min-width:140px;">House #/Street</th>
+              <th style="min-width:110px;">Barangay</th>
+              <th style="min-width:120px;">Municipality</th>
+              <th style="min-width:120px;">Province</th>
+              <th style="min-width:150px;">Father's Name</th>
+              <th style="min-width:150px;">Mother's Maiden Name</th>
+              <th style="min-width:150px;">Guardian Name</th>
+              <th style="min-width:120px;">Relationship</th>
+              <th style="min-width:130px;">Parent Contact</th>
+              <th style="min-width:120px;">Modality</th>
+              <th style="min-width:140px;">Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${males.length   ? sectionRow('MALE',           males.length,   '#dbe7fb') + maleRows   + totalRow('TOTAL MALE',   males.length)   : ''}
+            ${females.length ? sectionRow('FEMALE',         females.length, '#fce7f3') + femaleRows + totalRow('TOTAL FEMALE', females.length) : ''}
+            ${others.length  ? sectionRow('UNRECORDED SEX', others.length,  '#fef3c7') + otherRows  : ''}
+            ${totalRow('COMBINED', total)}
+          </tbody>
+        </table>
       </div>
-      ${total === 0
-        ? UI.emptyState({ icon: 'users', title: 'No learners in this class', message: 'Add learners first, then come back to export SF1.', actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()' })
-        : `<div class="sf1-preview-wrap">
-            <table class="sf1-preview-table">
-              <thead>
-                <tr>
-                  <th style="text-align:center;">#</th>
-                  <th>LRN</th>
-                  <th>NAME<br><span class="sf1-th-sub">(Last Name, First Name, M.I.)</span></th>
-                  <th style="text-align:center;">Sex<br><span class="sf1-th-sub">(M/F)</span></th>
-                  <th style="text-align:center;">BIRTH DATE<br><span class="sf1-th-sub">(mm-dd-yyyy)</span></th>
-                  <th style="text-align:center;">Age<br><span class="sf1-th-sub">(1st Fri Jun)</span></th>
-                  <th>MOTHER<br>TONGUE</th>
-                  <th>IP<br><span class="sf1-th-sub">(Ethnic Group)</span></th>
-                  <th>RELIGION</th>
-                  <th>House #/Street/<br>Sitio/Purok</th>
-                  <th>Barangay</th>
-                  <th>Municipality/<br>City</th>
-                  <th>Province</th>
-                  <th>Father's Name</th>
-                  <th>Mother's Maiden Name</th>
-                  <th>Guardian Name</th>
-                  <th>Relationship</th>
-                  <th>Contact Number<br>of Parent/Guardian</th>
-                  <th>Learning Modality</th>
-                  <th>REMARKS</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${males.length ? `
-                  ${sectionRowHTML('MALE', '#dbe7fb')}
-                  ${maleRows}
-                  ${totalRowHTML('TOTAL MALE', males.length)}
-                ` : ''}
-                ${females.length ? `
-                  ${sectionRowHTML('FEMALE', '#fce7f3')}
-                  ${femaleRows}
-                  ${totalRowHTML('TOTAL FEMALE', females.length)}
-                ` : ''}
-                ${others.length ? `
-                  ${sectionRowHTML('UNRECORDED SEX — appears after females, still counted in COMBINED', '#fef3c7')}
-                  ${otherRows}
-                ` : ''}
-                ${totalRowHTML('COMBINED', total)}
-              </tbody>
-            </table>
-          </div>`}
-    </div>`;
 
-  const xlsxBtn   = root.querySelector('#sf1-export-xlsx');
-  const pdfBtn    = root.querySelector('#sf1-export-pdf');
-  const switchBtn = root.querySelector('#sf1-switch-class');
-  if (xlsxBtn)   xlsxBtn.onclick   = () => Pages.exportLearnersSF1();
-  if (pdfBtn)    pdfBtn.onclick    = () => Pages.exportLearnersPDF();
-  if (switchBtn) switchBtn.onclick = () => App.openClassSelector();
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--border);background:var(--bg);flex-wrap:wrap;">
+        <div class="text-xs text-muted">Data is saved to this device when you click out of a field.</div>
+        <div class="flex gap-8">
+          <button class="btn btn-primary" id="sf1-save-all">${icon('save')} Save All Changes</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  /* ---------------- Bindings ---------------- */
+  root.querySelector('#sf1-switch').onclick    = () => App.openClassSelector();
+  root.querySelector('#sf1-export').onclick    = () => Pages.exportLearnersSF1();
+  root.querySelector('#sf1-print').onclick     = () => Pages.exportLearnersPDF();
+  root.querySelector('#sf1-info-btn').onclick  = () => Pages._sf1ShowInfoModal();
+  root.querySelector('#sf1-save-all').onclick  = () => Pages._sf1PersistAll();
+
+  /* ---------------- Inline field handlers ---------------- */
+  root.querySelectorAll('[data-sf1-field]').forEach(inp => {
+    const learnerId = inp.dataset.sf1Learner;
+    const field     = inp.dataset.sf1Field;
+
+    // Live state + stats update
+    inp.addEventListener('input', () => {
+      const l = State.learners.find(x => x.id === learnerId);
+      if (!l) return;
+      l[field] = String(inp.value || '').trim();
+      Pages._sf1RefreshStats(root);
+    });
+
+    // Persist on blur (same convention as SF8)
+    inp.addEventListener('blur', () => {
+      Pages._sf1PersistOne(learnerId);
+    });
+  });
+},
+/* ----------------------------------------------------------------------------
+   SF1 · inject the editor stylesheet once
+   ---------------------------------------------------------------------------- */
+_sf1EnsureStyle() {
+  if (document.getElementById('sf1-editor-style')) return;
+  const st = document.createElement('style');
+  st.id = 'sf1-editor-style';
+  st.textContent = `
+    .sf1-editor-wrap {
+      overflow-x: auto;
+      overflow-y: auto;
+      max-height: 72vh;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .sf1-editor-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+      width: max-content;
+      min-width: 100%;
+    }
+    .sf1-editor-table th,
+    .sf1-editor-table td {
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 6px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .sf1-editor-table thead th {
+      background: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 8px 6px;
+    }
+    .sf1-editor-table tbody td.sf1-section-cell {
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-size: 10.5px;
+      color: var(--deped-blue);
+      text-align: center;
+      padding: 6px;
+    }
+    .sf1-editor-table tbody tr.sf1-total-row td {
+      background: #eef3fa;
+      font-weight: 800;
+      color: var(--deped-blue);
+      padding: 6px;
+    }
+    .sf1-editor-table .sf1-input {
+      border: 1px solid transparent;
+      background: transparent;
+      padding: 3px 6px;
+      font-size: 11.5px;
+      min-height: 26px;
+      width: 100%;
+      border-radius: 4px;
+      transition: border-color 0.15s, background 0.15s;
+      font-family: inherit;
+      color: inherit;
+    }
+    .sf1-editor-table .sf1-input:hover  { border-color: var(--border); }
+    .sf1-editor-table .sf1-input:focus  {
+      outline: none;
+      border-color: var(--deped-blue);
+      background: #fff;
+      box-shadow: 0 0 0 2px rgba(0,56,168,0.12);
+    }
+    [data-theme="dark"] .sf1-editor-table .sf1-input:focus {
+      background: var(--light-blue);
+    }
+  `;
+  document.head.appendChild(st);
 },
 
+/* ----------------------------------------------------------------------------
+   SF1 · one row
+   ---------------------------------------------------------------------------- */
+_sf1RowHTML(l, displayIdx, schoolYear) {
+  const esc = Utils.esc;
+
+  const birthForSF1 = (bd) => {
+    if (!bd) return '';
+    const m = String(bd).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : bd;
+  };
+  const nameForSF1 = () => {
+    const last  = (l.lastName || '').toUpperCase();
+    const given = [l.firstName, l.middleName]
+      .filter(Boolean).map(s => s.toUpperCase());
+    return given.length ? `${last}, ${given.join(', ')}` : last;
+  };
+  const sexLetter = Utils.normalizeSex(l.sex) === 'Male'   ? 'M'
+                  : Utils.normalizeSex(l.sex) === 'Female' ? 'F'
+                  : '';
+  const age = _sf8AgeAt(l.birthDate, schoolYear) || '';
+
+  const textField = (name, value, placeholder) =>
+    `<input type="text" class="sf1-input"
+            data-sf1-field="${Utils.attr(name)}"
+            data-sf1-learner="${Utils.attr(l.id)}"
+            value="${Utils.attr(value || '')}"
+            placeholder="${Utils.attr(placeholder || '')}">`;
+
+  return `<tr>
+    <td style="text-align:center;color:var(--text-muted);font-size:11px;">${displayIdx}</td>
+    <td>${textField('lrn', l.lrn, '—')}</td>
+    <td style="font-weight:600;font-size:11.5px;">${esc(nameForSF1())}</td>
+    <td style="text-align:center;font-size:11.5px;">${sexLetter}</td>
+    <td style="text-align:center;font-size:11.5px;">${esc(birthForSF1(l.birthDate))}</td>
+    <td style="text-align:center;font-size:11.5px;">${esc(age)}</td>
+    <td>${textField('motherTongue', l.motherTongue)}</td>
+    <td>${textField('ethnicGroup',  l.ethnicGroup)}</td>
+    <td>${textField('religion',     l.religion)}</td>
+    <td>${textField('houseNo',      l.houseNo || l.address || '')}</td>
+    <td>${textField('barangay',     l.barangay)}</td>
+    <td>${textField('municipality', l.municipality)}</td>
+    <td>${textField('province',     l.province)}</td>
+    <td>${textField('father',       l.father)}</td>
+    <td>${textField('mother',       l.mother)}</td>
+    <td>${textField('guardian',     l.guardian || l.parent || '')}</td>
+    <td>
+      <select class="sf1-input" data-sf1-field="relationship"
+              data-sf1-learner="${Utils.attr(l.id)}">
+        <option value="">—</option>
+        ${['Father','Mother','Guardian','Grandparent','Aunt','Uncle','Sibling','Relative','Other']
+          .map(r => `<option value="${r}" ${l.relationship === r ? 'selected' : ''}>${r}</option>`)
+          .join('')}
+      </select>
+    </td>
+    <td>${textField('parentContact', l.parentContact, '09xx…')}</td>
+    <td>
+      <select class="sf1-input" data-sf1-field="learningModality"
+              data-sf1-learner="${Utils.attr(l.id)}">
+        <option value="">—</option>
+        ${['Face-to-Face','Blended Learning','Modular (Print)','Modular (Digital)',
+           'Online Learning','TV/Radio-Based Instruction','Homeschooling',
+           'Alternative Learning System (ALS)']
+          .map(mo => `<option value="${mo}" ${l.learningModality === mo ? 'selected' : ''}>${mo}</option>`)
+          .join('')}
+      </select>
+    </td>
+    <td>${textField('remarks', l.remarks)}</td>
+  </tr>`;
+},
+
+/* ----------------------------------------------------------------------------
+   SF1 · live stat refresh
+   ---------------------------------------------------------------------------- */
+_sf1RefreshStats(root) {
+  if (!root) return;
+  const s = State.learners;
+  const withLrn = s.filter(l => l.lrn && String(l.lrn).trim()).length;
+  const withGuardian = s.filter(l =>
+    (l.guardian && String(l.guardian).trim()) ||
+    (l.parent   && String(l.parent).trim())   ||
+    (l.father   && String(l.father).trim())   ||
+    (l.mother   && String(l.mother).trim())
+  ).length;
+  const withContact = s.filter(l =>
+    (l.parentContact  && String(l.parentContact).trim())  ||
+    (l.learnerContact && String(l.learnerContact).trim())
+  ).length;
+
+  const lrnEl  = root.querySelector('#sf1-stat-lrn');
+  const gdnEl  = root.querySelector('#sf1-stat-guardian');
+  const cntEl  = root.querySelector('#sf1-stat-contact');
+  if (lrnEl) lrnEl.textContent = withLrn;
+  if (gdnEl) gdnEl.textContent = withGuardian;
+  if (cntEl) cntEl.textContent = withContact;
+},
+
+/* ----------------------------------------------------------------------------
+   SF1 · persist one learner
+   ---------------------------------------------------------------------------- */
+async _sf1PersistOne(learnerId) {
+  const l = State.learners.find(x => x.id === learnerId);
+  if (!l) return;
+  try {
+    l.updatedAt = new Date().toISOString();
+    await DB.put('learners', l);
+    App.showAutosave('saved');
+  } catch (e) {
+    console.warn('[SF1] Save failed:', e);
+    UI.toast('Could not save that change.', 'error', 3000);
+  }
+},
+
+/* ----------------------------------------------------------------------------
+   SF1 · persist all learners (bulk)
+   ---------------------------------------------------------------------------- */
+async _sf1PersistAll() {
+  try {
+    const writes = State.learners.map(l => {
+      l.updatedAt = new Date().toISOString();
+      return l;
+    });
+    await DB.bulkWrite('learners', writes, 'put');
+    App.showAutosave('saved');
+    App.logActivity(
+      'SF1 register data saved for ' + State.learners.length + ' learners',
+      'Reports'
+    );
+    UI.toast('SF1 register data saved', 'success');
+  } catch (e) {
+    console.error('[SF1] Bulk save failed:', e);
+    UI.toast('Failed to save SF1 data: ' + (e.message || ''), 'error', 5000);
+  }
+},
+
+/* ----------------------------------------------------------------------------
+   SF1 · info modal
+   ---------------------------------------------------------------------------- */
+_sf1ShowInfoModal() {
+  UI.modal({
+    title: 'Important Notes for SF1 Submission',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-warning mb-16" style="margin:0;">
+        ${icon('alert').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Template Verification:</strong> KlazAssist encodes the SF1 from the well-known DepEd School Register template.
+          Fields the app has no data for are shown as blank. Compare against your Division's current
+          official template before submission.
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="margin:0;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Data Source:</strong> All 20 columns are pulled from each learner's record.
+          Fields editable here sync back to the learner record and appear everywhere else in the app
+          (learner profile, other reports, etc.).
+        </div>
+      </div>
+
+      <div class="alert alert-success" style="margin:0;">
+        ${icon('check').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Auto-save:</strong> Changes save to this device when you click out of a field.
+          Use <strong>Save All Changes</strong> to force a full write of every record.
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-primary" data-close>Got it</button>`
+  });
+},
 /* ---------------------------------------------------------------------------
    Load persisted SF1 column widths, filling in defaults for any missing
    column. Never returns null — always a fully-populated object.
    --------------------------------------------------------------------------- */
 
-  async sf2(root) {
-    const cls = State.activeClass;
+async sf2(root) {
+  const cls     = State.activeClass;
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+
+  // No classes at all — bail out with a proper empty state
+  if (!State.classes.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No classes yet',
+      message: 'Create your first class to use the SF2 register.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+
+  // Default month = current month; remember across navigations
+  if (!State._sf2Month) {
     const now = new Date();
-    const defaultMonth = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
-    root.innerHTML = `
-      <div class="page-head"><div><h2>SF2 — Daily Attendance Report of Learners</h2><p>Generated from your recorded attendance data</p></div></div>
-      <div class="card mb-16">
-        <div class="form-row">
-          <div class="form-group"><label>Class</label>
-            <select class="form-control" id="sf2-class">${State.classes.map(c => `<option value="${Utils.attr(c.id)}" ${cls && c.id===cls.id ? 'selected':''}>${Utils.esc(c.gradeLevel)} - ${Utils.esc(c.section)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>Report for the Month</label><input type="month" class="form-control" id="sf2-month" value="${defaultMonth}"></div>
+    State._sf2Month = now.getFullYear() + '-' +
+                      String(now.getMonth() + 1).padStart(2, '0');
+  }
+  const initialMonth = State._sf2Month;
+
+  // Pre-render validation (blocks print, warns about soft gaps)
+  const errors = [], warnings = [];
+  if (!school.name)     errors.push('School Name is missing (Settings → School Profile).');
+  if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
+  if (!school.region)     warnings.push('Region is missing.');
+  if (!school.division)   warnings.push('Division is missing.');
+  if (!school.schoolHead) warnings.push('School Head name is missing.');
+  if (cls && !cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing.');
+
+  Pages._sf2EnsureStyle();
+
+  // Sortable class options
+  const classOptions = State.classes.slice().sort((a, b) =>
+    (a.gradeLevel + ' ' + a.section).localeCompare(b.gradeLevel + ' ' + b.section)
+  );
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2 style="display:flex;align-items:center;gap:8px;">
+          SF2 — Daily Attendance Report
+          <button class="icon-btn" id="sf2-info-btn"
+                  title="View important notes for submission"
+                  style="width:24px;height:24px;background:var(--bg);border:1px solid var(--border);">
+            ${icon('info')}
+          </button>
+        </h2>
+        <p>${cls ? Utils.esc(cls.gradeLevel) + ' – ' + Utils.esc(cls.section) : 'No class selected'}
+           · SY ${Utils.esc(cls ? (cls.schoolYear || State.schoolYear) : State.schoolYear)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" id="sf2-print" disabled>
+          ${icon('printer')} Print / Save as PDF
+        </button>
+      </div>
+    </div>
+
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
+      <strong>Cannot print SF2 — missing required information:</strong>
+      <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
+      <strong>Warnings:</strong>
+      <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:12px;">
+        <h3 style="font-size:14px;">Report Period</h3>
+      </div>
+      <div class="sf2-controls-row">
+        <div class="sf2-ctrl-group" style="flex:1;min-width:220px;">
+          <label>Class</label>
+          <select class="form-control" id="sf2-class-select">
+            ${classOptions.map(c => `
+              <option value="${Utils.attr(c.id)}" ${cls && c.id === cls.id ? 'selected' : ''}>
+                ${Utils.esc(c.gradeLevel)} – ${Utils.esc(c.section)}${c.subject ? ' · ' + Utils.esc(c.subject) : ''}
+              </option>
+            `).join('')}
+          </select>
         </div>
-        <div class="flex gap-8" style="flex-wrap:wrap;">
-          <button class="btn btn-outline btn-sm" id="sf2-prev">Previous Month</button>
-          <button class="btn btn-outline btn-sm" id="sf2-current">Current Month</button>
-          <button class="btn btn-primary" id="sf2-generate">${icon('check')} Generate Preview</button>
+        <div class="sf2-ctrl-group" style="min-width:300px;">
+          <label>Month</label>
+          <div class="sf2-month-picker">
+            <button class="btn btn-outline" id="sf2-prev-month" title="Previous month" aria-label="Previous month">←</button>
+            <input type="month" class="form-control" id="sf2-month-input"
+                   value="${Utils.attr(initialMonth)}" aria-label="Report month">
+            <button class="btn btn-outline" id="sf2-next-month" title="Next month" aria-label="Next month">→</button>
+          </div>
+        </div>
+        <div class="sf2-ctrl-group">
+          <label>&nbsp;</label>
+          <button class="btn btn-outline" id="sf2-current-month">Current Month</button>
         </div>
       </div>
-      <div id="sf2-preview"></div>`;
-    const monthInput = root.querySelector('#sf2-month');
-    root.querySelector('#sf2-prev').onclick = () => { const [y,m] = monthInput.value.split('-').map(Number); const d = new Date(y, m-2, 1); monthInput.value = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
-    root.querySelector('#sf2-current').onclick = () => { monthInput.value = defaultMonth; };
-    root.querySelector('#sf2-generate').onclick = () => this.generateSF2Preview(root.querySelector('#sf2-class').value, monthInput.value);
-  },
-async generateSF2Preview(classId, monthStr) {
+    </div>
+
+    <div id="sf2-data"></div>
+  `;
+
+  /* ---------------- Bindings ---------------- */
+  const dataRoot  = root.querySelector('#sf2-data');
+  const classSel  = root.querySelector('#sf2-class-select');
+  const monthInp  = root.querySelector('#sf2-month-input');
+
+  root.querySelector('#sf2-info-btn').onclick = () => Pages._sf2ShowInfoModal();
+  root.querySelector('#sf2-prev-month').onclick = () => {
+    const [y, m] = monthInp.value.split('-').map(Number);
+    const d = new Date(y, m - 2, 1);
+    monthInp.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    State._sf2Month = monthInp.value;
+    Pages.generateSF2Preview(classSel.value, monthInp.value, dataRoot);
+  };
+  root.querySelector('#sf2-next-month').onclick = () => {
+    const [y, m] = monthInp.value.split('-').map(Number);
+    const d = new Date(y, m, 1);
+    monthInp.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    State._sf2Month = monthInp.value;
+    Pages.generateSF2Preview(classSel.value, monthInp.value, dataRoot);
+  };
+  root.querySelector('#sf2-current-month').onclick = () => {
+    const now = new Date();
+    const cur = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    monthInp.value = cur;
+    State._sf2Month = cur;
+    Pages.generateSF2Preview(classSel.value, cur, dataRoot);
+  };
+
+  monthInp.addEventListener('change', () => {
+    if (!monthInp.value) return;
+    State._sf2Month = monthInp.value;
+    Pages.generateSF2Preview(classSel.value, monthInp.value, dataRoot);
+  });
+
+  classSel.addEventListener('change', async () => {
+    const newCls = State.classes.find(c => c.id === classSel.value);
+    if (!newCls) return;
+    State.activeClass = newCls;
+    try { await DB.setSetting('activeClassId', newCls.id); } catch (e) {}
+    await App.loadLearners();
+    App.updateTopbarClass();
+    Pages.generateSF2Preview(newCls.id, monthInp.value, dataRoot);
+    UI.toast('Switched to ' + newCls.gradeLevel + ' – ' + newCls.section, 'success', 2000);
+  });
+
+  /* ---------------- Auto-render on mount ---------------- */
+  await Pages.generateSF2Preview(cls ? cls.id : classSel.value, initialMonth, dataRoot);
+},
+async generateSF2Preview(classId, monthStr, targetEl) {
+  const target = targetEl
+    || document.getElementById('sf2-data')
+    || document.getElementById('sf2-preview');
+  if (!target) return false;
+
+  const headerPrintBtn = document.querySelector('#sf2-print');
+  const disablePrint = () => {
+    if (headerPrintBtn) { headerPrintBtn.disabled = true; headerPrintBtn.onclick = null; }
+    State._sf2LastRender = null;
+  };
+
   const cls = State.classes.find(c => c.id === classId);
-  const preview = document.getElementById('sf2-preview');
-  if (!cls || !monthStr) return;
-  const school = State.schools[0] || {};
+  if (!cls) {
+    target.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No class selected',
+      message: 'Choose a class from the dropdown above.'
+    })}</div>`;
+    disablePrint();
+    return false;
+  }
+
+  if (!monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) {
+    target.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'calendar', title: 'Select a valid month',
+      message: 'Use the month picker above to choose the reporting period.'
+    })}</div>`;
+    disablePrint();
+    return false;
+  }
+
+  const learners = Utils.sortAlpha(
+    (await DB.getAllByIndex('learners', 'classId', cls.id)) || [],
+    'lastName'
+  );
+
+  if (!learners.length) {
+    target.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No learners in this class',
+      message: 'Add learners first, then come back to view the SF2.',
+      actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    disablePrint();
+    return false;
+  }
+
+  const school  = State.schools[0] || {};
   const teacher = State.currentUser || {};
-  const learners = Utils.sortAlpha((await DB.getAllByIndex('learners', 'classId', cls.id)) || [], 'lastName');
-  const allAtt = await DB.getAll('attendance');
-  const monthAtt = allAtt.filter(a => a.classId === cls.id && (a.date||'').startsWith(monthStr));
 
-  /* ── Build the full class-day grid for the month ─────────────────────
-     Every Mon–Fri in the selected month becomes a column, regardless of
-     whether attendance was recorded on that day. This matches the SF2
-     template, which shows every school day of the month.
-
-     Days marked as Holiday on the DepEd calendar are excluded. */
+  /* ---- Build the class-day grid (weekdays minus DepEd holidays) ---- */
   const [yearStr, monthNumStr] = monthStr.split('-');
   const year = Number(yearStr), monthIdx = Number(monthNumStr) - 1;
   const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
 
-  // Pull DepEd holiday dates for this month (source: 'deped', category: 'Holiday')
-  let holidayDates = new Set();
+  const holidayDates = new Set();
   try {
     const cal = await DB.getAll('calendarEvents');
     cal.forEach(e => {
-      if (e.source === 'deped' && e.category === 'Holiday' && (e.date || '').startsWith(monthStr)) {
+      if (e.source === 'deped' && e.category === 'Holiday' &&
+          (e.date || '').startsWith(monthStr)) {
         holidayDates.add(e.date);
       }
     });
@@ -39176,126 +40111,378 @@ async generateSF2Preview(classId, monthStr) {
   for (let d = 1; d <= daysInMonth; d++) {
     const dt = new Date(year, monthIdx, d);
     const dow = dt.getDay();
-    if (dow === 0 || dow === 6) continue;                       // skip weekends
-    const iso = `${year}-${String(monthIdx+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    if (holidayDates.has(iso)) continue;                        // skip holidays
+    if (dow === 0 || dow === 6) continue;
+    const iso = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    if (holidayDates.has(iso)) continue;
     dates.push(iso);
   }
 
-  const val = ValidationEngine.validateSF2({ school, cls, learners, dates });
+  const monthLabel = new Date(year, monthIdx, 1)
+    .toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  if (!dates.length) {
+    target.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'calendar', title: 'No class days in ' + monthLabel,
+      message: 'Every weekday was either a weekend or flagged as a DepEd holiday. Try a different month, or check the DepEd calendar.'
+    })}</div>`;
+    disablePrint();
+    return false;
+  }
+
+  /* ---- Load attendance for the class + month ---- */
+  const allAtt = await DB.getAll('attendance');
+  const monthAtt = allAtt.filter(a =>
+    a.classId === cls.id && (a.date || '').startsWith(monthStr)
+  );
 
   const byLearnerDate = {};
   monthAtt.forEach(a => { byLearnerDate[a.learnerId + '|' + a.date] = a.status; });
-  const codeFor = (status) => AttendancePolicy.codes[status] !== undefined ? AttendancePolicy.codes[status] : (status || '');
+  const codeFor = (status) =>
+    AttendancePolicy.codes[status] !== undefined ? AttendancePolicy.codes[status] : (status || '');
 
-  // ── Per-learner rows ────────────────────────────────────────────────
+  /* ---- Per-learner rows ---- */
   const rows = learners.map((l, i) => {
     let present = 0, absent = 0, late = 0, excused = 0;
-    // Track last consecutive absence streak for the 5+ rule
     let curStreak = 0, maxStreak = 0;
+
     const cells = dates.map(d => {
       const st = byLearnerDate[l.id + '|' + d];
-      if (st === 'Present') { present++; curStreak = 0; }
-      else if (st === 'Absent') { absent++; curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
-      else if (st === 'Late') { late++; present++; curStreak = 0; }
-      else if (st === 'Excused') { excused++; present++; curStreak = 0; }
+      if      (st === 'Present')  { present++; curStreak = 0; }
+      else if (st === 'Absent')   { absent++;  curStreak++;
+                                    if (curStreak > maxStreak) maxStreak = curStreak; }
+      else if (st === 'Late')     { present++; late++;    curStreak = 0; }
+      else if (st === 'Excused')  { present++; excused++; curStreak = 0; }
       return `<td>${st ? codeFor(st) : ''}</td>`;
     }).join('');
-    const pct = dates.length ? Utils.round((present/dates.length)*100,1) : 0;
+
+    const pct = dates.length ? Utils.round((present / dates.length) * 100, 1) : 0;
     return {
-      html: `<tr><td>${i+1}</td><td class="sf2-name">${Utils.esc(Utils.fullName(l))}</td>${cells}<td>${present}</td><td>${absent}</td><td>${pct}%</td></tr>`,
+      html: `<tr>
+        <td style="text-align:center;color:var(--text-muted);">${i + 1}</td>
+        <td class="sf2-name">${Utils.esc(Utils.fullName(l))}</td>
+        ${cells}
+        <td style="font-weight:700;">${present}</td>
+        <td style="font-weight:700;color:${absent ? 'var(--danger)' : 'var(--text)'};">${absent}</td>
+        <td style="font-weight:700;color:${pct >= 90 ? 'var(--success)' : pct >= 75 ? 'var(--deped-blue)' : 'var(--danger)'};">${pct}%</td>
+      </tr>`,
       l, present, absent, late, excused, maxStreak
     };
   });
 
-  // ── Computed summary stats ──────────────────────────────────────────
-  const totalPresentDays = rows.reduce((s,r) => s + r.present, 0);
-  const adaPct = (learners.length && dates.length) ? Utils.round((totalPresentDays/(learners.length*dates.length))*100,1) : null;
+  /* ---- Class-wide summary ---- */
+  const totalPresentDays = rows.reduce((s, r) => s + r.present, 0);
+  const adaPct = (learners.length && dates.length)
+    ? Utils.round((totalPresentDays / (learners.length * dates.length)) * 100, 1)
+    : null;
   const male   = learners.filter(l => Utils.normalizeSex(l.sex) === 'Male').length;
   const female = learners.filter(l => Utils.normalizeSex(l.sex) === 'Female').length;
+  const chronicallyAbsent = rows.filter(r => r.maxStreak >= 5).map(r => Utils.fullName(r.l));
 
-  // Learners absent 5+ consecutive days during this month
-  const chronicallyAbsent = rows
-    .filter(r => r.maxStreak >= 5)
-    .map(r => Utils.fullName(r.l));
-
-  // Late enrollees — learners whose first attendance record for this
-  // class lands after the 1st Friday of the school year.
+  /* ---- Late enrollee detection ---- */
   const syStartYear = parseInt(String(cls.schoolYear || '').slice(0, 4), 10) || year;
   const firstFriday = (() => {
     const d = new Date(syStartYear, 5, 1);
     while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
-    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    return d.getFullYear() + '-' +
+           String(d.getMonth() + 1).padStart(2, '0') + '-' +
+           String(d.getDate()).padStart(2, '0');
   })();
   const firstSeen = {};
   monthAtt.forEach(a => {
-    if (!firstSeen[a.learnerId] || a.date < firstSeen[a.learnerId]) firstSeen[a.learnerId] = a.date;
+    if (!firstSeen[a.learnerId] || a.date < firstSeen[a.learnerId]) {
+      firstSeen[a.learnerId] = a.date;
+    }
   });
   const lateEnrollees = learners
     .filter(l => firstSeen[l.id] && firstSeen[l.id] > firstFriday)
     .map(l => Utils.fullName(l));
 
-  // ── Render ──────────────────────────────────────────────────────────
-  const weekdayLetter = (iso) => ['S','M','T','W','T','F','S'][new Date(iso + 'T00:00:00').getDay()];
+  /* ---- Coverage stats (mirror SF8's indicator row) ---- */
+  const totalCells = learners.length * dates.length;
+  const recordedCells = monthAtt.filter(a =>
+    a.date >= dates[0] && a.date <= dates[dates.length - 1]
+  ).length;
+  const coveragePct = totalCells
+    ? Math.round((recordedCells / totalCells) * 100)
+    : 0;
 
-  preview.innerHTML = `
-    ${val.errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div><strong>Cannot generate SF2 — missing required information:</strong><ul style="margin:6px 0 0 18px;">${val.errors.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-    ${val.warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div><strong>Warnings:</strong><ul style="margin:6px 0 0 18px;">${val.warnings.map(e=>`<li>${Utils.esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-
-    <div class="card mb-16">
-      <div class="card-head">
-        <h3>Preview · ${dates.length} class day${dates.length === 1 ? '' : 's'}</h3>
-        <button class="btn btn-primary" id="sf2-print" ${val.errors.length || dates.length === 0 ? 'disabled' : ''}>${icon('printer')} Print / Save as PDF</button>
-      </div>
-      ${dates.length === 0
-        ? UI.emptyState({icon:'calendar', title:'No class days in this month', message:'Every weekday was either a weekend or flagged as a DepEd holiday.'})
-        : `<div class="table-wrap" style="max-height:460px;">
-            <table class="data-table" style="font-size:11px;">
-              <thead><tr>
-                <th>#</th><th>Learner</th>
-                ${dates.map(d => `<th style="min-width:22px;">
-                  <div style="font-size:8px;font-weight:500;opacity:.6;line-height:1;">${weekdayLetter(d)}</div>
-                  <div>${d.slice(8)}</div>
-                </th>`).join('')}
-                <th>Present</th><th>Absent</th><th>%</th>
-              </tr></thead>
-              <tbody>${rows.map(r=>r.html).join('')}</tbody>
-            </table>
-          </div>
-          <div class="grid grid-4 mt-16">
-            <div class="stat-card">
-              <div class="stat-label">School Days</div>
-              <div class="stat-value">${dates.length}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Male / Female</div>
-              <div class="stat-value">${male} / ${female}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Average Daily Attendance</div>
-              <div class="stat-value">${adaPct !== null ? adaPct+'%' : '—'}</div>
-            </div>
-            <div class="stat-card ${chronicallyAbsent.length ? 'accent-danger' : ''}">
-              <div class="stat-label">Absent 5+ Consecutive Days</div>
-              <div class="stat-value">${chronicallyAbsent.length}</div>
-              ${chronicallyAbsent.length
-                ? `<div class="text-xs text-muted" title="${Utils.attr(chronicallyAbsent.join(', '))}">${Utils.esc(chronicallyAbsent.slice(0,2).join(', '))}${chronicallyAbsent.length > 2 ? ' +' + (chronicallyAbsent.length - 2) + ' more' : ''}</div>`
-                : `<div class="text-xs text-muted">No cases</div>`}
-            </div>
-          </div>
-          ${lateEnrollees.length ? `
-            <div class="alert alert-info mt-16" style="margin-bottom:0;">
-              ${icon('info')}
-              <div><strong>${lateEnrollees.length}</strong> late enrollee${lateEnrollees.length === 1 ? '' : 's'} detected (first recorded attendance after the 1st Friday): ${Utils.esc(lateEnrollees.join(', '))}</div>
-            </div>` : ''}`
-      }
-    </div>`;
-
-  const printBtn = preview.querySelector('#sf2-print');
-  if (printBtn) printBtn.addEventListener('click', () => this.printSF2({
-    school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr,
+  /* ---- Store context for the header print button ---- */
+  State._sf2LastRender = {
+    school, teacher, cls, learners, dates, rows,
+    male, female, adaPct, monthStr,
     chronicallyAbsent, lateEnrollees
-  }));
+  };
+
+  /* ---- Render the data card ---- */
+  const weekdayLetter = (iso) =>
+    ['S','M','T','W','T','F','S'][new Date(iso + 'T00:00:00').getDay()];
+
+  const noRecords = monthAtt.length === 0;
+
+  target.innerHTML = `
+    <div class="card" style="padding-bottom:0;overflow:visible;">
+      <div class="card-head" style="align-items:flex-start;">
+        <div>
+          <h3>Attendance Register · ${Utils.esc(monthLabel)}</h3>
+          <div class="flex gap-12 text-xs mt-8" style="flex-wrap:wrap;">
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--deped-blue);"></span>
+              <strong>${dates.length}</strong>&nbsp;Class Day${dates.length === 1 ? '' : 's'}
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>
+              <strong>${recordedCells}</strong>&nbsp;/ ${totalCells} Recorded
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:${
+                coveragePct >= 90 ? 'var(--success)' :
+                coveragePct >= 60 ? 'var(--warning)' : 'var(--danger)'
+              };"></span>
+              <strong>${coveragePct}%</strong>&nbsp;Coverage
+            </span>
+          </div>
+        </div>
+        <span class="badge badge-blue">${learners.length} Learner${learners.length === 1 ? '' : 's'}</span>
+      </div>
+
+      ${noRecords ? `
+        <div class="alert alert-warning mt-12" style="margin:0 16px 16px;">
+          ${icon('alert')}
+          <div>
+            <strong>No attendance recorded for ${Utils.esc(monthLabel)} yet.</strong>
+            Blank cells will be interpreted as <em>Present</em> per the standard SF2 convention.
+            Record attendance first to be sure the register is accurate.
+            <a href="#" id="sf2-goto-attendance"
+               style="color:inherit;text-decoration:underline;font-weight:600;margin-left:6px;">
+              Open Attendance →
+            </a>
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="sf2-grid-wrap">
+        <table class="sf2-grid-table">
+          <thead>
+            <tr>
+              <th style="width:34px;">#</th>
+              <th style="min-width:180px;text-align:left;">Learner</th>
+              ${dates.map(d => `<th style="min-width:28px;text-align:center;">
+                <div style="font-size:8px;font-weight:500;opacity:.6;line-height:1;">${weekdayLetter(d)}</div>
+                <div>${d.slice(8)}</div>
+              </th>`).join('')}
+              <th style="width:64px;">Present</th>
+              <th style="width:64px;">Absent</th>
+              <th style="width:56px;">%</th>
+            </tr>
+          </thead>
+          <tbody>${rows.map(r => r.html).join('')}</tbody>
+        </table>
+      </div>
+
+      <div class="grid grid-4" style="padding:16px;border-top:1px solid var(--border);gap:12px;">
+        <div class="stat-card">
+          <div class="stat-label">School Days</div>
+          <div class="stat-value">${dates.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Male / Female</div>
+          <div class="stat-value">${male} <span style="font-size:15px;color:var(--text-muted);font-weight:500;">/</span> ${female}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Average Daily Attendance</div>
+          <div class="stat-value">${adaPct !== null ? adaPct + '%' : '—'}</div>
+        </div>
+        <div class="stat-card ${chronicallyAbsent.length ? 'accent-danger' : ''}">
+          <div class="stat-label">Absent 5+ Consecutive Days</div>
+          <div class="stat-value">${chronicallyAbsent.length}</div>
+          ${chronicallyAbsent.length
+            ? `<div class="text-xs text-muted" title="${Utils.attr(chronicallyAbsent.join(', '))}">
+                 ${Utils.esc(chronicallyAbsent.slice(0, 2).join(', '))}${chronicallyAbsent.length > 2 ? ' +' + (chronicallyAbsent.length - 2) + ' more' : ''}
+               </div>`
+            : `<div class="text-xs text-muted">No cases</div>`}
+        </div>
+      </div>
+
+      ${lateEnrollees.length ? `
+        <div class="alert alert-info" style="margin:0 16px 16px;">
+          ${icon('info')}
+          <div><strong>${lateEnrollees.length}</strong> late enrollee${lateEnrollees.length === 1 ? '' : 's'} detected (first recorded attendance after the 1st Friday): ${Utils.esc(lateEnrollees.join(', '))}</div>
+        </div>` : ''}
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--border);background:var(--bg);flex-wrap:wrap;">
+        <div class="text-xs text-muted">Attendance is recorded on the Attendance page and reflected here automatically.</div>
+        <div class="flex gap-8" style="flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" id="sf2-open-attendance">${icon('check')} Open Attendance</button>
+          <button class="btn btn-outline btn-sm" id="sf2-refresh">${icon('history')} Refresh</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  /* ---------------- Bind inline actions ---------------- */
+  const gotoBtn = target.querySelector('#sf2-goto-attendance');
+  if (gotoBtn) gotoBtn.onclick = (e) => { e.preventDefault(); App.navigate('attendance'); };
+
+  target.querySelector('#sf2-open-attendance').onclick = () => App.navigate('attendance');
+  target.querySelector('#sf2-refresh').onclick = () =>
+    Pages.generateSF2Preview(classId, monthStr, target);
+
+  /* ---------------- Enable header print button ---------------- */
+  if (headerPrintBtn) {
+    headerPrintBtn.disabled = false;
+    headerPrintBtn.onclick = () => Pages.printSF2(State._sf2LastRender);
+  }
+
+  return true;
+},
+/* ----------------------------------------------------------------------------
+   SF2 · inject the controls + grid stylesheet once
+   ---------------------------------------------------------------------------- */
+_sf2EnsureStyle() {
+  if (document.getElementById('sf2-editor-style')) return;
+  const st = document.createElement('style');
+  st.id = 'sf2-editor-style';
+  st.textContent = `
+    .sf2-controls-row {
+      display: flex;
+      gap: 16px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+    .sf2-ctrl-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+    .sf2-ctrl-group > label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    .sf2-month-picker {
+      display: flex;
+      align-items: stretch;
+      gap: 4px;
+    }
+    .sf2-month-picker .btn {
+      padding-left: 10px;
+      padding-right: 10px;
+      min-width: 36px;
+      font-weight: 700;
+    }
+    .sf2-month-picker input {
+      flex: 1;
+      min-width: 150px;
+      text-align: center;
+      font-weight: 600;
+    }
+    .sf2-grid-wrap {
+      overflow-x: auto;
+      overflow-y: auto;
+      max-height: 64vh;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .sf2-grid-table {
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 11px;
+      width: 100%;
+    }
+    .sf2-grid-table th,
+    .sf2-grid-table td {
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 4px 6px;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .sf2-grid-table thead th {
+      background: var(--bg);
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--text-muted);
+      padding: 8px 4px;
+    }
+    .sf2-grid-table tbody td.sf2-name {
+      text-align: left;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 220px;
+    }
+    .sf2-grid-table tbody tr:hover {
+      background: var(--light-blue);
+    }
+    .sf2-grid-table tbody tr:last-child td { border-bottom: none; }
+    .sf2-grid-table thead th:last-child,
+    .sf2-grid-table tbody td:last-child { border-right: none; }
+    @media (max-width: 640px) {
+      .sf2-controls-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .sf2-ctrl-group { width: 100%; }
+    }
+  `;
+  document.head.appendChild(st);
+},
+
+/* ----------------------------------------------------------------------------
+   SF2 · info modal
+   ---------------------------------------------------------------------------- */
+_sf2ShowInfoModal() {
+  UI.modal({
+    title: 'Important Notes for SF2 Submission',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-warning mb-16" style="margin:0 0 16px;">
+        ${icon('alert').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Template Verification:</strong> KlazAssist renders SF2 from your recorded attendance.
+          The exact cell geometry (page size, merged cells, column widths, legend wording) of the
+          current official SF2 template was not independently verified against a live authoritative
+          source. Compare against your Division's current template before submission.
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="margin:0 0 16px;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Data Source:</strong> Attendance is recorded on the Attendance page. The register
+          updates automatically based on what you've recorded there. Navigate to the Attendance page
+          to add or edit records, then return here — no manual refresh needed.
+        </div>
+      </div>
+
+      <div class="alert alert-success mb-16" style="margin:0 0 16px;">
+        ${icon('check').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Attendance codes:</strong> Following common DepEd convention —
+          blank cell = <strong>Present</strong>, <strong>A</strong> = Absent,
+          <strong>L</strong> = Late, <strong>E</strong> = Excused. Verify these codes against
+          your Division's current SF2 instructions before submission.
+        </div>
+      </div>
+
+      <div class="alert alert-info" style="margin:0;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>DepEd holidays:</strong> Days flagged as <em>Holiday</em> on the DepEd calendar
+          are excluded from the class-day count. Manage holidays in
+          <strong>Planning → Calendar</strong>.
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-primary" data-close>Got it</button>`
+  });
 },
   printSF2({ school, teacher, cls, learners, dates, rows, male, female, adaPct, monthStr,
            chronicallyAbsent = [], lateEnrollees = [] }) {
@@ -39474,7 +40661,12 @@ async generateSF2Preview(classId, monthStr) {
     root.innerHTML = `
       <div class="page-head">
         <div>
-          <h2>SF8 — Learner's Basic Health and Nutrition Report</h2>
+          <h2 style="display:flex;align-items:center;gap:8px;">
+            SF8 — Learner's Basic Health and Nutrition Report
+            <button class="icon-btn" id="sf8-info-btn" title="View important notes for submission" style="width:24px;height:24px;background:var(--bg);border:1px solid var(--border);">
+              ${icon('info')}
+            </button>
+          </h2>
           <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)} · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'}</p>
         </div>
         <div class="page-actions">
@@ -39484,56 +40676,54 @@ async generateSF2Preview(classId, monthStr) {
         </div>
       </div>
 
-      <div class="alert alert-warning mb-16" style="align-items:flex-start;">
-        ${icon('alert')}
-        <div>
-          <strong>Before you submit:</strong> KlazAssist encodes the SF8 from the well-known DepEd template,
-          but the exact cell geometry of your Division's current sheet was not independently re-derived from the
-          primary PDF. Compare against your Division's current official template before submission.
-          The <em>Suggest</em> nutritional status uses a simplified BMI band — the official DepEd classification
-          uses age- and sex-specific BMI-for-age tables. <strong>Override it as needed.</strong>
-        </div>
-      </div>
-
       ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
         <strong>Cannot export SF8 — missing required information:</strong>
         <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
       </div></div>` : ''}
+      
       ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
         <strong>Warnings:</strong>
         <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
       </div></div>` : ''}
 
-      <div class="grid grid-4 mb-16">
-        <div class="stat-card"><div class="stat-label">Total Learners</div><div class="stat-value">${State.learners.length}</div></div>
-        <div class="stat-card accent-success"><div class="stat-label">Male</div><div class="stat-value">${males.length}</div></div>
-        <div class="stat-card accent-danger"><div class="stat-label">Female</div><div class="stat-value">${females.length}</div></div>
-        <div class="stat-card ${others.length ? 'accent-warning' : ''}"><div class="stat-label">Unrecorded Sex</div><div class="stat-value">${others.length}</div></div>
-      </div>
 
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>Health &amp; Nutrition Data</h3>
-          <span class="text-xs text-muted">${withWeight} with weight+height · ${withStatus} classified · ${withDeworm} dewormed</span>
+      <div class="card" style="padding-bottom:0; overflow:visible;">
+        <div class="card-head" style="align-items:flex-start;">
+          <div>
+            <h3>Health &amp; Nutrition Data</h3>
+            <div class="flex gap-12 text-xs mt-8" style="flex-wrap:wrap;">
+              <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--deped-blue);"></span>
+                <strong>${withWeight}</strong> Weighed & Measured
+              </span>
+              <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>
+                <strong>${withStatus}</strong> Status Classified
+              </span>
+              <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--warning);"></span>
+                <strong>${withDeworm}</strong> Dewormed
+              </span>
+            </div>
+          </div>
+          <span class="badge badge-blue">${State.learners.length} Total</span>
         </div>
+        
         <p class="text-sm text-muted mb-12">
-          Enter each learner's measurements. BMI is computed automatically from weight and height.
-          The <em>Suggest</em> button next to a row will fill in the nutritional band based on the BMI.
-          Values save on blur.
+          Enter each learner's measurements. BMI is computed automatically. The <em>star</em> button will auto-fill the nutritional band. Values save on blur.
         </p>
+
         <div class="sf8-editor-wrap">
           <table class="sf8-editor-table">
             <thead>
               <tr>
                 <th style="width:34px;">#</th>
-                <th style="min-width:170px;text-align:center;">Learner</th>
-                <th style="width:70px;text-align:center;">Sex</th>
-                <th style="width:56px;text-align:center;">Age</th>
-                <th style="width:76px;text-align:center;">Weight<br><span class="sf8-th-sub">(kg)</span></th>
-                <th style="width:76px; text-align:center;">Height<br><span class="sf8-th-sub">(m)</span></th>
-                <th style="width:70px; text-align:center;">BMI<br><span class="sf8-th-sub">(kg/m²)</span></th>
+                <th style="min-width:200px;">Learner</th>
+                <th style="width:80px;text-align:center;">Weight<br><span style="font-weight:400;text-transform:none;">(kg)</span></th>
+                <th style="width:80px;text-align:center;">Height<br><span style="font-weight:400;text-transform:none;">(m)</span></th>
+                <th style="width:80px;text-align:center;">BMI<br><span style="font-weight:400;text-transform:none;">(kg/m²)</span></th>
                 <th style="width:130px;text-align:center;">Height for Age</th>
-                <th style="width:150px;text-align:center;">Nutritional Status</th>
+                <th style="width:160px;text-align:center;">Nutritional Status</th>
                 <th style="width:130px;text-align:center;">Deworming Date</th>
                 <th style="width:80px;text-align:center;">Tablets</th>
                 <th style="width:130px;text-align:center;">Immunization</th>
@@ -39541,21 +40731,24 @@ async generateSF2Preview(classId, monthStr) {
               </tr>
             </thead>
             <tbody>
-              ${males.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#dbe7fb;font-weight:700;text-align:center;letter-spacing:1px;">MALE · ${males.length}</td></tr>` : ''}
+              ${males.length ? `<tr class="sf8-section-row"><td colspan="11" style="background:rgba(0,87,184,0.08);font-weight:700;text-align:center;letter-spacing:1px;color:var(--deped-blue);">MALE · ${males.length}</td></tr>` : ''}
               ${males.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
-              ${females.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#fce7f3;font-weight:700;text-align:center;letter-spacing:1px;">FEMALE · ${females.length}</td></tr>` : ''}
+              ${females.length ? `<tr class="sf8-section-row"><td colspan="11" style="background:rgba(220,53,69,0.08);font-weight:700;text-align:center;letter-spacing:1px;color:var(--danger);">FEMALE · ${females.length}</td></tr>` : ''}
               ${females.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
-              ${others.length ? `<tr class="sf8-section-row"><td colspan="13" style="background:#fef3c7;font-weight:700;text-align:center;letter-spacing:1px;">UNRECORDED SEX · ${others.length}</td></tr>` : ''}
+              ${others.length ? `<tr class="sf8-section-row"><td colspan="11" style="background:rgba(245,158,11,0.08);font-weight:700;text-align:center;letter-spacing:1px;color:#B45309;">UNRECORDED SEX · ${others.length}</td></tr>` : ''}
               ${others.map((l, i) => Pages._sf8RowHTML(l, i + 1)).join('')}
             </tbody>
           </table>
         </div>
-      </div>
 
-      <div class="card">
-        <div class="flex gap-8" style="justify-content:flex-end;flex-wrap:wrap;">
-          <button class="btn btn-outline" id="sf8-autofill-bmi">${icon('chart')} Recompute Classifications</button>
-          <button class="btn btn-primary" id="sf8-save-all">${icon('save')} Save All Changes</button>
+        <div class="sf8-action-bar">
+          <div class="text-xs text-muted">
+            Data is saved to this device when you click out of a field.
+          </div>
+          <div class="flex gap-8">
+            <button class="btn btn-outline" id="sf8-autofill-bmi">${icon('chart')} Recompute All</button>
+            <button class="btn btn-primary" id="sf8-save-all">${icon('save')} Save All Changes</button>
+          </div>
         </div>
       </div>
     `;
@@ -39565,6 +40758,28 @@ async generateSF2Preview(classId, monthStr) {
     root.querySelector('#sf8-export').onclick    = () => Pages._sf8ExportXLSX(cls, school, teacher);
     root.querySelector('#sf8-print').onclick     = () => Pages._sf8Print(cls, school, teacher);
     root.querySelector('#sf8-save-all').onclick  = () => Pages._sf8PersistAll();
+    root.querySelector('#sf8-info-btn').onclick = () => {
+      UI.modal({
+        title: 'Important Notes for SF8 Submission',
+        size: 'modal-lg',
+        body: `
+          <div class="alert alert-warning mb-16" style="margin:0;">
+            ${icon('alert').replace('<svg ', '<svg width="20" height="20" ')}
+            <div style="line-height:1.6;">
+              <strong>Template Verification:</strong> KlazAssist encodes the SF8 from the well-known DepEd template, but the exact cell geometry of your Division's current sheet was not independently re-derived from the primary PDF. Compare against your Division's current official template before submission.
+            </div>
+          </div>
+          
+          <div class="alert alert-info" style="margin:0;">
+            ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+            <div style="line-height:1.6;">
+              <strong>Nutritional Status Logic:</strong> The "Suggest" (star) button uses a simplified BMI band to estimate the nutritional status. The official DepEd classification uses age- and sex-specific BMI-for-age tables. <em>Always override it as needed based on your official health assessment.</em>
+            </div>
+          </div>
+        `,
+        footer: `<button class="btn btn-primary" data-close>Got it</button>`
+      });
+    };
 
     root.querySelector('#sf8-autofill-bmi').onclick = async () => {
       let count = 0;
@@ -39614,21 +40829,22 @@ async generateSF2Preview(classId, monthStr) {
 
         l.sf8[field] = String(inp.value || '').trim();
 
-        // When weight or height changes, recompute BMI plus the two WHO
-        // classifications for this row and paint them into the UI.
-        //
-        // NOTE: the local variable is named `classification`, NOT `cls`,
-        // to avoid shadowing the outer `cls = State.activeClass` binding.
+        // Auto-color Nutritional Status
+        if (field === 'nutritionalStatus') {
+          inp.classList.remove('status-normal', 'status-wasted', 'status-overweight');
+          if (inp.value === 'Normal') inp.classList.add('status-normal');
+          else if (inp.value === 'Wasted' || inp.value === 'Severely Wasted') inp.classList.add('status-wasted');
+          else if (inp.value === 'Overweight' || inp.value === 'Obese') inp.classList.add('status-overweight');
+        }
+
         if (field === 'weight' || field === 'height') {
           const classification = _sf8Classify(l);
 
-          // BMI cell — always updated
           const bmiCell = root.querySelector(`[data-sf8-bmi="${CSS.escape(learnerId)}"]`);
           if (bmiCell) {
             bmiCell.textContent = classification.bmi !== null ? classification.bmi : '—';
           }
 
-          // Height for Age dropdown — only overwritten when WHO produced a value
           if (classification.heightForAge) {
             l.sf8.heightForAge = classification.heightForAge;
             const hfaSel = root.querySelector(
@@ -39637,13 +40853,16 @@ async generateSF2Preview(classId, monthStr) {
             if (hfaSel) hfaSel.value = classification.heightForAge;
           }
 
-          // Nutritional Status dropdown — same rule
           if (classification.nutritionalStatus) {
             l.sf8.nutritionalStatus = classification.nutritionalStatus;
             const nsSel = root.querySelector(
               `select[data-sf8-learner="${CSS.escape(learnerId)}"][data-sf8-field="nutritionalStatus"]`
             );
-            if (nsSel) nsSel.value = classification.nutritionalStatus;
+            if (nsSel) {
+              nsSel.value = classification.nutritionalStatus;
+              // Trigger color update for the auto-filled status
+              nsSel.dispatchEvent(new Event('input'));
+            }
           }
         }
       };
@@ -39688,84 +40907,86 @@ async generateSF2Preview(classId, monthStr) {
 
   /* Row renderer for one SF8 table row. */
   _sf8RowHTML(l, displayIdx) {
-    // Defensive: a learner added while this page was open may not yet have
-    // an `sf8` object on their record. Create one on the fly so the row
-    // still renders instead of throwing and killing the whole page.
     if (!l.sf8) l.sf8 = _sf8BlankRecord();
 
     const bmi = _sf8BMI(l.sf8.weight, l.sf8.height);
-    const sexLetter = Utils.normalizeSex(l.sex) === 'Male' ? 'M'
-                    : Utils.normalizeSex(l.sex) === 'Female' ? 'F' : '';
+    
+    // Combine Sex and Age into the learner subtitle
+    const sexLetter = Utils.normalizeSex(l.sex) === 'Male' ? 'M' : Utils.normalizeSex(l.sex) === 'Female' ? 'F' : '—';
+    const ageValue = _sf8AgeAt(l.birthDate, (State.activeClass && State.activeClass.schoolYear) || State.schoolYear);
+    const metaStr = `${sexLetter} · Age ${ageValue !== '' ? ageValue : '—'}`;
+
     const field = (name, value, opts = {}) => {
       const t = opts.type === 'date' ? 'date' : 'text';
       return `<input type="${t}"
-                     class="form-control sf8-input"
+                     class="form-control sf8-input ${opts.textLeft ? 'text-left' : ''}"
                      data-sf8-field="${Utils.attr(name)}"
                      data-sf8-learner="${Utils.attr(l.id)}"
                      value="${Utils.attr(value || '')}"
                      placeholder="${Utils.attr(opts.placeholder || '')}">`;
     };
-    /* Age is read-only and auto-computed from the birth date using the SF8
-      cutoff (1st Friday of June of the class's School Year), so the editor
-      always matches what gets printed. */
-    const ageValue = _sf8AgeAt(l.birthDate, (State.activeClass && State.activeClass.schoolYear) || State.schoolYear);
+
+    // Determine the color class for Nutritional Status
+    let statusClass = '';
+    if (l.sf8.nutritionalStatus === 'Normal') statusClass = 'status-normal';
+    else if (l.sf8.nutritionalStatus === 'Wasted' || l.sf8.nutritionalStatus === 'Severely Wasted') statusClass = 'status-wasted';
+    else if (l.sf8.nutritionalStatus === 'Overweight' || l.sf8.nutritionalStatus === 'Obese') statusClass = 'status-overweight';
+
     return `<tr>
       <td style="text-align:center;color:var(--text-muted);">${displayIdx}</td>
+      
       <td>
-        <div style="display:flex;align-items:center;gap:8px;">
-          ${Utils.avatarHTML(l, 26, 10)}
+        <div class="sf8-learner-cell">
+          ${Utils.avatarHTML(l, 32, 12)}
           <div style="min-width:0;">
-            <div style="font-weight:600;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
               ${Utils.esc(Utils.displayName(l))}
             </div>
-            <div class="text-xs text-muted">LRN ${Utils.esc(l.lrn || '—')}</div>
+            <div class="sf8-learner-meta">
+              ${metaStr} <span style="opacity:0.5;">·</span> LRN ${Utils.esc(l.lrn || '—')}
+            </div>
           </div>
         </div>
       </td>
-      <td style="text-align:center;font-weight:700;">${sexLetter}</td>
-      <td style="text-align:center;font-weight:600;color:var(--text);">${ageValue !== '' ? ageValue : '—'}</td>
+
       <td>${field('weight', l.sf8.weight, { placeholder: '0.0' })}</td>
       <td>${field('height', l.sf8.height, { placeholder: '0.00' })}</td>
-      <td style="text-align:center;font-weight:700;color:var(--deped-blue);" data-sf8-bmi="${Utils.attr(l.id)}">${bmi !== null ? bmi : '—'}</td>
+      
+      <td style="text-align:center;font-weight:700;color:var(--deped-blue);font-size:14px;" data-sf8-bmi="${Utils.attr(l.id)}">
+        ${bmi !== null ? bmi : '—'}
+      </td>
+      
       <td>
-        <select class="form-control sf8-input"
-                data-sf8-field="heightForAge"
-                data-sf8-learner="${Utils.attr(l.id)}">
+        <select class="form-control sf8-input" data-sf8-field="heightForAge" data-sf8-learner="${Utils.attr(l.id)}">
           <option value="">—</option>
-          ${['Stunted','Normal','Tall'].map(v =>
-            `<option value="${v}" ${l.sf8.heightForAge === v ? 'selected' : ''}>${v}</option>`
-          ).join('')}
+          ${['Stunted','Normal','Tall'].map(v => `<option value="${v}" ${l.sf8.heightForAge === v ? 'selected' : ''}>${v}</option>`).join('')}
         </select>
       </td>
+      
       <td>
         <div class="flex gap-4" style="align-items:center;">
-          <select class="form-control sf8-input" style="flex:1;"
-                  data-sf8-field="nutritionalStatus"
-                  data-sf8-learner="${Utils.attr(l.id)}">
+          <select class="form-control sf8-input ${statusClass}" style="flex:1; transition:all .2s;" 
+                  data-sf8-field="nutritionalStatus" data-sf8-learner="${Utils.attr(l.id)}">
             <option value="">—</option>
-            ${['Severely Wasted','Wasted','Normal','Overweight','Obese'].map(v =>
-              `<option value="${v}" ${l.sf8.nutritionalStatus === v ? 'selected' : ''}>${v}</option>`
-            ).join('')}
+            ${['Severely Wasted','Wasted','Normal','Overweight','Obese'].map(v => `<option value="${v}" ${l.sf8.nutritionalStatus === v ? 'selected' : ''}>${v}</option>`).join('')}
           </select>
-          <button type="button" class="icon-btn" data-sf8-suggest="${Utils.attr(l.id)}"
-                  title="Suggest based on BMI" style="width:28px;height:28px;flex-shrink:0;">
+          <button type="button" class="icon-btn" data-sf8-suggest="${Utils.attr(l.id)}" title="Auto-suggest based on BMI" style="width:28px;height:28px;flex-shrink:0;">
             ${icon('star')}
           </button>
         </div>
       </td>
+      
       <td>${field('dewormingDate', l.sf8.dewormingDate, { type: 'date' })}</td>
       <td>${field('dewormingTablets', l.sf8.dewormingTablets, { placeholder: '0' })}</td>
+      
       <td>
-        <select class="form-control sf8-input"
-                data-sf8-field="immunization"
-                data-sf8-learner="${Utils.attr(l.id)}">
+        <select class="form-control sf8-input" data-sf8-field="immunization" data-sf8-learner="${Utils.attr(l.id)}">
           <option value="">—</option>
-          ${['Complete','Incomplete'].map(v =>
-            `<option value="${v}" ${l.sf8.immunization === v ? 'selected' : ''}>${v}</option>`
-          ).join('')}
+          ${['Complete','Incomplete'].map(v => `<option value="${v}" ${l.sf8.immunization === v ? 'selected' : ''}>${v}</option>`).join('')}
         </select>
       </td>
-      <td>${field('remarks', l.sf8.remarks)}</td>
+      
+      <td>${field('remarks', l.sf8.remarks, { textLeft: true })}</td>
     </tr>`;
   },
 
@@ -41321,96 +42542,151 @@ pushSignatory('REVIEWED BY:',                   divisionRep,                    
      Interactive editor: dropdown learner selector, auto-populated grades from
      the Gradebook where the teacher handles the subject, manual entry elsewhere.
      ============================================================================ */
-  async sf9(root) {
-    const cls = State.activeClass;
-    if (!cls) {
-      root.innerHTML = `<div class="card">${UI.emptyState({
-        icon:'file', title:'No class selected',
-        message:'Create or select a class first.',
-        actionLabel:'+ Create Class', actionFn:'App.openClassForm()'
-      })}</div>`;
-      return;
-    }
-    if (!State.learners.length) {
-      root.innerHTML = `<div class="card">${UI.emptyState({
-        icon:'users', title:'No learners in this class',
-        message:'Add learners before preparing SF9 report cards.',
-        actionLabel:'+ Add Learner', actionFn:'App.openLearnerForm()'
-      })}</div>`;
-      return;
-    }
+async sf9(root) {
+  const cls = State.activeClass;
+
+  if (!State.classes.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'file', title: 'No classes yet',
+      message: 'Create your first class to use the SF9 report card.',
+      actionLabel: '+ Create Class', actionFn: 'App.openClassForm()'
+    })}</div>`;
+    return;
+  }
+  if (!cls) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No class selected',
+      message: 'Choose a class from the top bar to view SF9 report cards.',
+      actionLabel: 'Switch Class', actionFn: 'App.openClassSelector()'
+    })}</div>`;
+    return;
+  }
+  if (!State.learners.length) {
+    root.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'users', title: 'No learners in this class',
+      message: 'Add learners before preparing SF9 report cards.',
+      actionLabel: '+ Add Learner', actionFn: 'App.openLearnerForm()'
+    })}</div>`;
+    return;
+  }
 
   const policy = GradingEngine.resolvePolicy({
-      schoolYear: cls.schoolYear,
-      gradeLevel: cls.gradeLevel
-    });
-    const band = resolveSf9Band(cls.gradeLevel);
-    const learningAreas = SF9_LEARNING_AREAS[band];
+    schoolYear: cls.schoolYear,
+    gradeLevel: cls.gradeLevel
+  });
+  const band = resolveSf9Band(cls.gradeLevel);
 
-    // Which selected learner?
-    const selectedId = State._sf9LearnerId && State.learners.some(l => l.id === State._sf9LearnerId)
-      ? State._sf9LearnerId
-      : State.learners[0].id;
-    State._sf9LearnerId = selectedId;
+  const selectedId = State._sf9LearnerId && State.learners.some(l => l.id === State._sf9LearnerId)
+    ? State._sf9LearnerId
+    : State.learners[0].id;
+  State._sf9LearnerId = selectedId;
 
-    root.innerHTML = `
-      <div class="page-head">
-        <div>
-          <h2>SF9 — Learner's Performance Report</h2>
-          <p>${Utils.esc(cls.gradeLevel)} - ${Utils.esc(cls.section)} · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}</p>
-        </div>
-        <div class="page-actions">
-          <select class="form-control" id="sf9-print-mode" style="max-width:220px;"
-                  title="Choose print layout">
-            <option value="a5">A5 · Back-to-back (per-learner booklet)</option>
-            <option value="a4">A4 · Landscape (both pages side-by-side)</option>
+  const school  = State.schools[0] || {};
+  const teacher = State.currentUser || {};
+
+  // Validation (blocks print; soft warnings only)
+  const errors = [], warnings = [];
+  if (!school.name)     errors.push('School Name is missing (Settings → School Profile).');
+  if (!school.schoolId) errors.push('School ID is missing (Settings → School Profile).');
+  if (!school.region)     warnings.push('Region is missing.');
+  if (!school.division)   warnings.push('Division is missing.');
+  if (!school.schoolHead) warnings.push('School Head name is missing.');
+  if (!cls.adviser && !teacher.fullName) warnings.push('Adviser name is missing on this class.');
+
+  Pages._sf9EnsureStyle();
+
+  const learnerOptions = State.learners
+    .slice()
+    .sort((a, b) => (a.lastName || '').localeCompare(b.lastName || ''))
+    .map(l => `<option value="${Utils.attr(l.id)}" ${l.id === selectedId ? 'selected' : ''}>
+      ${Utils.esc(Utils.lastNameFirst(l))} — LRN ${Utils.esc(l.lrn || '—')}
+    </option>`)
+    .join('');
+
+  const printMode = State._sf9PrintMode || 'a5';
+
+  root.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h2 style="display:flex;align-items:center;gap:8px;">
+          SF9 — Learner's Performance Report Card
+          <button class="icon-btn" id="sf9-info-btn"
+                  title="View important notes for submission"
+                  style="width:24px;height:24px;background:var(--bg);border:1px solid var(--border);">
+            ${icon('info')}
+          </button>
+        </h2>
+        <p>${Utils.esc(cls.gradeLevel)} – ${Utils.esc(cls.section)}
+           · SY ${Utils.esc(cls.schoolYear || State.schoolYear)}
+           · ${State.learners.length} learner${State.learners.length === 1 ? '' : 's'}</p>
+      </div>
+      <div class="page-actions">
+        <select class="form-control" id="sf9-print-mode" style="max-width:220px;" title="Print layout">
+          <option value="a5" ${printMode === 'a5' ? 'selected' : ''}>A5 · Back-to-back booklet</option>
+          <option value="a4" ${printMode === 'a4' ? 'selected' : ''}>A4 · Landscape side-by-side</option>
+        </select>
+        <button class="btn btn-outline" id="sf9-refresh"
+                title="Re-read the latest finalized term grades from the Gradebook">
+          ${icon('history')} Sync from Gradebook
+        </button>
+        <button class="btn btn-primary" id="sf9-print" disabled>
+          ${icon('printer')} Print / Save as PDF
+        </button>
+      </div>
+    </div>
+
+    ${errors.length ? `<div class="alert alert-danger mb-16">${icon('alert')}<div>
+      <strong>Cannot print SF9 — missing required information:</strong>
+      <ul style="margin:6px 0 0 18px;">${errors.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    ${warnings.length ? `<div class="alert alert-warning mb-16">${icon('alert')}<div>
+      <strong>Warnings:</strong>
+      <ul style="margin:6px 0 0 18px;">${warnings.map(e => `<li>${Utils.esc(e)}</li>`).join('')}</ul>
+    </div></div>` : ''}
+
+    <div class="card mb-16">
+      <div class="card-head" style="margin-bottom:12px;">
+        <h3 style="font-size:14px;">Report Card Context</h3>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2;">
+          <label>Select Learner</label>
+          <select class="form-control" id="sf9-learner-select">
+            ${learnerOptions}
           </select>
-          <button class="btn btn-outline" id="sf9-load-grades">${icon('chart')} Pull from Gradebook</button>
-          <button class="btn btn-primary" id="sf9-print">${icon('printer')} Print / Save as PDF</button>
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Learning-Area Set</label>
+          <input class="form-control" value="${Utils.attr(band)}" readonly
+                 style="background:var(--bg);cursor:not-allowed;"
+                 title="Determined by the class grade level">
         </div>
       </div>
+    </div>
 
-      <div class="alert alert-info mb-16">${icon('info')}<div>
-        Grades are auto-pulled from the Gradebook for the subjects <strong>you handle</strong> in this class. For subjects handled by other teachers, enter the term grades manually. Final Grade and General Average compute automatically.
-      </div></div>
+    <div id="sf9-editor-container"></div>
+  `;
 
-      <div class="card mb-16">
-        <div class="form-row">
-          <div class="form-group" style="flex:2;">
-            <label>Select a Learner</label>
-            <select class="form-control" id="sf9-learner-select">
-              ${State.learners.map(l => `
-                <option value="${Utils.attr(l.id)}" ${l.id === selectedId ? 'selected' : ''}>
-                  ${Utils.esc(Utils.lastNameFirst(l))} — LRN ${Utils.esc(l.lrn || '—')}
-                </option>`).join('')}
-            </select>
-          </div>
-          <div class="form-group" style="flex:1;">
-            <label>Learning-Area Set</label>
-            <input class="form-control" value="${Utils.attr(band)}" readonly
-                   style="background:var(--bg);cursor:not-allowed;" title="Determined by the class grade level">
-          </div>
-        </div>
-      </div>
+  root.querySelector('#sf9-info-btn').onclick = () => Pages._sf9ShowInfoModal();
 
-      <div id="sf9-editor-container"></div>
-    `;
+  root.querySelector('#sf9-learner-select').onchange = (e) => {
+    State._sf9LearnerId = e.target.value;
+    const printBtn = document.getElementById('sf9-print');
+    if (printBtn) printBtn.disabled = true;
+    Pages._renderSf9Editor();
+  };
 
-    root.querySelector('#sf9-learner-select').onchange = (e) => {
-      State._sf9LearnerId = e.target.value;
-      Pages._renderSf9Editor();
-    };
-    root.querySelector('#sf9-load-grades').onclick = () => Pages._sf9PullFromGradebook();
-    root.querySelector('#sf9-print').onclick = () => Pages._sf9PrintCurrent();
+  root.querySelector('#sf9-refresh').onclick = () => Pages._sf9PullFromGradebook();
 
-    const modeSel = root.querySelector('#sf9-print-mode');
-    if (modeSel) {
-      modeSel.value = State._sf9PrintMode || 'a5';
-      modeSel.onchange = (e) => { State._sf9PrintMode = e.target.value; };
-    }
+  root.querySelector('#sf9-print').onclick = () => Pages._sf9PrintCurrent();
 
-    await Pages._renderSf9Editor();
-  },
+  root.querySelector('#sf9-print-mode').onchange = (e) => {
+    State._sf9PrintMode = e.target.value;
+  };
+
+  await Pages._renderSf9Editor();
+},
 
     // ═══════════════════════════════════════════════════════════════
   // PHIL-IRI — Premium Reading Assessment Module
@@ -45633,519 +46909,673 @@ _openPhilIriHelp() {
   },
 
   /* ---------- Internal helper: render the SF9 editor for the selected learner ---------- */
-  async _renderSf9Editor() {
-    const container = document.getElementById('sf9-editor-container');
-    if (!container) return;
+async _renderSf9Editor() {
+  const container = document.getElementById('sf9-editor-container');
+  if (!container) return;
 
-    const cls = State.activeClass;
-    const learnerId = State._sf9LearnerId;
-    const learner = State.learners.find(l => l.id === learnerId);
-    if (!learner) { container.innerHTML = ''; return; }
+  const cls = State.activeClass;
+  const learnerId = State._sf9LearnerId;
+  const learner = State.learners.find(l => l.id === learnerId);
+  if (!cls || !learner) {
+    container.innerHTML = `<div class="card">${UI.emptyState({
+      icon: 'user', title: 'Select a learner',
+      message: 'Choose a learner from the dropdown above to open their SF9.'
+    })}</div>`;
+    return;
+  }
 
-    container.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);">Loading SF9 for ${Utils.esc(Utils.fullName(learner))}…</div>`;
+  container.innerHTML = `<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);">
+    Loading SF9 for ${Utils.esc(Utils.fullName(learner))}…
+  </div>`;
 
-    const schoolYear = cls.schoolYear || State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
-    const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
-                || GradingEngine.resolvePolicy({ schoolYear });
-    const band = resolveSf9Band(cls.gradeLevel);
-    const learningAreas = SF9_LEARNING_AREAS[band];
+  const schoolYear = cls.schoolYear || State.schoolYear || CONFIG.DEFAULT_SCHOOL_YEAR;
+  const policy = GRADING_POLICIES[cls.gradingPolicyVersion]
+              || GradingEngine.resolvePolicy({ schoolYear });
+  const band = resolveSf9Band(cls.gradeLevel);
+  const learningAreas = SF9_LEARNING_AREAS[band];
 
-    // Load (or initialize) the SF9 record.
-    // Keyed by COHORT (gradeLevel + section + SY), not by the active class,
-    // so the learner's report card carries the same data no matter which
-    // subject-class the teacher is signed into. Migrates older class-keyed
-    // records in place on first access.
-    const cohortKey = Pages._cohortKey(cls);
-    const rec = await Pages._loadOrCreateSf9Record(cohortKey, learner, schoolYear, cls);
+  // Load (or create) the cohort-keyed SF9 record
+  const cohortKey = Pages._cohortKey(cls);
+  const rec = await Pages._loadOrCreateSf9Record(cohortKey, learner, schoolYear, cls);
 
-    // Ensure every learning area has a row object
-    learningAreas.forEach(area => {
-      if (!rec.subjects[area]) {
-        rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
-      }
-    });
+  // Ensure every learning area has a row object
+  learningAreas.forEach(area => {
+    if (!rec.subjects[area]) {
+      rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
+    }
+  });
 
-    // Load finalized termGrades for this learner so we can auto-lock the
-    // learning areas the teacher handles. We must filter by COHORT and by
-    // SPECIFIC CLASS — otherwise an elementary teacher who handles Math
-    // and English would see the SAME term grade echoed into every area.
-    const cohortSubjects = await Pages._findCohortSubjects(cls);
-    const subjectToClassId = {};
-    cohortSubjects.forEach(c => {
-      const subj = String(c.subject || '').trim();
-      if (subj && !subjectToClassId[subj]) subjectToClassId[subj] = c.id;
-    });
+  // Auto-pull finalized term grades per learning area (scoped to cohort)
+  const cohortSubjects = await Pages._findCohortSubjects(cls);
+  const subjectToClassId = {};
+  cohortSubjects.forEach(c => {
+    const subj = String(c.subject || '').trim();
+    if (subj && !subjectToClassId[subj]) subjectToClassId[subj] = c.id;
+  });
 
-    const allTermGrades = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
-    const autoGradeMap = {};   // subject → { term1, term2, term3 }
+  const allTermGrades = await DB.getAllByIndex('termGrades', 'learnerId', learner.id);
+  const autoGradeMap = {};
 
-    learningAreas.forEach(area => {
-      const classId = subjectToClassId[area];
-      if (!classId) return;   // this subject isn't taught in this cohort
-
-      const findTerm = (term) => allTermGrades.find(g =>
-        g.learnerId === learner.id &&
-        g.classId  === classId &&           // ← the critical filter
-        g.term     === term &&
-        g.status   === 'finalized'
-      );
-
-      const t1 = findTerm(policy.terms[0]);
-      const t2 = findTerm(policy.terms[1]);
-      const t3 = findTerm(policy.terms[2]);
-      if (t1 || t2 || t3) {
-        autoGradeMap[area] = {
-          term1: t1 ? t1.reportedGrade : '',
-          term2: t2 ? t2.reportedGrade : '',
-          term3: t3 ? t3.reportedGrade : ''
-        };
-      }
-    });
-
-    // Compute per-subject finals and the GWA
-    const rowState = {};
-    const descriptive = policy.gradingMode === 'descriptive';
-
-    learningAreas.forEach(area => {
-      const manual = rec.subjects[area];
-      const auto = autoGradeMap[area];
-      const t1 = auto ? auto.term1 : manual.term1;
-      const t2 = auto ? auto.term2 : manual.term2;
-      const t3 = auto ? auto.term3 : manual.term3;
-      const isAuto = !!auto;
-      const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
-
-      // In descriptive mode, the "final" the teacher sees is the descriptor
-      // label, not the numeric average. The numeric average is retained as
-      // `finalNumeric` so the general-average calculation still works.
-      let displayFinal = final;
-      let descriptorLabel = '';
-
-      if (descriptive && final !== null) {
-        const d = GradingEngine.getDescriptor(final, policy);
-        descriptorLabel = d.label;
-        displayFinal = d.label;
-      }
-
-      const remarks = descriptive
-        ? ''                                       // no Passed/Failed under descriptive grading
-        : GradingEngine.getSubjectRemarks(final, policy.passingGrade);
-
-      rowState[area] = {
-        t1, t2, t3,
-        final: displayFinal,        // what the SF9 table renders
-        finalNumeric: final,        // what the general-average math uses
-        descriptor: descriptorLabel,
-        remarks,
-        isAuto
-      };
-    });
-
-    // ── MAPEH consolidation ──
-    // DepEd practice: MAPEH is the mean of Music and Arts and Physical
-    // Education and Health. When BOTH children have numeric finals, MAPEH
-    // is derived — never entered directly. Subject teachers fill in the
-    // children; MAPEH is the summary row.
-    const mapehChildFinals = MAPEH_CHILDREN
-      .map(c => rowState[c] && rowState[c].finalNumeric)
-      .filter(n => n !== null && n !== undefined && !isNaN(n));
-
-    if (mapehChildFinals.length === MAPEH_CHILDREN.length) {
-      const mapehFinal = Math.round(
-        mapehChildFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
-      );
-      rowState[MAPEH_PARENT] = {
-        t1: '', t2: '', t3: '',
-        final:         descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : mapehFinal,
-        finalNumeric:  mapehFinal,
-        descriptor:    descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : '',
-        remarks:       descriptive ? '' : GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade),
-        isAuto:        true,
-        isMapehParent: true
+  learningAreas.forEach(area => {
+    const classId = subjectToClassId[area];
+    if (!classId) return;
+    const findTerm = (term) => allTermGrades.find(g =>
+      g.learnerId === learner.id && g.classId === classId &&
+      g.term === term && g.status === 'finalized'
+    );
+    const t1 = findTerm(policy.terms[0]);
+    const t2 = findTerm(policy.terms[1]);
+    const t3 = findTerm(policy.terms[2]);
+    if (t1 || t2 || t3) {
+      autoGradeMap[area] = {
+        term1: t1 ? t1.reportedGrade : '',
+        term2: t2 ? t2.reportedGrade : '',
+        term3: t3 ? t3.reportedGrade : ''
       };
     }
+  });
 
-    // Use the numeric finals for the math in both modes. In descriptive mode
-    // `r.final` is a string, so mixing it into the average would corrupt the
-    // result. We also exclude the MAPEH children — their contribution flows
-    // through MAPEH itself, so counting them again would double-weight them.
-    const generalAverageNumeric = GradingEngine.calculateGeneralAverageFromFinals(
-      Object.entries(rowState)
-        .filter(([area]) => !MAPEH_CHILDREN.includes(area))
-        .map(([, r]) => r.finalNumeric)
+  // Build per-area state
+  const rowState = {};
+  const descriptive = policy.gradingMode === 'descriptive';
+
+  learningAreas.forEach(area => {
+    const manual = rec.subjects[area];
+    const auto = autoGradeMap[area];
+    const t1 = auto ? auto.term1 : manual.term1;
+    const t2 = auto ? auto.term2 : manual.term2;
+    const t3 = auto ? auto.term3 : manual.term3;
+    const isAuto = !!auto;
+    const final = GradingEngine.calculateSubjectFinal(t1, t2, t3);
+
+    let displayFinal = final;
+    let descriptorLabel = '';
+    if (descriptive && final !== null) {
+      descriptorLabel = GradingEngine.getDescriptor(final, policy).label;
+      displayFinal = descriptorLabel;
+    }
+    const remarks = descriptive
+      ? ''
+      : GradingEngine.getSubjectRemarks(final, policy.passingGrade);
+
+    rowState[area] = {
+      t1, t2, t3,
+      final: displayFinal,
+      finalNumeric: final,
+      descriptor: descriptorLabel,
+      remarks,
+      isAuto
+    };
+  });
+
+  // MAPEH consolidation
+  const mapehChildFinals = MAPEH_CHILDREN
+    .map(c => rowState[c] && rowState[c].finalNumeric)
+    .filter(n => n !== null && n !== undefined && !isNaN(n));
+
+  if (mapehChildFinals.length === MAPEH_CHILDREN.length) {
+    const mapehFinal = Math.round(
+      mapehChildFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
     );
+    rowState[MAPEH_PARENT] = {
+      t1: '', t2: '', t3: '',
+      final: descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : mapehFinal,
+      finalNumeric: mapehFinal,
+      descriptor: descriptive ? GradingEngine.getDescriptor(mapehFinal, policy).label : '',
+      remarks: descriptive ? '' : GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade),
+      isAuto: true,
+      isMapehParent: true
+    };
+  }
 
-    const generalAverage = descriptive
-      ? (generalAverageNumeric !== null
-          ? GradingEngine.getDescriptor(generalAverageNumeric, policy).label
-          : null)
-      : generalAverageNumeric;
+  const generalAverageNumeric = GradingEngine.calculateGeneralAverageFromFinals(
+    Object.entries(rowState)
+      .filter(([area]) => !MAPEH_CHILDREN.includes(area))
+      .map(([, r]) => r.finalNumeric)
+  );
 
-    // Auto-compute attendance from the Attendance module
-    const allAtt = (await DB.getAll('attendance')).filter(a => a.learnerId === learner.id && a.classId === cls.id);
+  const generalAverage = descriptive
+    ? (generalAverageNumeric !== null
+        ? GradingEngine.getDescriptor(generalAverageNumeric, policy).label
+        : null)
+    : generalAverageNumeric;
 
-    const months = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr'];
-    const monthMap = ['06','07','08','09','10','11','12','01','02','03','04'];
-    const attendanceRows = months.map((m, i) => {
-      const prefix = `${schoolYear.split('-')[0]}-${monthMap[i]}`;
-      const inMonth = allAtt.filter(a => (a.date || '').startsWith(prefix));
-      return {
-        month: m,
-        open: inMonth.length,
-        present: inMonth.filter(a => a.status === 'Present' || a.status === 'Late' || a.status === 'Excused').length,
-        absent: inMonth.filter(a => a.status === 'Absent').length
-      };
-    });
-    const attTotals = attendanceRows.reduce((acc, r) => ({
-      open: acc.open + r.open,
-      present: acc.present + r.present,
-      absent: acc.absent + r.absent
-    }), { open: 0, present: 0, absent: 0 });
+  // ---- Stat dots for the learner card head ----
+  const autoCount   = learningAreas.filter(a => rowState[a] && rowState[a].isAuto && !rowState[a].isMapehParent).length;
+  const manualCount = learningAreas.filter(a => rowState[a] && !rowState[a].isAuto).length;
+  const termsWithData = [0, 1, 2].filter(idx =>
+    learningAreas.some(area => {
+      const r = rowState[area];
+      if (!r) return false;
+      const v = [r.t1, r.t2, r.t3][idx];
+      return v !== '' && v !== null && v !== undefined;
+    })
+  ).length;
 
-    // DO 015, s. 2026 compliance checks for the SF9 editor.
-    const attEligibility = GradingEngine.checkAttendanceEligibility(
-      attTotals.absent,
-      attTotals.open
-    );
+  // Attendance
+  const allAtt = (await DB.getAll('attendance'))
+    .filter(a => a.learnerId === learner.id && a.classId === cls.id);
 
-    const awardCheck = GradingEngine.getAcademicExcellenceAward(
-      generalAverageNumeric,
-      Object.fromEntries(
-        Object.entries(rowState).map(([k, v]) => [k, v.finalNumeric])
-      )
-    );
+  const months = ['Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr'];
+  const monthMap = ['06','07','08','09','10','11','12','01','02','03','04'];
+  const attendanceRows = months.map((m, i) => {
+    const prefix = `${schoolYear.split('-')[0]}-${monthMap[i]}`;
+    const inMonth = allAtt.filter(a => (a.date || '').startsWith(prefix));
+    return {
+      month: m,
+      open: inMonth.length,
+      present: inMonth.filter(a =>
+        a.status === 'Present' || a.status === 'Late' || a.status === 'Excused'
+      ).length,
+      absent: inMonth.filter(a => a.status === 'Absent').length
+    };
+  });
+  const attTotals = attendanceRows.reduce((acc, r) => ({
+    open: acc.open + r.open,
+    present: acc.present + r.present,
+    absent: acc.absent + r.absent
+  }), { open: 0, present: 0, absent: 0 });
 
-    const attendanceWarningHTML = (!attEligibility.eligible && attTotals.open > 0) ? `
-      <div class="card mb-16" style="border-left:4px solid var(--danger);">
-        <div style="display:flex;gap:12px;align-items:flex-start;">
-          <div style="width:36px;height:36px;border-radius:10px;background:rgba(220,53,69,0.12);color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-            ${icon('alert')}
+  const attEligibility = GradingEngine.checkAttendanceEligibility(
+    attTotals.absent, attTotals.open
+  );
+
+  const awardCheck = GradingEngine.getAcademicExcellenceAward(
+    generalAverageNumeric,
+    Object.fromEntries(
+      Object.entries(rowState).map(([k, v]) => [k, v.finalNumeric])
+    )
+  );
+
+  // ---- Auxiliary alerts ----
+  const attendanceWarningHTML = (!attEligibility.eligible && attTotals.open > 0) ? `
+    <div class="card mb-16" style="border-left:4px solid var(--danger);">
+      <div style="display:flex;gap:12px;align-items:flex-start;">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(220,53,69,0.12);
+                    color:var(--danger);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${icon('alert')}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:800;font-size:13.5px;color:var(--danger);margin-bottom:3px;">
+            Attendance eligibility warning
           </div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:800;font-size:13.5px;color:var(--danger);margin-bottom:3px;">
-              Attendance eligibility warning
-            </div>
-            <div style="font-size:12.5px;color:var(--text);line-height:1.55;">
-              ${Utils.esc(attEligibility.message)}
-            </div>
+          <div style="font-size:12.5px;color:var(--text);line-height:1.55;">
+            ${Utils.esc(attEligibility.message)}
           </div>
         </div>
-      </div>` : '';
-
-    const awardHTML = (generalAverageNumeric !== null) ? `
-      <div class="card mb-16" style="border-left:4px solid ${awardCheck.qualifies ? 'var(--success)' : 'var(--border)'};">
-        <div style="display:flex;gap:12px;align-items:center;">
-          <div style="width:36px;height:36px;border-radius:50%;background:${awardCheck.qualifies ? 'var(--gradient-gold)' : 'var(--bg)'};color:${awardCheck.qualifies ? 'var(--dark-navy)' : 'var(--text-muted)'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-            ${icon('star')}
-          </div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:700;font-size:13px;color:${awardCheck.qualifies ? 'var(--text)' : 'var(--text-muted)'};">
-              ${awardCheck.qualifies ? 'Qualifies for the Academic Excellence Award' : 'Academic Excellence Award'}
-            </div>
-            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
-              ${Utils.esc(awardCheck.reason)}
-            </div>
-          </div>
-        </div>
-      </div>` : '';
-
-    /* ---------------- Render ---------------- */
-    container.innerHTML = `
-      <div class="card mb-16">
-        <div class="card-head">
-          <h3>${Utils.esc(Utils.fullName(learner))}</h3>
-          <span class="text-sm text-muted">
-            LRN ${Utils.esc(learner.lrn || '—')} · ${Utils.esc(learner.sex || '—')} · Age ${Utils.calcAge(learner.birthDate) || '—'}
-          </span>
-        </div>
-        <p class="text-xs text-muted">
-          Auto-locked rows come from your finalized Gradebook terms. Editable rows are for subjects handled by other teachers.
-        </p>
       </div>
+    </div>` : '';
 
-      <div class="card mb-16">
-        <div class="card-head"><h3>Learning Progress and Achievement</h3></div>
-        <div class="table-wrap">
-          <table class="data-table" style="font-size:12px;">
-            <thead><tr>
-              <th style="min-width:220px;">Learning Areas</th>
-              <th style="width:80px;text-align:center;">Term 1</th>
-              <th style="width:80px;text-align:center;">Term 2</th>
-              <th style="width:80px;text-align:center;">Term 3</th>
-              <th style="width:90px;text-align:center;">Final Grade</th>
-              <th style="width:100px;text-align:center;">Remarks</th>
-            </tr></thead>
-            <tbody>
-              ${learningAreas.map(area => {
-                const r = rowState[area];
+  const awardHTML = (generalAverageNumeric !== null) ? `
+    <div class="card mb-16" style="border-left:4px solid ${awardCheck.qualifies ? 'var(--success)' : 'var(--border)'};">
+      <div style="display:flex;gap:12px;align-items:center;">
+        <div style="width:36px;height:36px;border-radius:50%;
+                    background:${awardCheck.qualifies ? 'var(--gradient-gold)' : 'var(--bg)'};
+                    color:${awardCheck.qualifies ? 'var(--dark-navy)' : 'var(--text-muted)'};
+                    display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          ${icon('star')}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:13px;
+                      color:${awardCheck.qualifies ? 'var(--text)' : 'var(--text-muted)'};">
+            ${awardCheck.qualifies ? 'Qualifies for the Academic Excellence Award' : 'Academic Excellence Award'}
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
+            ${Utils.esc(awardCheck.reason)}
+          </div>
+        </div>
+      </div>
+    </div>` : '';
 
-                // MAPEH parent: rendered as a read-only summary row.
-                // No inputs — the values are derived from the two children.
-                if (r.isMapehParent) {
-                  return `<tr style="background:var(--light-blue);">
-                    <td><strong>${Utils.esc(area)}</strong> <span class="badge badge-gold" style="font-size:9px;">auto</span></td>
-                    <td colspan="3" style="text-align:center;color:var(--text-muted);font-size:11px;">
-                      Mean of ${MAPEH_CHILDREN.map(c => Utils.esc(c)).join(' and ')}
-                    </td>
-                    <td style="text-align:center;">
-                      <strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? Utils.esc(String(r.final)) : '—'}</strong>
-                    </td>
-                    <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">
-                      ${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}
-                    </td>
-                  </tr>`;
-                }
+  // ---- Render ----
+  container.innerHTML = `
+    <!-- ══════════ Learner card (primary head + stat dots + GWA) ══════════ -->
+    <div class="card mb-16">
+      <div class="card-head" style="align-items:flex-start;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <h3 style="margin:0;font-size:16px;">${Utils.esc(Utils.fullName(learner))}</h3>
+            ${learner.lrn
+              ? `<span class="badge badge-neutral" style="font-size:10px;">LRN ${Utils.esc(learner.lrn)}</span>`
+              : `<span class="badge badge-warning" style="font-size:10px;">No LRN</span>`}
+            ${learner.sex
+              ? `<span class="badge badge-blue" style="font-size:10px;">${Utils.esc(learner.sex)}</span>`
+              : ''}
+          </div>
+          <div class="flex gap-12 text-xs mt-8" style="flex-wrap:wrap;">
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--deped-blue);"></span>
+              <strong>${autoCount}</strong>&nbsp;Auto-pulled
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:var(--success);"></span>
+              <strong>${manualCount}</strong>&nbsp;Manual entry
+            </span>
+            <span style="display:flex;align-items:center;gap:4px;color:var(--text);">
+              <span style="width:8px;height:8px;border-radius:50%;background:${
+                termsWithData === 3 ? 'var(--success)' :
+                termsWithData >= 1 ? 'var(--warning)' : 'var(--border)'
+              };"></span>
+              <strong>${termsWithData}/3</strong>&nbsp;Terms with data
+            </span>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);">
+            General Average
+          </div>
+          <div style="font-size:24px;font-weight:800;line-height:1;color:${generalAverage !== null ? 'var(--deped-blue)' : 'var(--text-muted)'};margin-top:4px;">
+            ${generalAverage !== null ? generalAverage : '—'}
+          </div>
+          <div class="text-xs text-muted" style="margin-top:2px;">
+            ${descriptive && generalAverage !== null
+              ? GradingEngine.getDescriptor(generalAverageNumeric, policy).label
+              : `${learningAreas.length} learning area${learningAreas.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+      </div>
+      <p class="text-xs text-muted" style="margin:8px 0 0;">
+        Auto-locked rows come from your finalized Gradebook terms. Editable rows are for subjects handled by other teachers.
+      </p>
+    </div>
 
-                const lock = r.isAuto
-                  ? 'readonly style="background:var(--bg);cursor:not-allowed;text-align:center;"'
-                  : 'style="text-align:center;"';
-                return `<tr>
-                  <td><strong>${Utils.esc(area)}</strong>${r.isAuto ? ' <span class="badge badge-blue" style="font-size:9px;">auto</span>' : ''}</td>
-                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="1" value="${Utils.attr(r.t1)}" ${lock}></td>
-                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="2" value="${Utils.attr(r.t2)}" ${lock}></td>
-                  <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="3" value="${Utils.attr(r.t3)}" ${lock}></td>
+    <!-- ══════════ Learning Progress ══════════ -->
+    <div class="card mb-16">
+      <div class="card-head"><h3>Learning Progress and Achievement</h3></div>
+      <div class="table-wrap">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr>
+            <th style="min-width:220px;">Learning Areas</th>
+            <th style="width:80px;text-align:center;">Term 1</th>
+            <th style="width:80px;text-align:center;">Term 2</th>
+            <th style="width:80px;text-align:center;">Term 3</th>
+            <th style="width:90px;text-align:center;">Final Grade</th>
+            <th style="width:100px;text-align:center;">Remarks</th>
+          </tr></thead>
+          <tbody>
+            ${learningAreas.map(area => {
+              const r = rowState[area];
+
+              if (r.isMapehParent) {
+                return `<tr style="background:var(--light-blue);">
+                  <td><strong>${Utils.esc(area)}</strong> <span class="badge badge-gold" style="font-size:9px;">auto</span></td>
+                  <td colspan="3" style="text-align:center;color:var(--text-muted);font-size:11px;">
+                    Mean of ${MAPEH_CHILDREN.map(c => Utils.esc(c)).join(' and ')}
+                  </td>
                   <td style="text-align:center;">
                     <strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? Utils.esc(String(r.final)) : '—'}</strong>
                   </td>
-                  <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}</td>
+                  <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">
+                    ${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}
+                  </td>
                 </tr>`;
-              }).join('')}
-              <tr style="background:var(--light-blue);">
-                <td colspan="4" style="text-align:right;"><strong>General Average</strong></td>
-                <td style="text-align:center;"><strong id="sf9-gwa">${generalAverage !== null ? generalAverage : '—'}</strong></td>
-                <td style="text-align:center;" id="sf9-gwa-remarks">${GradingEngine.getSubjectRemarks(generalAverage, policy.passingGrade) || '—'}</td>
-              </tr>
+              }
+
+              const lock = r.isAuto
+                ? 'readonly style="background:var(--bg);cursor:not-allowed;text-align:center;"'
+                : 'style="text-align:center;"';
+
+              return `<tr>
+                <td><strong>${Utils.esc(area)}</strong>${r.isAuto ? ' <span class="badge badge-blue" style="font-size:9px;">auto</span>' : ''}</td>
+                <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="1" value="${Utils.attr(r.t1)}" ${lock}></td>
+                <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="2" value="${Utils.attr(r.t2)}" ${lock}></td>
+                <td><input type="number" min="0" max="100" class="form-control sf9-input" data-area="${Utils.attr(area)}" data-term="3" value="${Utils.attr(r.t3)}" ${lock}></td>
+                <td style="text-align:center;">
+                  <strong class="sf9-final" data-area="${Utils.attr(area)}">${r.final !== null ? Utils.esc(String(r.final)) : '—'}</strong>
+                </td>
+                <td style="text-align:center;" class="sf9-remarks" data-area="${Utils.attr(area)}">${Utils.esc(r.remarks || (descriptive ? r.descriptor : '—'))}</td>
+              </tr>`;
+            }).join('')}
+            <tr style="background:var(--light-blue);">
+              <td colspan="4" style="text-align:right;"><strong>General Average</strong></td>
+              <td style="text-align:center;"><strong id="sf9-gwa">${generalAverage !== null ? generalAverage : '—'}</strong></td>
+              <td style="text-align:center;" id="sf9-gwa-remarks">${GradingEngine.getSubjectRemarks(generalAverage, policy.passingGrade) || '—'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    ${awardHTML}
+    ${attendanceWarningHTML}
+
+    <div class="grid grid-2 mb-16">
+      <div class="card">
+        <div class="card-head"><h3>Attendance Record</h3></div>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:11px;">
+            <thead><tr>
+              <th>Month</th>${attendanceRows.map(r => `<th style="text-align:center;">${r.month}</th>`).join('')}<th style="text-align:center;">TOTAL</th>
+            </tr></thead>
+            <tbody>
+              <tr><td>No. of Class Days</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.open}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.open}</strong></td></tr>
+              <tr><td>No. of Days Present</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.present}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.present}</strong></td></tr>
+              <tr><td>No. of Days Absent</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.absent}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.absent}</strong></td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
-      ${awardHTML}
-      ${attendanceWarningHTML}
-
-      <div class="grid grid-2 mb-16">
-        <div class="card">
-          <div class="card-head"><h3>Attendance Record</h3></div>
-          <div class="table-wrap">
-            <table class="data-table" style="font-size:11px;">
-              <thead><tr>
-                <th>Month</th>${attendanceRows.map(r => `<th style="text-align:center;">${r.month}</th>`).join('')}<th style="text-align:center;">TOTAL</th>
-              </tr></thead>
-              <tbody>
-                <tr><td>No. of Class Days</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.open}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.open}</strong></td></tr>
-                <tr><td>No. of Days Present</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.present}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.present}</strong></td></tr>
-                <tr><td>No. of Days Absent</td>${attendanceRows.map(r => `<td style="text-align:center;">${r.absent}</td>`).join('')}<td style="text-align:center;"><strong>${attTotals.absent}</strong></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head"><h3>Core Values (per Term)</h3></div>
-          <p class="text-xs text-muted mb-12">Marking: <strong>AO</strong> = Always Observed · <strong>SO</strong> = Sometimes Observed · <strong>RO</strong> = Rarely Observed · <strong>NO</strong> = Not Observed</p>
-          <div class="table-wrap">
-            <table class="data-table" style="font-size:12px;">
-              <thead><tr><th>Core Value</th><th style="text-align:center;">Term 1</th><th style="text-align:center;">Term 2</th><th style="text-align:center;">Term 3</th></tr></thead>
-              <tbody>
-                ${Object.keys(rec.coreValues).map(cv => `
-                  <tr><td><strong>${Utils.esc(cv)}</strong></td>
-                    ${['term1','term2','term3'].map(t => `
-                      <td><select class="form-control sf9-cv-input" data-cv="${Utils.attr(cv)}" data-term="${t}" style="min-width:70px;text-align:center;">
-                        <option value=""></option>
-                        ${['AO','SO','RO','NO'].map(v => `<option value="${v}" ${rec.coreValues[cv][t] === v ? 'selected' : ''}>${v}</option>`).join('')}
-                      </select></td>`).join('')}
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="card mb-16">
-        <div class="card-head"><h3>Teacher's Comments / Remarks</h3></div>
-        <div class="form-group"><label>Term 1</label>
-          <textarea class="form-control" id="sf9-comment-1" rows="2" placeholder="e.g. A consistent and engaged learner.">${Utils.esc(rec.teacherComments.term1)}</textarea></div>
-        <div class="form-group"><label>Term 2</label>
-          <textarea class="form-control" id="sf9-comment-2" rows="2">${Utils.esc(rec.teacherComments.term2)}</textarea></div>
-        <div class="form-group"><label>Term 3</label>
-          <textarea class="form-control" id="sf9-comment-3" rows="2">${Utils.esc(rec.teacherComments.term3)}</textarea></div>
-      </div>
-
-      <details class="card mb-16">
-        <summary style="cursor:pointer;font-weight:700;font-size:14px;padding:6px 0;">Certificate of Transfer (optional)</summary>
-        <div class="mt-12">
-          <div class="form-row">
-            <div class="form-group"><label>Admitted to Grade</label><input class="form-control" id="sf9-tx-admitted" value="${Utils.attr(rec.transfer.admittedToGrade)}"></div>
-            <div class="form-group"><label>Eligible for Admission to Grade</label><input class="form-control" id="sf9-tx-eligible" value="${Utils.attr(rec.transfer.eligibleFor)}"></div>
-          </div>
-          <div class="form-row">
-            <div class="form-group"><label>Approved</label><input class="form-control" id="sf9-tx-approved" value="${Utils.attr(rec.transfer.approved)}"></div>
-            <div class="form-group"><label>Cancellation Date</label><input type="date" class="form-control" id="sf9-tx-cancel-date" value="${Utils.attr(rec.transfer.cancelledDate)}"></div>
-          </div>
-          <div class="form-group"><label>Cancelled By</label><input class="form-control" id="sf9-tx-cancel-by" value="${Utils.attr(rec.transfer.cancelledBy)}"></div>
-        </div>
-      </details>
-
       <div class="card">
-        <div class="flex gap-8" style="justify-content:flex-end;">
-          <button class="btn btn-outline" id="sf9-reset">Reset Form</button>
-          <button class="btn btn-primary btn-lg" id="sf9-save">${icon('save')} Save SF9</button>
+        <div class="card-head"><h3>Core Values (per Term)</h3></div>
+        <p class="text-xs text-muted mb-12">
+          Marking: <strong>AO</strong> = Always Observed · <strong>SO</strong> = Sometimes Observed ·
+          <strong>RO</strong> = Rarely Observed · <strong>NO</strong> = Not Observed
+        </p>
+        <div class="table-wrap">
+          <table class="data-table" style="font-size:12px;">
+            <thead><tr><th>Core Value</th><th style="text-align:center;">Term 1</th><th style="text-align:center;">Term 2</th><th style="text-align:center;">Term 3</th></tr></thead>
+            <tbody>
+              ${Object.keys(rec.coreValues).map(cv => `
+                <tr><td><strong>${Utils.esc(cv)}</strong></td>
+                  ${['term1','term2','term3'].map(t => `
+                    <td><select class="form-control sf9-cv-input" data-cv="${Utils.attr(cv)}" data-term="${t}" style="min-width:70px;text-align:center;">
+                      <option value=""></option>
+                      ${['AO','SO','RO','NO'].map(v => `<option value="${v}" ${rec.coreValues[cv][t] === v ? 'selected' : ''}>${v}</option>`).join('')}
+                    </select></td>`).join('')}
+                </tr>`).join('')}
+            </tbody>
+          </table>
         </div>
       </div>
-    `;
+    </div>
 
-    container.querySelectorAll('.sf9-input').forEach(inp => {
-      inp.addEventListener('input', () => {
-        const area = inp.dataset.area;
-        const all = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
-        const t1 = all[0].value, t2 = all[1].value, t3 = all[2].value;
-        const finalNumeric = GradingEngine.calculateSubjectFinal(t1, t2, t3);
+    <div class="card mb-16">
+      <div class="card-head"><h3>Teacher's Comments / Remarks</h3></div>
+      <div class="form-group"><label>Term 1</label>
+        <textarea class="form-control" id="sf9-comment-1" rows="2"
+                  placeholder="e.g. A consistent and engaged learner.">${Utils.esc(rec.teacherComments.term1)}</textarea></div>
+      <div class="form-group"><label>Term 2</label>
+        <textarea class="form-control" id="sf9-comment-2" rows="2">${Utils.esc(rec.teacherComments.term2)}</textarea></div>
+      <div class="form-group"><label>Term 3</label>
+        <textarea class="form-control" id="sf9-comment-3" rows="2">${Utils.esc(rec.teacherComments.term3)}</textarea></div>
+    </div>
 
-        let finalDisplay, remarks;
-        if (descriptive) {
-          finalDisplay = finalNumeric !== null
-            ? GradingEngine.getDescriptor(finalNumeric, policy).label
-            : '—';
-          remarks = '';
-        } else {
-          finalDisplay = finalNumeric !== null ? finalNumeric : '—';
-          remarks = GradingEngine.getSubjectRemarks(finalNumeric, policy.passingGrade);
-        }
+    <details class="card mb-16">
+      <summary style="cursor:pointer;font-weight:700;font-size:14px;padding:6px 0;">
+        Certificate of Transfer (optional)
+      </summary>
+      <div class="mt-12">
+        <div class="form-row">
+          <div class="form-group"><label>Admitted to Grade</label>
+            <input class="form-control" id="sf9-tx-admitted" value="${Utils.attr(rec.transfer.admittedToGrade)}"></div>
+          <div class="form-group"><label>Eligible for Admission to Grade</label>
+            <input class="form-control" id="sf9-tx-eligible" value="${Utils.attr(rec.transfer.eligibleFor)}"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Approved</label>
+            <input class="form-control" id="sf9-tx-approved" value="${Utils.attr(rec.transfer.approved)}"></div>
+          <div class="form-group"><label>Cancellation Date</label>
+            <input type="date" class="form-control" id="sf9-tx-cancel-date" value="${Utils.attr(rec.transfer.cancelledDate)}"></div>
+        </div>
+        <div class="form-group"><label>Cancelled By</label>
+          <input class="form-control" id="sf9-tx-cancel-by" value="${Utils.attr(rec.transfer.cancelledBy)}"></div>
+      </div>
+    </details>
 
-        const finalEl = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
-        const remEl   = container.querySelector(`.sf9-remarks[data-area="${CSS.escape(area)}"]`);
-        if (finalEl) finalEl.textContent = finalDisplay;
-        if (remEl)   remEl.textContent = remarks || '—';
+    <!-- ══════════ Action bar ══════════ -->
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div class="text-xs text-muted">
+          Save changes before printing to capture the latest edits.
+        </div>
+        <div class="flex gap-8">
+          <button class="btn btn-outline" id="sf9-reset">Reset Form</button>
+          <button class="btn btn-primary" id="sf9-save">${icon('save')} Save SF9</button>
+        </div>
+      </div>
+    </div>
+  `;
 
-        // If the edited subject is a MAPEH child, recompute MAPEH live.
-        if (MAPEH_CHILDREN.includes(area)) {
-          const childFinals = MAPEH_CHILDREN
-            .map(c => {
-              const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(c)}"]`);
-              if (!inputs.length) return null;
-              const v = [inputs[0].value, inputs[1].value, inputs[2].value];
-              return GradingEngine.calculateSubjectFinal(v[0], v[1], v[2]);
-            })
-            .filter(n => n !== null && !isNaN(n));
+  /* ════════════════ Input handler with GWA cache sync ════════════════ */
+  container.querySelectorAll('.sf9-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const area = inp.dataset.area;
+      const all = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
+      const t1 = all[0].value, t2 = all[1].value, t3 = all[2].value;
+      const finalNumeric = GradingEngine.calculateSubjectFinal(t1, t2, t3);
 
-          const mapehFinalEl = container.querySelector(`.sf9-final[data-area="${MAPEH_PARENT}"]`);
-          const mapehRemEl   = container.querySelector(`.sf9-remarks[data-area="${MAPEH_PARENT}"]`);
+      let finalDisplay, remarks;
+      if (descriptive) {
+        finalDisplay = finalNumeric !== null
+          ? GradingEngine.getDescriptor(finalNumeric, policy).label
+          : '—';
+        remarks = '';
+      } else {
+        finalDisplay = finalNumeric !== null ? finalNumeric : '—';
+        remarks = GradingEngine.getSubjectRemarks(finalNumeric, policy.passingGrade);
+      }
 
-          if (childFinals.length === MAPEH_CHILDREN.length && mapehFinalEl) {
-            const mapehFinal = Math.round(
-              childFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
-            );
-            mapehFinalEl.textContent = descriptive
+      const finalEl = container.querySelector(`.sf9-final[data-area="${CSS.escape(area)}"]`);
+      const remEl   = container.querySelector(`.sf9-remarks[data-area="${CSS.escape(area)}"]`);
+      if (finalEl) finalEl.textContent = finalDisplay;
+      if (remEl)   remEl.textContent = remarks || '—';
+
+      // Update cache so GWA recomputes correctly
+      if (State._sf9LastRender && State._sf9LastRender.rowState[area]) {
+        State._sf9LastRender.rowState[area].t1 = t1;
+        State._sf9LastRender.rowState[area].t2 = t2;
+        State._sf9LastRender.rowState[area].t3 = t3;
+        State._sf9LastRender.rowState[area].finalNumeric = finalNumeric;
+        State._sf9LastRender.rowState[area].final = finalDisplay;
+        State._sf9LastRender.rowState[area].remarks = remarks;
+        State._sf9LastRender.rowState[area].descriptor = descriptive ? finalDisplay : '';
+      }
+
+      // MAPEH live recompute
+      if (MAPEH_CHILDREN.includes(area)) {
+        const childFinals = MAPEH_CHILDREN.map(c => {
+          const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(c)}"]`);
+          if (!inputs.length) return null;
+          return GradingEngine.calculateSubjectFinal(inputs[0].value, inputs[1].value, inputs[2].value);
+        }).filter(n => n !== null && !isNaN(n));
+
+        const mapehFinalEl = container.querySelector(`.sf9-final[data-area="${MAPEH_PARENT}"]`);
+        const mapehRemEl   = container.querySelector(`.sf9-remarks[data-area="${MAPEH_PARENT}"]`);
+
+        if (childFinals.length === MAPEH_CHILDREN.length && mapehFinalEl) {
+          const mapehFinal = Math.round(
+            childFinals.reduce((a, b) => a + b, 0) / MAPEH_CHILDREN.length
+          );
+          mapehFinalEl.textContent = descriptive
+            ? GradingEngine.getDescriptor(mapehFinal, policy).label
+            : String(mapehFinal);
+          if (mapehRemEl) {
+            mapehRemEl.textContent = descriptive
+              ? ''
+              : (GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade) || '—');
+          }
+          if (State._sf9LastRender && State._sf9LastRender.rowState[MAPEH_PARENT]) {
+            State._sf9LastRender.rowState[MAPEH_PARENT].finalNumeric = mapehFinal;
+            State._sf9LastRender.rowState[MAPEH_PARENT].final = descriptive
               ? GradingEngine.getDescriptor(mapehFinal, policy).label
-              : String(mapehFinal);
-            if (mapehRemEl) {
-              mapehRemEl.textContent = descriptive
-                ? ''
-                : (GradingEngine.getSubjectRemarks(mapehFinal, policy.passingGrade) || '—');
-            }
-          } else if (mapehFinalEl) {
-            mapehFinalEl.textContent = '—';
-            if (mapehRemEl) mapehRemEl.textContent = '—';
+              : mapehFinal;
+          }
+        } else if (mapehFinalEl) {
+          mapehFinalEl.textContent = '—';
+          if (mapehRemEl) mapehRemEl.textContent = '—';
+          if (State._sf9LastRender && State._sf9LastRender.rowState[MAPEH_PARENT]) {
+            State._sf9LastRender.rowState[MAPEH_PARENT].finalNumeric = null;
           }
         }
+      }
 
-        Pages._recomputeSf9Gwa(container, learningAreas, policy);
+      Pages._recomputeSf9Gwa(container, learningAreas, policy);
+    });
+  });
+
+  /* ════════════════ Save ════════════════ */
+  container.querySelector('#sf9-save').onclick = async () => {
+    rec.subjects = rec.subjects || {};
+    learningAreas.forEach(area => {
+      const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
+      if (!inputs.length) return;   // skip MAPEH parent — no inputs
+      const manual = rec.subjects[area] || { source: 'manual' };
+      if (!manual.source || manual.source !== 'auto') {
+        manual.term1 = inputs[0].value;
+        manual.term2 = inputs[1].value;
+        manual.term3 = inputs[2].value;
+        manual.source = manual.source || 'manual';
+      }
+      rec.subjects[area] = manual;
+    });
+    Object.keys(rec.coreValues).forEach(cv => {
+      ['term1','term2','term3'].forEach(t => {
+        const el = container.querySelector(`.sf9-cv-input[data-cv="${CSS.escape(cv)}"][data-term="${t}"]`);
+        if (el) rec.coreValues[cv][t] = el.value;
       });
     });
+    rec.teacherComments = {
+      term1: container.querySelector('#sf9-comment-1').value,
+      term2: container.querySelector('#sf9-comment-2').value,
+      term3: container.querySelector('#sf9-comment-3').value
+    };
+    rec.transfer = {
+      admittedToGrade: container.querySelector('#sf9-tx-admitted').value,
+      eligibleFor:     container.querySelector('#sf9-tx-eligible').value,
+      approved:        container.querySelector('#sf9-tx-approved').value,
+      cancelledDate:   container.querySelector('#sf9-tx-cancel-date').value,
+      cancelledBy:     container.querySelector('#sf9-tx-cancel-by').value
+    };
+    rec.updatedAt = new Date().toISOString();
+    await DB.put('sf9Records', rec);
+    App.logActivity('SF9 saved for ' + Utils.fullName(learner), 'Reports');
+    UI.toast('SF9 saved', 'success');
+  };
 
-    /* ---------- Bind Save ---------- */
-    container.querySelector('#sf9-save').onclick = async () => {
-      rec.subjects = rec.subjects || {};
-      learningAreas.forEach(area => {
-        const inputs = container.querySelectorAll(`.sf9-input[data-area="${CSS.escape(area)}"]`);
-        // Auto-computed rows (MAPEH when its children are present) have no
-        // inputs to read — skip them entirely so we never overwrite the
-        // derived value with an empty string.
-        if (!inputs.length) return;
-        const manual = rec.subjects[area] || { source: 'manual' };
-        if (!manual.source || manual.source !== 'auto') {
-          manual.term1 = inputs[0].value;
-          manual.term2 = inputs[1].value;
-          manual.term3 = inputs[2].value;
-          manual.source = manual.source || 'manual';
-        }
-        rec.subjects[area] = manual;
-      });
-      Object.keys(rec.coreValues).forEach(cv => {
-        ['term1','term2','term3'].forEach(t => {
-          const el = container.querySelector(`.sf9-cv-input[data-cv="${CSS.escape(cv)}"][data-term="${t}"]`);
-          if (el) rec.coreValues[cv][t] = el.value;
+  /* ════════════════ Reset ════════════════ */
+  container.querySelector('#sf9-reset').onclick = async () => {
+    UI.confirm({
+      title: 'Reset SF9?',
+      message: 'Clear all manual entries for this learner? Auto-pulled grades are unaffected.',
+      confirmText: 'Reset', confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        learningAreas.forEach(area => {
+          rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
         });
-      });
-      rec.teacherComments = {
-        term1: container.querySelector('#sf9-comment-1').value,
-        term2: container.querySelector('#sf9-comment-2').value,
-        term3: container.querySelector('#sf9-comment-3').value
-      };
-      rec.transfer = {
-        admittedToGrade: container.querySelector('#sf9-tx-admitted').value,
-        eligibleFor:     container.querySelector('#sf9-tx-eligible').value,
-        approved:        container.querySelector('#sf9-tx-approved').value,
-        cancelledDate:   container.querySelector('#sf9-tx-cancel-date').value,
-        cancelledBy:     container.querySelector('#sf9-tx-cancel-by').value
-      };
-      rec.updatedAt = new Date().toISOString();
-      await DB.put('sf9Records', rec);
-      App.logActivity('SF9 saved for ' + Utils.fullName(learner), 'Reports');
-      UI.toast('SF9 saved', 'success');
-    };
+        Object.keys(rec.coreValues).forEach(cv => {
+          rec.coreValues[cv] = { term1: '', term2: '', term3: '' };
+        });
+        rec.teacherComments = { term1: '', term2: '', term3: '' };
+        rec.updatedAt = new Date().toISOString();
+        await DB.put('sf9Records', rec);
+        await Pages._renderSf9Editor();
+      }
+    });
+  };
 
-    /* ---------- Reset ---------- */
-    container.querySelector('#sf9-reset').onclick = async () => {
-      UI.confirm({
-        title: 'Reset SF9?',
-        message: 'Clear all manual entries for this learner? Auto-pulled grades are unaffected.',
-        confirmText: 'Reset', confirmClass: 'btn-danger',
-        onConfirm: async () => {
-          learningAreas.forEach(area => {
-            rec.subjects[area] = { term1: '', term2: '', term3: '', source: 'manual' };
-          });
-          Object.keys(rec.coreValues).forEach(cv => {
-            rec.coreValues[cv] = { term1: '', term2: '', term3: '' };
-          });
-          rec.teacherComments = { term1: '', term2: '', term3: '' };
-          rec.updatedAt = new Date().toISOString();
-          await DB.put('sf9Records', rec);
-          await Pages._renderSf9Editor();
-        }
-      });
-    };
+  // Cache state for print
+  State._sf9LastRender = {
+    rec, rowState, generalAverage,
+    attendanceRows, attTotals, learningAreas, policy, band
+  };
 
-    // Stash computed state so the print method can reuse it
-    State._sf9LastRender = { rec, rowState, generalAverage, attendanceRows, attTotals, learningAreas, policy, band };
-  },
+  // Enable the header print button — the editor is ready
+  const printBtn = document.getElementById('sf9-print');
+  if (printBtn) printBtn.disabled = false;
+},
 
-  _recomputeSf9Gwa(container, learningAreas, policy) {
-    const descriptive = policy.gradingMode === 'descriptive';
+_recomputeSf9Gwa(container, learningAreas, policy) {
+  const descriptive = policy.gradingMode === 'descriptive';
 
-    // Read the cached numeric finals from the last render rather than
-    // re-parsing the DOM, which in descriptive mode contains a string label.
-    const cached = (State._sf9LastRender && State._sf9LastRender.rowState) || {};
-    const numericFinals = learningAreas
-      .map(area => cached[area] ? cached[area].finalNumeric : null)
-      .filter(n => n !== null);
+  const cached = (State._sf9LastRender && State._sf9LastRender.rowState) || {};
+  const numericFinals = learningAreas
+    .map(area => cached[area] ? cached[area].finalNumeric : null)
+    .filter(n => n !== null && n !== undefined && !isNaN(n));
 
-    const gwaNumeric = GradingEngine.calculateGeneralAverageFromFinals(numericFinals);
+  const gwaNumeric = GradingEngine.calculateGeneralAverageFromFinals(numericFinals);
 
-    const gwaEl  = container.querySelector('#sf9-gwa');
-    const gwaRem = container.querySelector('#sf9-gwa-remarks');
+  const gwaEl  = container.querySelector('#sf9-gwa');
+  const gwaRem = container.querySelector('#sf9-gwa-remarks');
 
-    if (descriptive) {
-      const label = gwaNumeric !== null
-        ? GradingEngine.getDescriptor(gwaNumeric, policy).label
-        : '—';
-      if (gwaEl)  gwaEl.textContent  = label;
-      if (gwaRem) gwaRem.textContent = '';
-    } else {
-      if (gwaEl)  gwaEl.textContent  = gwaNumeric !== null ? gwaNumeric : '—';
-      if (gwaRem) gwaRem.textContent = GradingEngine.getSubjectRemarks(gwaNumeric, policy.passingGrade) || '—';
+  if (descriptive) {
+    const label = gwaNumeric !== null
+      ? GradingEngine.getDescriptor(gwaNumeric, policy).label
+      : '—';
+    if (gwaEl)  gwaEl.textContent  = label;
+    if (gwaRem) gwaRem.textContent = '';
+    if (State._sf9LastRender) State._sf9LastRender.generalAverage = label;
+  } else {
+    if (gwaEl)  gwaEl.textContent  = gwaNumeric !== null ? gwaNumeric : '—';
+    if (gwaRem) gwaRem.textContent = GradingEngine.getSubjectRemarks(gwaNumeric, policy.passingGrade) || '—';
+    if (State._sf9LastRender) State._sf9LastRender.generalAverage = gwaNumeric;
+  }
+},
+
+/* ----------------------------------------------------------------------------
+   SF9 · inject styles once
+   ---------------------------------------------------------------------------- */
+_sf9EnsureStyle() {
+  if (document.getElementById('sf9-editor-style')) return;
+  const st = document.createElement('style');
+  st.id = 'sf9-editor-style';
+  st.textContent = `
+    #sf9-print-mode {
+      min-height: 36px;
+      font-weight: 500;
     }
-  },
+  `;
+  document.head.appendChild(st);
+},
+
+/* ----------------------------------------------------------------------------
+   SF9 · info modal
+   ---------------------------------------------------------------------------- */
+_sf9ShowInfoModal() {
+  UI.modal({
+    title: 'Important Notes for SF9 Submission',
+    size: 'modal-lg',
+    body: `
+      <div class="alert alert-warning mb-16" style="margin:0 0 16px;">
+        ${icon('alert').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Template Verification:</strong> KlazAssist renders SF9 from your recorded term grades
+          and attendance. The exact cell geometry, page size, and legend wording of the current official
+          SF9 template were not independently re-derived from the primary DepEd PDF. Compare against
+          your Division's current template before submission.
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="margin:0 0 16px;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Auto-pulled vs manual:</strong> Learning areas you handle in this cohort are
+          <strong>auto-locked</strong> from finalized term grades in the Gradebook. Learning areas
+          handled by other teachers are <strong>manually entered</strong> here. Once saved, the
+          record is available immediately — no re-sync needed.
+        </div>
+      </div>
+
+      <div class="alert alert-info mb-16" style="margin:0 0 16px;">
+        ${icon('book').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>MAPEH:</strong> The MAPEH row is the mean of <em>Music and Arts</em> and
+          <em>Physical Education and Health</em>. Enter the two sub-areas; MAPEH updates live and
+          is not independently editable. Only the MAPEH value counts toward the General Average.
+        </div>
+      </div>
+
+      <div class="alert alert-success mb-16" style="margin:0 0 16px;">
+        ${icon('check').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Print layouts:</strong> choose <strong>A5 back-to-back</strong> for a per-learner
+          booklet (default), or <strong>A4 landscape</strong> for both pages side-by-side. The
+          choice applies to the next print — it does not change the saved record.
+        </div>
+      </div>
+
+      <div class="alert alert-info" style="margin:0;">
+        ${icon('info').replace('<svg ', '<svg width="20" height="20" ')}
+        <div style="line-height:1.6;">
+          <strong>Signatories:</strong> the printed name on the adviser line follows
+          <em>Licensing → Report Signatory</em> if a Pro license is active, otherwise the
+          class adviser, otherwise the Teacher Profile name.
+        </div>
+      </div>
+    `,
+    footer: `<button class="btn btn-primary" data-close>Got it</button>`
+  });
+},
 
   /* ---------- Pull the latest finalized term grades for this learner ---------- */
   async _sf9PullFromGradebook() {
@@ -48115,7 +49545,18 @@ const tabs = [
 
 
       ${installSectionHTML}
-
+      
+      <div class="settings-section">
+        <div class="settings-section-head">
+          <h3>Action Button</h3>
+          <p>Reposition or reset the floating action button.</p>
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-outline" onclick="FAB.reset()">
+            ${icon('history')} Reset action button position
+          </button>
+        </div>
+      </div>
 
       <div class="settings-section">
         <div class="settings-section-head">
@@ -66388,6 +67829,7 @@ window.Security = Security;
 window.AuthUI = AuthUI;
 window.SetupWizard = SetupWizard;
 window.PhilIriPdfImporter = PhilIriPdfImporter;
+window.FAB = FAB
 
 document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('error', (e) => { console.error('Uncaught error:', e.error || e.message); });
